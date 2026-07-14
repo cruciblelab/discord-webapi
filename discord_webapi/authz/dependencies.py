@@ -1,0 +1,83 @@
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+
+import discord
+from fastapi import Depends, HTTPException, Request, status
+from pydantic import BaseModel, ConfigDict
+
+from discord_webapi.auth.dependencies import get_current_user
+from discord_webapi.auth.models import DiscordUser
+from discord_webapi.authz.cache import GuildMemberCache
+from discord_webapi.authz.permissions import has_permission
+
+
+class GuildContext(BaseModel):
+    """Resolved for an authorized request: the logged-in user, scoped to a
+    specific guild, along with their roles/permissions in that guild."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    guild_id: int
+    user: DiscordUser
+    role_ids: list[int]
+    permissions: discord.Permissions
+
+
+def _get_member_cache(request: Request) -> GuildMemberCache:
+    cache: GuildMemberCache = request.app.state.discord_webapi_member_cache
+    return cache
+
+
+async def _resolve_guild_context(
+    guild_id: int, request: Request, user: DiscordUser
+) -> GuildContext:
+    cache = _get_member_cache(request)
+    info = await cache.get(guild_id, user.id)
+    if info is None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Not a member of this guild")
+    return GuildContext(
+        guild_id=guild_id, user=user, role_ids=info.role_ids, permissions=info.permissions
+    )
+
+
+def require_guild_permission(
+    *permission_names: str,
+) -> Callable[..., Awaitable[GuildContext]]:
+    """FastAPI dependency factory: `Depends(require_guild_permission("manage_guild"))`.
+
+    `guild_id` is resolved from the endpoint's own path parameter (FastAPI
+    matches dependency parameter names against path params automatically).
+    """
+
+    async def _dependency(
+        guild_id: int,
+        request: Request,
+        user: DiscordUser = Depends(get_current_user),
+    ) -> GuildContext:
+        ctx = await _resolve_guild_context(guild_id, request, user)
+        if not all(has_permission(ctx.permissions, name) for name in permission_names):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Missing required permission")
+        return ctx
+
+    return _dependency
+
+
+def require_role(*, role_id: int) -> Callable[..., Awaitable[GuildContext]]:
+    """FastAPI dependency factory: `Depends(require_role(role_id=123456789))`.
+
+    An administrator always passes, matching Discord's own permission
+    semantics (see `authz.permissions.has_permission`).
+    """
+
+    async def _dependency(
+        guild_id: int,
+        request: Request,
+        user: DiscordUser = Depends(get_current_user),
+    ) -> GuildContext:
+        ctx = await _resolve_guild_context(guild_id, request, user)
+        if role_id not in ctx.role_ids and not ctx.permissions.administrator:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Missing required role")
+        return ctx
+
+    return _dependency
