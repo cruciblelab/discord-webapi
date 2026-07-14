@@ -28,4 +28,20 @@ integrations, anything else). See `DiscordAuth`'s docstring in
 pip install discord-webapi[sql]   # or [redis], or [all]
 ```
 
+`discord_webapi.storage.sql` works against any SQLAlchemy `AsyncEngine`, so
+SQLite, Postgres, and MySQL/MariaDB are all first-class — pick the extra
+matching your database:
+
+```bash
+pip install discord-webapi[sql-sqlite]    # aiosqlite — zero setup, single instance
+pip install discord-webapi[sql-postgres]  # asyncpg
+pip install discord-webapi[sql-mysql]     # aiomysql
+pip install discord-webapi[sql]           # all three, if you're not sure yet
+```
+
+`DiscordWebAPI.quickstart(bot=bot, database_url="postgresql+asyncpg://...")`
+(or `mysql+aiomysql://...`, or set `DATABASE_URL`) points the whole storage
+layer at it in one line; omit it and quickstart defaults to a local SQLite
+file.
+
 See `examples/single_process_bot/` for a runnable end-to-end example.

@@ -29,7 +29,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-sql = ["sqlalchemy[asyncio]>=2.0", "aiosqlite>=0.20"]
+# discord_webapi.storage.sql works against any SQLAlchemy AsyncEngine --
+# these extras just get the right async DBAPI driver installed. Pick the
+# one(s) matching your database; `sql` pulls in all three for convenience.
+sql-sqlite = ["sqlalchemy[asyncio]>=2.0", "aiosqlite>=0.20"]
+sql-postgres = ["sqlalchemy[asyncio]>=2.0", "asyncpg>=0.29"]
+sql-mysql = ["sqlalchemy[asyncio]>=2.0", "aiomysql>=0.2"]
+sql = ["discord-webapi[sql-sqlite,sql-postgres,sql-mysql]"]
 redis = ["redis>=5.0"]
 all = ["discord-webapi[sql,redis]"]
 dev = [

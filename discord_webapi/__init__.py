@@ -167,6 +167,7 @@ class DiscordWebAPI:
         base_url: str | None = None,
         redirect_uri: str | None = None,
         db_path: str | Path | None = None,
+        database_url: str | None = None,
         title: str = "discord-webapi",
         serve_dashboard: bool = True,
     ) -> FastAPI:
@@ -174,10 +175,18 @@ class DiscordWebAPI:
         `DISCORD_BOT_TOKEN`/`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`/
         `DWA_FERNET_KEY`/`DASHBOARD_BASE_URL` from the environment for
         whichever of these aren't passed explicitly, wires up
-        `InProcessTransport` and SQLite-backed session/command storage at
-        `db_path` (default: `dashboard.sqlite3` in the current directory),
+        `InProcessTransport` and SQL-backed session/command/authz storage,
         and returns a ready-to-run `FastAPI` app with the lifespan already
         attached -- `uvicorn mymodule:app` is all that's left to do.
+
+        Storage defaults to a local SQLite file at `db_path` (default:
+        `dashboard.sqlite3` in the current directory) -- zero setup, fine
+        for a single instance. Pass `database_url` (or set `DATABASE_URL`),
+        e.g. `"postgresql+asyncpg://user:pass@host/db"` or
+        `"mysql+aiomysql://user:pass@host/db"`, to point at Postgres/MySQL
+        instead; `discord_webapi.storage.sql` doesn't care which -- install
+        the matching extra (`discord-webapi[sql-postgres]` /
+        `[sql-mysql]` / `[sql-sqlite]`) for the DBAPI driver.
 
         This is sugar for the common case, not a replacement for the
         composable API: construct `DiscordAuth`/`DiscordWebAPI` yourself
@@ -204,9 +213,11 @@ class DiscordWebAPI:
         if isinstance(key, str):
             key = key.encode()
 
-        engine = create_async_engine(
-            f"sqlite+aiosqlite:///{Path(db_path) if db_path else 'dashboard.sqlite3'}"
-        )
+        database_url = database_url or os.environ.get("DATABASE_URL")
+        if not database_url:
+            sqlite_path = Path(db_path) if db_path else Path("dashboard.sqlite3")
+            database_url = f"sqlite+aiosqlite:///{sqlite_path}"
+        engine = create_async_engine(database_url)
         auth = DiscordAuth(
             client_id=client_id,
             client_secret=client_secret,

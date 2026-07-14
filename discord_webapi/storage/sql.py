@@ -9,12 +9,20 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, LargeBinary, String, select
+from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from discord_webapi.authz.models import AppRole
 from discord_webapi.commands.models import CommandOverride
 from discord_webapi.storage.base import Session
+
+# MySQL/MariaDB's DATETIME defaults to 0 fractional-second precision --
+# unlike Postgres/SQLite, it silently truncates microseconds on every
+# round-trip unless told otherwise. `with_variant` only changes the type
+# actually compiled for the mysql dialect; Postgres and SQLite keep using
+# plain `DateTime(timezone=True)`.
+_TIMESTAMP = DateTime(timezone=True).with_variant(mysql.DATETIME(fsp=6), "mysql")
 
 
 class Base(DeclarativeBase):
@@ -30,11 +38,11 @@ class SessionRow(Base):
     global_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     avatar: Mapped[str | None] = mapped_column(String(128), nullable=True)
     guild_ids: Mapped[list[int]] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
+    expires_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
     encrypted_access_token: Mapped[bytes] = mapped_column(LargeBinary)
     encrypted_refresh_token: Mapped[bytes] = mapped_column(LargeBinary)
-    discord_token_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    discord_token_expires_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
 
 
 class CommandOverrideRow(Base):
@@ -46,7 +54,7 @@ class CommandOverrideRow(Base):
     cooldown_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     cooldown_uses: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     required_app_role: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
     updated_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
