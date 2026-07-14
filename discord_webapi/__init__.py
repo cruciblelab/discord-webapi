@@ -21,6 +21,7 @@ from discord_webapi.commands import (
     CommandStatus,
     build_commands_router,
 )
+from discord_webapi.members import MemberInfo, build_members_router, install_member_listing
 from discord_webapi.storage import CommandConfigStore, MemoryCommandConfigStore
 from discord_webapi.transport import Event, InProcessTransport, Transport
 
@@ -40,10 +41,12 @@ __all__ = [
     "GuildContext",
     "GuildMemberCache",
     "InProcessTransport",
+    "MemberInfo",
     "MemoryCommandConfigStore",
     "RedisTransport",
     "Transport",
     "build_commands_router",
+    "build_members_router",
     "get_current_user",
     "require_guild_permission",
     "require_role",
@@ -94,6 +97,7 @@ class DiscordWebAPI:
         self.member_cache = GuildMemberCache(transport, ttl_seconds=member_cache_ttl_seconds)
 
         install_member_lookup(bot, transport)
+        install_member_listing(bot, transport)
         bot.add_listener(self._on_ready, name="on_ready")
 
     async def _on_ready(self) -> None:
@@ -103,7 +107,9 @@ class DiscordWebAPI:
         self.auth.install(app)
         app.state.discord_webapi_member_cache = self.member_cache
         app.state.discord_webapi_commands = self.registry
+        app.state.discord_webapi_transport = self.transport
         app.include_router(build_commands_router())
+        app.include_router(build_members_router())
 
     def lifespan(self, token: str) -> AbstractAsyncContextManager[None]:
         return single_process_lifespan(self.bot, self.transport, token)

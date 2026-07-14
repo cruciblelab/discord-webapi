@@ -1,6 +1,7 @@
 """Minimal end-to-end demo of discord-webapi's v0.1 core: Discord OAuth2
-login, listing the bot's registered commands on a per-guild dashboard, and
-disabling one live (no bot restart) via `PATCH /api/guilds/{id}/commands/...`.
+login, a browser dashboard listing guild members with their roles, listing
+the bot's registered commands, and disabling one live (no bot restart) via
+`PATCH /api/guilds/{id}/commands/...`.
 
 Run:
     pip install -e ".[sql]"                     # from the repo root
@@ -12,8 +13,9 @@ Run:
 Try it:
     1. Invite the bot to a test server with the "applications.commands" and
        "bot" scopes (Discord Developer Portal -> OAuth2 -> URL Generator).
-    2. Open http://localhost:8000/auth/discord/login in a browser and
-       complete the Discord login.
+    2. Open http://localhost:8000/dashboard in a browser, log in with
+       Discord, paste in the test server's Guild ID, and load its members —
+       each row shows their roles. (No ban/kick actions — view-only.)
     3. GET /api/guilds/{your_guild_id}/commands — lists "ping" and "say"
        (requires "Manage Server" permission in that guild).
     4. PATCH /api/guilds/{your_guild_id}/commands/ping {"enabled": false}
@@ -25,10 +27,12 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import discord
 from discord.ext import commands
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
 from discord_webapi import DiscordAuth, DiscordWebAPI, InProcessTransport
 
@@ -82,10 +86,14 @@ app = FastAPI(title="discord-webapi single-process example", lifespan=lifespan)
 api.install(app)
 
 
-@app.get("/")
-async def index() -> dict[str, str]:
-    return {
-        "login": "/auth/discord/login",
-        "me": "/auth/discord/me",
-        "commands": "/api/guilds/{guild_id}/commands",
-    }
+_DASHBOARD_HTML = (Path(__file__).parent / "static" / "dashboard.html").read_text()
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index() -> str:
+    return _DASHBOARD_HTML
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard() -> str:
+    return _DASHBOARD_HTML

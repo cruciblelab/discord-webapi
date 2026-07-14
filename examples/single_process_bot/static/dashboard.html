@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>discord-webapi test dashboard</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.25rem; }
+  button { font-size: 1rem; padding: 0.5rem 0.9rem; border: none; border-radius: 6px; background: #5865F2; color: white; cursor: pointer; }
+  button:hover { background: #4752c4; }
+  input { font-size: 1rem; padding: 0.5rem; border: 1px solid #ccc; border-radius: 6px; width: 260px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; }
+  img.avatar { width: 32px; height: 32px; border-radius: 50%; vertical-align: middle; margin-right: 0.5rem; }
+  .role-badge { display: inline-block; background: #5865F2; color: white; border-radius: 999px; padding: 0.1rem 0.6rem; margin: 0.1rem; font-size: 0.8rem; }
+  #error { color: #d33; margin-top: 0.5rem; }
+  #whoami { color: #555; }
+  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.75rem; }
+</style>
+</head>
+<body>
+  <h1>discord-webapi test dashboard</h1>
+
+  <div id="login-section" style="display:none">
+    <p>Giriş yapılmadı.</p>
+    <a href="/auth/discord/login"><button>Discord ile giriş yap</button></a>
+  </div>
+
+  <div id="dashboard-section" style="display:none">
+    <p id="whoami"></p>
+    <button id="logout-btn">Çıkış yap</button>
+    <hr>
+    <div class="row">
+      <input id="guild-id" placeholder="Guild ID (sunucu ID'si)">
+      <button id="load-members-btn">Üyeleri yükle</button>
+    </div>
+    <p id="error"></p>
+    <table id="members-table" style="display:none">
+      <thead><tr><th>Üye</th><th>Roller</th><th>Katılma tarihi</th></tr></thead>
+      <tbody id="members-body"></tbody>
+    </table>
+  </div>
+
+<script>
+async function checkAuth() {
+  const res = await fetch("/auth/discord/me");
+  const loginSection = document.getElementById("login-section");
+  const dashSection = document.getElementById("dashboard-section");
+
+  if (res.status === 200) {
+    const user = await res.json();
+    loginSection.style.display = "none";
+    dashSection.style.display = "block";
+    document.getElementById("whoami").textContent =
+      `Giriş yapan: ${user.username} (id: ${user.id})`;
+  } else {
+    loginSection.style.display = "block";
+    dashSection.style.display = "none";
+  }
+}
+
+document.getElementById("logout-btn").addEventListener("click", async () => {
+  await fetch("/auth/discord/logout", { method: "POST" });
+  checkAuth();
+});
+
+document.getElementById("load-members-btn").addEventListener("click", async () => {
+  const guildId = document.getElementById("guild-id").value.trim();
+  const errorEl = document.getElementById("error");
+  const table = document.getElementById("members-table");
+  const body = document.getElementById("members-body");
+  errorEl.textContent = "";
+  body.innerHTML = "";
+  table.style.display = "none";
+
+  if (!guildId) {
+    errorEl.textContent = "Guild ID gerekli.";
+    return;
+  }
+
+  let res;
+  try {
+    res = await fetch(`/api/guilds/${guildId}/members`);
+  } catch (e) {
+    errorEl.textContent = "İstek başarısız: " + e;
+    return;
+  }
+
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    errorEl.textContent = `Hata (${res.status}): ${errBody.detail || res.statusText}`;
+    return;
+  }
+
+  const members = await res.json();
+  if (!members.length) {
+    errorEl.textContent = "Üye bulunamadı.";
+    return;
+  }
+
+  for (const m of members) {
+    const tr = document.createElement("tr");
+    const avatar = m.avatar_url ? `<img class="avatar" src="${m.avatar_url}">` : "";
+    const roles = m.role_names.map(r => `<span class="role-badge">${r}</span>`).join(" ");
+    const joined = m.joined_at ? m.joined_at.slice(0, 10) : "-";
+    tr.innerHTML = `<td>${avatar}${m.display_name}</td><td>${roles || "-"}</td><td>${joined}</td>`;
+    body.appendChild(tr);
+  }
+  table.style.display = "table";
+});
+
+checkAuth();
+</script>
+</body>
+</html>
