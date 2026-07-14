@@ -17,6 +17,7 @@ from discord_webapi.storage.memory import MemorySessionStore
 
 _STATE_COOKIE_MAX_AGE_SECONDS = 300
 _TOKEN_REFRESH_SKEW = timedelta(seconds=60)
+_MOBILE_STATE_SUFFIX = ".mobile"
 
 
 def _now() -> datetime:
@@ -27,13 +28,34 @@ def _normalize_encryption_keys(keys: bytes | list[bytes]) -> list[bytes]:
     return [keys] if isinstance(keys, bytes) else list(keys)
 
 
+def _extract_bearer_token(request: Request) -> str | None:
+    header = request.headers.get("Authorization")
+    if not header or not header.startswith("Bearer "):
+        return None
+    return header.removeprefix("Bearer ").strip() or None
+
+
 class DiscordAuth:
     """Discord OAuth2 login for dashboards, mounted as ready-made FastAPI routes.
 
-    Session model: a single opaque `session_id` cookie backed by a
-    server-side `SessionStore` row. Discord's own access/refresh tokens are
-    encrypted at rest and never sent to the browser. There is no separate
-    JWT lifecycle — revoking access is deleting the session row.
+    Session model: a single opaque `session_id` backed by a server-side
+    `SessionStore` row. Discord's own access/refresh tokens are encrypted at
+    rest and never sent to the client. There is no separate JWT lifecycle —
+    revoking access is deleting the session row.
+
+    The same `session_id` works two ways, so the identical auth/authz/
+    commands surface is usable from a browser dashboard, a mobile app, or
+    any other API client:
+    - **Browser**: `/login` sets an httpOnly cookie; every route reads it
+      automatically. This is the default (`?mobile=false`).
+    - **Mobile / other API clients**: `/login?mobile=true` skips the cookie
+      and instead redirects to `mobile_redirect_uri` with `session_id` as a
+      query param on completion (the standard pattern for native apps using
+      an in-app browser tab / ASWebAuthenticationSession, which intercepts
+      the redirect rather than reading a response body or cookie jar). The
+      client then sends that value as `Authorization: Bearer <session_id>`
+      on every subsequent request — `get_current_user` accepts either the
+      cookie or the header.
     """
 
     def __init__(
@@ -51,6 +73,7 @@ class DiscordAuth:
         cookie_secure: bool = True,
         cookie_domain: str | None = None,
         login_success_redirect: str = "/",
+        mobile_redirect_uri: str | None = None,
         api_base_url: str = "https://discord.com/api/v10",
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -65,6 +88,7 @@ class DiscordAuth:
         self.cookie_secure = cookie_secure
         self.cookie_domain = cookie_domain
         self.login_success_redirect = login_success_redirect
+        self.mobile_redirect_uri = mobile_redirect_uri
         self.api_base_url = api_base_url
 
         keys = _normalize_encryption_keys(encryption_keys)
@@ -80,8 +104,14 @@ class DiscordAuth:
         router = APIRouter(prefix="/auth/discord", tags=["discord-auth"])
 
         @router.get("/login")
-        async def login() -> RedirectResponse:
-            state = secrets.token_urlsafe(32)
+        async def login(mobile: bool = False) -> RedirectResponse:
+            if mobile and not self.mobile_redirect_uri:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "mobile=true requires DiscordAuth(mobile_redirect_uri=...) to be configured",
+                )
+
+            state = secrets.token_urlsafe(32) + (_MOBILE_STATE_SUFFIX if mobile else "")
             response = RedirectResponse(
                 self._authorize_url(state), status_code=status.HTTP_302_FOUND
             )
@@ -101,30 +131,47 @@ class DiscordAuth:
             request: Request, code: str | None = None, state: str | None = None
         ) -> Response:
             cookie_state = request.cookies.get(self.state_cookie_name)
-            response = RedirectResponse(
-                self.login_success_redirect, status_code=status.HTTP_302_FOUND
-            )
-            response.delete_cookie(self.state_cookie_name, domain=self.cookie_domain)
-
             state_ok = bool(state and cookie_state and secrets.compare_digest(state, cookie_state))
             if not code or not state_ok:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid OAuth2 state") from None
 
+            is_mobile = cookie_state is not None and cookie_state.endswith(_MOBILE_STATE_SUFFIX)
             session = await self._complete_login(code)
-            response.set_cookie(
-                self.session_cookie_name,
-                session.session_id,
-                max_age=int(self.session_ttl.total_seconds()),
-                httponly=True,
-                secure=self.cookie_secure,
-                samesite="lax",
-                domain=self.cookie_domain,
-            )
+
+            if is_mobile:
+                assert self.mobile_redirect_uri is not None  # enforced at /login time
+                mobile_url = httpx.URL(
+                    self.mobile_redirect_uri,
+                    params={
+                        "session_id": session.session_id,
+                        "expires_at": session.expires_at.isoformat(),
+                    },
+                )
+                response: Response = RedirectResponse(
+                    str(mobile_url), status_code=status.HTTP_302_FOUND
+                )
+            else:
+                response = RedirectResponse(
+                    self.login_success_redirect, status_code=status.HTTP_302_FOUND
+                )
+                response.set_cookie(
+                    self.session_cookie_name,
+                    session.session_id,
+                    max_age=int(self.session_ttl.total_seconds()),
+                    httponly=True,
+                    secure=self.cookie_secure,
+                    samesite="lax",
+                    domain=self.cookie_domain,
+                )
+
+            response.delete_cookie(self.state_cookie_name, domain=self.cookie_domain)
             return response
 
         @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
         async def logout(request: Request) -> Response:
-            session_id = request.cookies.get(self.session_cookie_name)
+            session_id = request.cookies.get(self.session_cookie_name) or _extract_bearer_token(
+                request
+            )
             if session_id:
                 await self.session_store.delete(session_id)
             response = Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -223,7 +270,9 @@ class DiscordAuth:
             raise SessionExpiredError("Stored token could not be decrypted") from exc
 
     async def get_current_user(self, request: Request) -> DiscordUser:
-        session_id = request.cookies.get(self.session_cookie_name)
+        session_id = request.cookies.get(self.session_cookie_name) or _extract_bearer_token(
+            request
+        )
         if not session_id:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
 
