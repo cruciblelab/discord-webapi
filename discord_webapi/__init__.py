@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractAsyncContextManager
+from typing import TYPE_CHECKING
 
 from discord.ext import commands
 from fastapi import FastAPI
@@ -23,6 +24,9 @@ from discord_webapi.commands import (
 from discord_webapi.storage import CommandConfigStore, MemoryCommandConfigStore
 from discord_webapi.transport import Event, InProcessTransport, Transport
 
+if TYPE_CHECKING:
+    from discord_webapi.transport.redis import RedisTransport
+
 __all__ = [
     "CommandConfigStore",
     "CommandOverride",
@@ -37,12 +41,21 @@ __all__ = [
     "GuildMemberCache",
     "InProcessTransport",
     "MemoryCommandConfigStore",
+    "RedisTransport",
     "Transport",
     "build_commands_router",
     "get_current_user",
     "require_guild_permission",
     "require_role",
 ]
+
+
+def __getattr__(name: str) -> object:
+    if name == "RedisTransport":
+        from discord_webapi.transport.redis import RedisTransport
+
+        return RedisTransport
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class DiscordWebAPI:

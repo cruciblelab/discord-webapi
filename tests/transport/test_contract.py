@@ -83,8 +83,13 @@ async def test_request_returns_handler_response(transport: Transport) -> None:
 
 
 async def test_request_with_no_handler_raises_transport_error(transport: Transport) -> None:
+    # InProcessTransport knows synchronously there's no local handler and
+    # raises immediately; RedisTransport can only ever time out (it has no
+    # way to know whether some other process might answer) — both outcomes
+    # satisfy TransportError since TransportTimeoutError subclasses it. A
+    # short timeout keeps this fast under either implementation.
     with pytest.raises(TransportError):
-        await transport.request("nonexistent_command", {})
+        await transport.request("nonexistent_command", {}, timeout=0.2)
 
 
 async def test_request_timeout_raises_transport_timeout_error(transport: Transport) -> None:
