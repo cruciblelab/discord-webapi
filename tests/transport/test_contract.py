@@ -28,6 +28,45 @@ async def test_publish_delivers_to_matching_subscriber(transport: Transport) -> 
     assert received[0].payload == {"guild_id": 1}
 
 
+async def test_unsubscribe_stops_delivery(transport: Transport) -> None:
+    received: list[Event] = []
+
+    async def handler(event: Event) -> None:
+        received.append(event)
+
+    transport.subscribe("guild_updated", handler)
+    transport.unsubscribe("guild_updated", handler)
+    await transport.publish(Event(type="guild_updated", payload={}))
+    await asyncio.sleep(0.05)
+
+    assert received == []
+
+
+async def test_unsubscribe_only_removes_the_given_handler(transport: Transport) -> None:
+    received: list[str] = []
+
+    async def handler_a(event: Event) -> None:
+        received.append("a")
+
+    async def handler_b(event: Event) -> None:
+        received.append("b")
+
+    transport.subscribe("guild_updated", handler_a)
+    transport.subscribe("guild_updated", handler_b)
+    transport.unsubscribe("guild_updated", handler_a)
+    await transport.publish(Event(type="guild_updated", payload={}))
+    await asyncio.sleep(0.05)
+
+    assert received == ["b"]
+
+
+async def test_unsubscribe_of_unknown_handler_is_a_no_op(transport: Transport) -> None:
+    async def handler(event: Event) -> None:
+        pass
+
+    transport.unsubscribe("never_subscribed", handler)  # must not raise
+
+
 async def test_publish_does_not_deliver_to_other_event_types(transport: Transport) -> None:
     received: list[Event] = []
 

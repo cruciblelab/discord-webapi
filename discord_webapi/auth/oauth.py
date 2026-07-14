@@ -9,6 +9,7 @@ import httpx
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from starlette.requests import HTTPConnection
 
 from discord_webapi.auth.models import DiscordUser
 from discord_webapi.exceptions import InvalidStateError, SessionExpiredError
@@ -28,7 +29,7 @@ def _normalize_encryption_keys(keys: bytes | list[bytes]) -> list[bytes]:
     return [keys] if isinstance(keys, bytes) else list(keys)
 
 
-def _extract_bearer_token(request: Request) -> str | None:
+def _extract_bearer_token(request: HTTPConnection) -> str | None:
     header = request.headers.get("Authorization")
     if not header or not header.startswith("Bearer "):
         return None
@@ -269,7 +270,11 @@ class DiscordAuth:
         except InvalidToken as exc:
             raise SessionExpiredError("Stored token could not be decrypted") from exc
 
-    async def get_current_user(self, request: Request) -> DiscordUser:
+    async def get_current_user(self, request: HTTPConnection) -> DiscordUser:
+        # HTTPConnection (not just Request) so this also works for a
+        # WebSocket handshake -- both expose `.cookies`/`.headers`, and the
+        # opt-in websocket relay (discord_webapi.web.websocket) needs to
+        # authenticate connecting clients the same way HTTP routes do.
         session_id = request.cookies.get(self.session_cookie_name) or _extract_bearer_token(
             request
         )

@@ -52,6 +52,7 @@ class CommandRegistry:
         self._meta: dict[str, dict[str, Any]] = {}
         self._override_cache: dict[tuple[int, str], CommandOverride] = {}
         self._cooldowns: dict[tuple[int, str], _CooldownEntry] = {}
+        self._invocation_counts: dict[tuple[int, str], int] = {}
         self._registered = False
 
         self.transport.subscribe(EVENT_TYPE_COMMAND_CONFIG_CHANGED, self._on_config_changed)
@@ -116,7 +117,10 @@ class CommandRegistry:
             # Slash-only path: no CommandOnCooldown exception here (that's an
             # ext.commands error type, not reliably handled by the tree's own
             # error pipeline) -- just reject, matching the disabled-check above.
-            return self._check_cooldown(guild_id, name, interaction) is None
+            if self._check_cooldown(guild_id, name, interaction) is not None:
+                return False
+            self._count_invocation(guild_id, name)
+            return True
 
         # Deliberate monkeypatch: composes with whatever interaction_check the
         # bot author already defined, rather than requiring them to construct
@@ -133,6 +137,7 @@ class CommandRegistry:
         if retry_after is not None:
             cooldown = self._cooldowns[(guild_id, name)][2]
             raise commands.CommandOnCooldown(cooldown, retry_after, BucketType.user)
+        self._count_invocation(guild_id, name)
         return True
 
     def is_enabled(self, guild_id: int, command_name: str) -> bool:
@@ -141,6 +146,10 @@ class CommandRegistry:
             return override.enabled
         spec = self._specs.get(command_name)
         return spec.default_enabled if spec else True
+
+    def _count_invocation(self, guild_id: int, command_name: str) -> None:
+        key = (guild_id, command_name)
+        self._invocation_counts[key] = self._invocation_counts.get(key, 0) + 1
 
     def _check_cooldown(self, guild_id: int, command_name: str, bucket_key: Any) -> float | None:
         """Enforces `CommandOverride.cooldown_seconds`/`cooldown_uses` (per
@@ -231,6 +240,7 @@ class CommandRegistry:
                 override.cooldown_seconds if override else spec.default_cooldown_seconds
             ),
             cooldown_uses=override.cooldown_uses if override else spec.default_cooldown_uses,
+            invocation_count=self._invocation_counts.get((guild_id, command_name), 0),
         )
 
     async def _on_config_changed(self, event: Event) -> None:

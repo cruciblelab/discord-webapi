@@ -152,3 +152,38 @@ async def test_updating_cooldown_params_resets_the_bucket() -> None:
     _set_cooldown(registry, uses=5, seconds=30)  # dashboard changes the limit
 
     assert registry._check_cooldown(GUILD_ID, COMMAND_NAME, ctx) is None
+
+
+async def test_successful_invocation_increments_counter() -> None:
+    registry = await _build_registry()
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=GUILD_ID),
+        command=SimpleNamespace(qualified_name=COMMAND_NAME),
+        author=SimpleNamespace(id=42),
+    )
+
+    await registry.global_check(ctx)
+    await registry.global_check(ctx)
+
+    status = registry._status_for(GUILD_ID, COMMAND_NAME)
+    assert status.invocation_count == 2
+
+
+async def test_disabled_command_does_not_increment_counter() -> None:
+    registry = await _build_registry()
+    registry._override_cache[(GUILD_ID, COMMAND_NAME)] = CommandOverride(
+        guild_id=GUILD_ID,
+        command_name=COMMAND_NAME,
+        enabled=False,
+        updated_at=datetime.now(UTC),
+    )
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=GUILD_ID),
+        command=SimpleNamespace(qualified_name=COMMAND_NAME),
+        author=SimpleNamespace(id=42),
+    )
+
+    await registry.global_check(ctx)
+
+    status = registry._status_for(GUILD_ID, COMMAND_NAME)
+    assert status.invocation_count == 0

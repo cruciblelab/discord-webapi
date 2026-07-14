@@ -37,7 +37,7 @@ from discord_webapi.storage import (
     MemoryCommandConfigStore,
 )
 from discord_webapi.transport import Event, InProcessTransport, Transport
-from discord_webapi.web import build_default_dashboard_router
+from discord_webapi.web import build_commands_websocket_router, build_default_dashboard_router
 
 if TYPE_CHECKING:
     from discord_webapi.storage.sql import SQLAuthzStore, SQLCommandConfigStore, SQLSessionStore
@@ -140,7 +140,9 @@ class DiscordWebAPI:
     async def _on_ready(self) -> None:
         await self.registry.register_all()
 
-    def install(self, app: FastAPI, *, serve_dashboard: bool = True) -> None:
+    def install(
+        self, app: FastAPI, *, serve_dashboard: bool = True, enable_websocket: bool = False
+    ) -> None:
         self.auth.install(app)
         app.state.discord_webapi_member_cache = self.member_cache
         app.state.discord_webapi_commands = self.registry
@@ -151,6 +153,8 @@ class DiscordWebAPI:
         app.include_router(build_app_roles_router())
         if serve_dashboard:
             app.include_router(build_default_dashboard_router())
+        if enable_websocket:
+            app.include_router(build_commands_websocket_router(self.transport))
 
     def lifespan(self, token: str) -> AbstractAsyncContextManager[None]:
         return single_process_lifespan(self.bot, self.transport, token)
@@ -170,6 +174,7 @@ class DiscordWebAPI:
         database_url: str | None = None,
         title: str = "discord-webapi",
         serve_dashboard: bool = True,
+        enable_websocket: bool = False,
     ) -> FastAPI:
         """One-call setup for the single-process case: reads
         `DISCORD_BOT_TOKEN`/`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`/
@@ -241,5 +246,5 @@ class DiscordWebAPI:
                 yield
 
         app = FastAPI(title=title, lifespan=lifespan)
-        api.install(app, serve_dashboard=serve_dashboard)
+        api.install(app, serve_dashboard=serve_dashboard, enable_websocket=enable_websocket)
         return app

@@ -74,3 +74,4 @@ class CommandStatus(BaseModel):
     enabled: bool
     cooldown_seconds: float | None = None
     cooldown_uses: int | None = None
+    invocation_count: int = 0

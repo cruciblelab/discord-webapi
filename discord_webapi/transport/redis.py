@@ -173,6 +173,14 @@ class RedisTransport:
     def subscribe(self, event_type: str, handler: EventHandler) -> None:
         self._subscribers.setdefault(event_type, []).append(handler)
 
+    def unsubscribe(self, event_type: str, handler: EventHandler) -> None:
+        # Only removes local in-process dispatch -- the shared EVENTS_CHANNEL
+        # subscription itself stays open for this transport's whole lifetime,
+        # since other event types may still be routed through it.
+        handlers = self._subscribers.get(event_type)
+        if handlers is not None and handler in handlers:
+            handlers.remove(handler)
+
     def register_handler(self, command: str, handler: RequestHandler) -> None:
         if command in self._handlers:
             raise TransportError(
