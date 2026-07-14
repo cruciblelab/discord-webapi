@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Self
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 
 class ParamSpec(BaseModel):
@@ -43,9 +44,22 @@ class CommandOverride(BaseModel):
 
 
 class CommandOverridePatch(BaseModel):
-    """Request body for `PATCH /api/guilds/{guild_id}/commands/{command_name}`."""
+    """Request body for `PATCH /api/guilds/{guild_id}/commands/{command_name}`.
+
+    `cooldown_seconds`/`cooldown_uses` must be set together (e.g. "1 use per
+    10 seconds") or both left `None` for no cooldown; enforced per Discord
+    user by `CommandRegistry`.
+    """
 
     enabled: bool
+    cooldown_seconds: float | None = None
+    cooldown_uses: int | None = None
+
+    @model_validator(mode="after")
+    def _cooldown_fields_are_paired(self) -> Self:
+        if (self.cooldown_seconds is None) != (self.cooldown_uses is None):
+            raise ValueError("cooldown_seconds and cooldown_uses must be set together")
+        return self
 
 
 class CommandStatus(BaseModel):

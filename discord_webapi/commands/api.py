@@ -46,7 +46,12 @@ def build_commands_router(*, patch_rate_limiter: TokenBucketLimiter | None = Non
         registry = _get_registry(request)
         try:
             return await registry.set_override(
-                guild_id, command_name, enabled=body.enabled, updated_by_user_id=ctx.user.id
+                guild_id,
+                command_name,
+                enabled=body.enabled,
+                cooldown_seconds=body.cooldown_seconds,
+                cooldown_uses=body.cooldown_uses,
+                updated_by_user_id=ctx.user.id,
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc

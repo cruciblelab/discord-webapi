@@ -5,12 +5,26 @@ from typing import Any
 
 import discord
 from discord.ext import commands
+from discord.ext.commands import BucketType, Cooldown, CooldownMapping
 
 from discord_webapi.commands.bridge import extract_command_specs
 from discord_webapi.commands.events import EVENT_TYPE_COMMAND_CONFIG_CHANGED, CommandConfigChanged
 from discord_webapi.commands.models import CommandOverride, CommandSpec, CommandStatus
 from discord_webapi.storage.base import CommandConfigStore
 from discord_webapi.transport.base import Event, Transport
+
+_CooldownEntry = tuple[float, int, Cooldown, "CooldownMapping[Any]"]
+
+
+def _per_user_bucket_key(ctx_or_interaction: Any) -> int:
+    # BucketType.user.get_key() only ever does `msg.author.id` -- it has no
+    # special case for discord.Interaction (which has `.user`, not
+    # `.author`), so it can't be passed directly as CooldownMapping's `type`
+    # if this needs to work for both the prefix/hybrid (Context, has
+    # `.author`) and slash (Interaction, has `.user`) invocation paths.
+    author = getattr(ctx_or_interaction, "author", None)
+    user_id: int = author.id if author is not None else ctx_or_interaction.user.id
+    return user_id
 
 
 class CommandRegistry:
@@ -37,6 +51,7 @@ class CommandRegistry:
         self._specs: dict[str, CommandSpec] = {}
         self._meta: dict[str, dict[str, Any]] = {}
         self._override_cache: dict[tuple[int, str], CommandOverride] = {}
+        self._cooldowns: dict[tuple[int, str], _CooldownEntry] = {}
         self._registered = False
 
         self.transport.subscribe(EVENT_TYPE_COMMAND_CONFIG_CHANGED, self._on_config_changed)
@@ -95,7 +110,13 @@ class CommandRegistry:
                 return False
             if interaction.guild_id is None or interaction.command is None:
                 return True
-            return self.is_enabled(interaction.guild_id, interaction.command.qualified_name)
+            guild_id, name = interaction.guild_id, interaction.command.qualified_name
+            if not self.is_enabled(guild_id, name):
+                return False
+            # Slash-only path: no CommandOnCooldown exception here (that's an
+            # ext.commands error type, not reliably handled by the tree's own
+            # error pipeline) -- just reject, matching the disabled-check above.
+            return self._check_cooldown(guild_id, name, interaction) is None
 
         # Deliberate monkeypatch: composes with whatever interaction_check the
         # bot author already defined, rather than requiring them to construct
@@ -105,7 +126,14 @@ class CommandRegistry:
     async def global_check(self, ctx: commands.Context[Any]) -> bool:
         if ctx.guild is None or ctx.command is None:
             return True
-        return self.is_enabled(ctx.guild.id, ctx.command.qualified_name)
+        guild_id, name = ctx.guild.id, ctx.command.qualified_name
+        if not self.is_enabled(guild_id, name):
+            return False
+        retry_after = self._check_cooldown(guild_id, name, ctx)
+        if retry_after is not None:
+            cooldown = self._cooldowns[(guild_id, name)][2]
+            raise commands.CommandOnCooldown(cooldown, retry_after, BucketType.user)
+        return True
 
     def is_enabled(self, guild_id: int, command_name: str) -> bool:
         override = self._override_cache.get((guild_id, command_name))
@@ -113,6 +141,45 @@ class CommandRegistry:
             return override.enabled
         spec = self._specs.get(command_name)
         return spec.default_enabled if spec else True
+
+    def _check_cooldown(self, guild_id: int, command_name: str, bucket_key: Any) -> float | None:
+        """Enforces `CommandOverride.cooldown_seconds`/`cooldown_uses` (per
+        Discord user) using discord.py's own `Cooldown`/`CooldownMapping`
+        token-bucket primitives rather than reinventing rate limiting.
+        Returns seconds until retry if on cooldown, else None. No-op if the
+        guild/command has no cooldown override configured.
+        """
+        override = self._override_cache.get((guild_id, command_name))
+        if (
+            override is None
+            or override.cooldown_seconds is None
+            or override.cooldown_uses is None
+        ):
+            return None
+
+        key = (guild_id, command_name)
+        cached = self._cooldowns.get(key)
+        if (
+            cached is None
+            or cached[0] != override.cooldown_seconds
+            or cached[1] != override.cooldown_uses
+        ):
+            cooldown = Cooldown(override.cooldown_uses, override.cooldown_seconds)
+            mapping = CooldownMapping(cooldown, _per_user_bucket_key)
+            self._cooldowns[key] = (
+                override.cooldown_seconds,
+                override.cooldown_uses,
+                cooldown,
+                mapping,
+            )
+        else:
+            mapping = cached[3]
+
+        bucket = mapping.get_bucket(bucket_key)
+        if bucket is None:  # never happens in practice: `mapping` always wraps a real Cooldown
+            return None
+        retry_after: float | None = bucket.update_rate_limit()
+        return retry_after
 
     def list_status(self, guild_id: int) -> list[CommandStatus]:
         return [self._status_for(guild_id, name) for name in self._specs]
@@ -123,6 +190,8 @@ class CommandRegistry:
         command_name: str,
         *,
         enabled: bool,
+        cooldown_seconds: float | None = None,
+        cooldown_uses: int | None = None,
         updated_by_user_id: int | None = None,
     ) -> CommandStatus:
         if command_name not in self._specs:
@@ -132,6 +201,8 @@ class CommandRegistry:
             guild_id=guild_id,
             command_name=command_name,
             enabled=enabled,
+            cooldown_seconds=cooldown_seconds,
+            cooldown_uses=cooldown_uses,
             updated_at=datetime.now(UTC),
             updated_by_user_id=updated_by_user_id,
         )

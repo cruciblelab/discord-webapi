@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
 
 import discord
@@ -126,6 +127,44 @@ async def test_patch_disables_command_live_without_restart() -> None:
     list_resp = client.get(f"/api/guilds/{GUILD_ID}/commands")
     kick = next(c for c in list_resp.json() if c["name"] == "kick")
     assert kick["enabled"] is False
+
+
+async def test_patch_sets_cooldown_and_enforces_it_live() -> None:
+    app, registry, _transport = _build_app()
+    await registry.register_all()
+    client = TestClient(app)
+    _log_in(client)
+
+    patch_resp = client.patch(
+        f"/api/guilds/{GUILD_ID}/commands/kick",
+        json={"enabled": True, "cooldown_seconds": 60, "cooldown_uses": 1},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["cooldown_seconds"] == 60
+    assert patch_resp.json()["cooldown_uses"] == 1
+
+    list_resp = client.get(f"/api/guilds/{GUILD_ID}/commands")
+    kick = next(c for c in list_resp.json() if c["name"] == "kick")
+    assert kick["cooldown_seconds"] == 60
+    assert kick["cooldown_uses"] == 1
+
+    # No restart: the registry's cooldown bucket is live immediately.
+    fake_ctx = SimpleNamespace(author=SimpleNamespace(id=1))
+    assert registry._check_cooldown(GUILD_ID, "kick", fake_ctx) is None
+
+
+async def test_patch_rejects_unpaired_cooldown_fields() -> None:
+    app, registry, _transport = _build_app()
+    await registry.register_all()
+    client = TestClient(app)
+    _log_in(client)
+
+    resp = client.patch(
+        f"/api/guilds/{GUILD_ID}/commands/kick",
+        json={"enabled": True, "cooldown_seconds": 60},
+    )
+
+    assert resp.status_code == 422
 
 
 async def test_patch_unknown_command_returns_404() -> None:
