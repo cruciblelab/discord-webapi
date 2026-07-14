@@ -10,3 +10,4 @@ build/
 dist/
 .env
 examples/*/.env
+*.sqlite3

@@ -26,6 +26,7 @@ from discord_webapi.storage import CommandConfigStore, MemoryCommandConfigStore
 from discord_webapi.transport import Event, InProcessTransport, Transport
 
 if TYPE_CHECKING:
+    from discord_webapi.storage.sql import SQLCommandConfigStore, SQLSessionStore
     from discord_webapi.transport.redis import RedisTransport
 
 __all__ = [
@@ -44,6 +45,8 @@ __all__ = [
     "MemberInfo",
     "MemoryCommandConfigStore",
     "RedisTransport",
+    "SQLCommandConfigStore",
+    "SQLSessionStore",
     "Transport",
     "build_commands_router",
     "build_members_router",
@@ -58,6 +61,10 @@ def __getattr__(name: str) -> object:
         from discord_webapi.transport.redis import RedisTransport
 
         return RedisTransport
+    if name in ("SQLSessionStore", "SQLCommandConfigStore"):
+        from discord_webapi.storage import sql
+
+        return getattr(sql, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

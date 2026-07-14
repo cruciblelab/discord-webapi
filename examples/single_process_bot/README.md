@@ -1,8 +1,11 @@
 # single_process_bot
 
 The v0.1 reference deployment: one process, one asyncio event loop, the bot
-and the dashboard API sharing `InProcessTransport` — no Redis, no SQL, just
-`pip install discord-webapi` and go.
+and the dashboard API sharing `InProcessTransport` — no Redis required.
+Sessions and command overrides persist in a local SQLite file
+(`dashboard.sqlite3`, via `discord-webapi[sql]`), so restarting the process
+(e.g. `--reload` picking up a code change) doesn't log you out or forget
+which commands were disabled.
 
 See the walkthrough at the top of `main.py`.
 
@@ -32,10 +35,12 @@ permission in the target guild (`require_guild_permission("manage_guild")`).
 - `cookie_secure` is derived from whether `DASHBOARD_BASE_URL` is `https://`
   — keep it `http://localhost:...` for local testing, use a real HTTPS URL
   (and a stable `DWA_FERNET_KEY`) before deploying anywhere real.
-- Sessions and command overrides both live in memory here (the default
-  `MemorySessionStore`/`MemoryCommandConfigStore`) — restarting the process
-  clears them. Swap in `discord-webapi[sql]`'s SQL-backed stores for
-  anything longer-lived.
+- Sessions and command overrides live in `dashboard.sqlite3` next to this
+  file (via `SQLSessionStore`/`SQLCommandConfigStore`), not in memory — the
+  Memory* stores are still the default when no store is passed to
+  `DiscordAuth`/`DiscordWebAPI` at all, but this example wires the
+  SQL-backed ones in deliberately so you can actually see the difference
+  across a restart.
 
 ## Running this on Termux (Android)
 

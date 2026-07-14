@@ -3,6 +3,12 @@ login, a browser dashboard listing guild members with their roles, listing
 the bot's registered commands, and disabling one live (no bot restart) via
 `PATCH /api/guilds/{id}/commands/...`.
 
+Sessions and command overrides are stored in a local SQLite file
+(dashboard.sqlite3, created automatically next to this file) via
+discord-webapi's SQL storage backend, so logins and command toggles
+survive a restart -- unlike the Memory* stores, which are the default
+when no store is passed in.
+
 Run:
     pip install -e ".[sql]"                     # from the repo root
     cp examples/single_process_bot/.env.example examples/single_process_bot/.env
@@ -33,8 +39,11 @@ import discord
 from discord.ext import commands
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from discord_webapi import DiscordAuth, DiscordWebAPI, InProcessTransport
+from discord_webapi.storage import SQLCommandConfigStore, SQLSessionStore
+from discord_webapi.storage.sql import create_all as create_all_tables
 
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 DISCORD_CLIENT_ID = os.environ["DISCORD_CLIENT_ID"]
@@ -64,6 +73,11 @@ async def say(ctx: commands.Context, message: str) -> None:
 
 transport = InProcessTransport()
 
+db_path = Path(__file__).parent / "dashboard.sqlite3"
+db_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+session_store = SQLSessionStore(db_engine)
+command_store = SQLCommandConfigStore(db_engine)
+
 auth = DiscordAuth(
     client_id=DISCORD_CLIENT_ID,
     client_secret=DISCORD_CLIENT_SECRET,
@@ -71,13 +85,17 @@ auth = DiscordAuth(
     encryption_keys=DWA_FERNET_KEY,
     cookie_secure=DASHBOARD_BASE_URL.startswith("https://"),
     login_success_redirect="/",
+    session_store=session_store,
 )
 
-api = DiscordWebAPI(bot=bot, transport=transport, auth=auth)
+api = DiscordWebAPI(bot=bot, transport=transport, auth=auth, command_store=command_store)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Both stores share the same declarative Base/engine, so one call
+    # creates both tables. (Use Alembic for real migrations in production.)
+    await create_all_tables(db_engine)
     async with api.lifespan(DISCORD_BOT_TOKEN):
         yield
 
