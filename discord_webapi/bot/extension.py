@@ -69,7 +69,22 @@ async def single_process_lifespan(
     """
     await transport.start()
     bot_task = asyncio.create_task(bot.start(token))
-    await bot.wait_until_ready()
+    ready_task = asyncio.create_task(bot.wait_until_ready())
+
+    done, pending = await asyncio.wait(
+        {bot_task, ready_task}, return_when=asyncio.FIRST_COMPLETED
+    )
+    if ready_task not in done:
+        # bot_task ended (crashed, e.g. bad token or missing privileged
+        # intents) before the bot ever became ready. wait_until_ready()'s
+        # own error in that case is a confusing, unrelated-looking
+        # RuntimeError -- surface the real cause from bot_task instead.
+        ready_task.cancel()
+        exc = bot_task.exception()
+        if exc is not None:
+            raise exc
+        raise RuntimeError("Bot process exited before becoming ready")
+
     try:
         yield
     finally:
