@@ -12,6 +12,7 @@ from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, LargeBinary, 
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from discord_webapi.authz.models import AppRole
 from discord_webapi.commands.models import CommandOverride
 from discord_webapi.storage.base import Session
 
@@ -49,9 +50,19 @@ class CommandOverrideRow(Base):
     updated_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
+class AppRoleRow(Base):
+    __tablename__ = "dwa_app_roles"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), primary_key=True)
+    discord_role_ids: Mapped[list[int]] = mapped_column(JSON)
+    user_ids: Mapped[list[int]] = mapped_column(JSON)
+
+
 async def create_all(engine: AsyncEngine) -> None:
-    """Create both tables. Call once at startup, or manage schema via your
-    own migration tool (e.g. Alembic) in production instead."""
+    """Create all tables (sessions, command overrides, app roles). Call once
+    at startup, or manage schema via your own migration tool (e.g. Alembic)
+    in production instead."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -78,6 +89,15 @@ def _row_to_session(row: SessionRow) -> Session:
         encrypted_access_token=row.encrypted_access_token,
         encrypted_refresh_token=row.encrypted_refresh_token,
         discord_token_expires_at=_as_utc(row.discord_token_expires_at),
+    )
+
+
+def _row_to_app_role(row: AppRoleRow) -> AppRole:
+    return AppRole(
+        guild_id=row.guild_id,
+        name=row.name,
+        discord_role_ids=row.discord_role_ids,
+        user_ids=row.user_ids,
     )
 
 
@@ -193,3 +213,37 @@ class SQLCommandConfigStore:
             row.updated_at = override.updated_at
             row.updated_by_user_id = override.updated_by_user_id
             await db.commit()
+
+
+class SQLAuthzStore:
+    """AuthzStore backed by SQLAlchemy 2.0 async. Call `create_all()` once
+    at startup to create its table (or manage it via Alembic)."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+        self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_all(self) -> None:
+        await create_all(self._engine)
+
+    async def get_all_app_roles(self, guild_id: int) -> list[AppRole]:
+        async with self._sessionmaker() as db:
+            result = await db.execute(select(AppRoleRow).where(AppRoleRow.guild_id == guild_id))
+            return [_row_to_app_role(row) for row in result.scalars()]
+
+    async def set_app_role(self, role: AppRole) -> None:
+        async with self._sessionmaker() as db:
+            row = await db.get(AppRoleRow, (role.guild_id, role.name))
+            if row is None:
+                row = AppRoleRow(guild_id=role.guild_id, name=role.name)
+                db.add(row)
+            row.discord_role_ids = role.discord_role_ids
+            row.user_ids = role.user_ids
+            await db.commit()
+
+    async def delete_app_role(self, guild_id: int, name: str) -> None:
+        async with self._sessionmaker() as db:
+            row = await db.get(AppRoleRow, (guild_id, name))
+            if row is not None:
+                await db.delete(row)
+                await db.commit()

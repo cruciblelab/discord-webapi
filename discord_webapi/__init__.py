@@ -11,8 +11,13 @@ from fastapi import FastAPI
 
 from discord_webapi.auth import DiscordAuth, DiscordUser, get_current_user
 from discord_webapi.authz import (
+    AppRole,
+    AppRoleCache,
+    AppRolePatch,
     GuildContext,
     GuildMemberCache,
+    build_app_roles_router,
+    require_app_role,
     require_guild_permission,
     require_role,
 )
@@ -25,15 +30,24 @@ from discord_webapi.commands import (
     build_commands_router,
 )
 from discord_webapi.members import MemberInfo, build_members_router, install_member_listing
-from discord_webapi.storage import CommandConfigStore, MemoryCommandConfigStore
+from discord_webapi.storage import (
+    AuthzStore,
+    CommandConfigStore,
+    MemoryAuthzStore,
+    MemoryCommandConfigStore,
+)
 from discord_webapi.transport import Event, InProcessTransport, Transport
 from discord_webapi.web import build_default_dashboard_router
 
 if TYPE_CHECKING:
-    from discord_webapi.storage.sql import SQLCommandConfigStore, SQLSessionStore
+    from discord_webapi.storage.sql import SQLAuthzStore, SQLCommandConfigStore, SQLSessionStore
     from discord_webapi.transport.redis import RedisTransport
 
 __all__ = [
+    "AppRole",
+    "AppRoleCache",
+    "AppRolePatch",
+    "AuthzStore",
     "CommandConfigStore",
     "CommandOverride",
     "CommandRegistry",
@@ -47,14 +61,18 @@ __all__ = [
     "GuildMemberCache",
     "InProcessTransport",
     "MemberInfo",
+    "MemoryAuthzStore",
     "MemoryCommandConfigStore",
     "RedisTransport",
+    "SQLAuthzStore",
     "SQLCommandConfigStore",
     "SQLSessionStore",
     "Transport",
+    "build_app_roles_router",
     "build_commands_router",
     "build_members_router",
     "get_current_user",
+    "require_app_role",
     "require_guild_permission",
     "require_role",
 ]
@@ -65,7 +83,7 @@ def __getattr__(name: str) -> object:
         from discord_webapi.transport.redis import RedisTransport
 
         return RedisTransport
-    if name in ("SQLSessionStore", "SQLCommandConfigStore"):
+    if name in ("SQLSessionStore", "SQLCommandConfigStore", "SQLAuthzStore"):
         from discord_webapi.storage import sql
 
         return getattr(sql, name)
@@ -103,14 +121,17 @@ class DiscordWebAPI:
         transport: Transport,
         auth: DiscordAuth,
         command_store: CommandConfigStore | None = None,
+        authz_store: AuthzStore | None = None,
         member_cache_ttl_seconds: float = 45.0,
     ) -> None:
         self.bot = bot
         self.transport = transport
         self.auth = auth
         self.command_store = command_store or MemoryCommandConfigStore()
+        self.authz_store = authz_store or MemoryAuthzStore()
         self.registry = CommandRegistry(bot, transport=transport, store=self.command_store)
         self.member_cache = GuildMemberCache(transport, ttl_seconds=member_cache_ttl_seconds)
+        self.app_role_cache = AppRoleCache(self.authz_store)
 
         install_member_lookup(bot, transport)
         install_member_listing(bot, transport)
@@ -124,8 +145,10 @@ class DiscordWebAPI:
         app.state.discord_webapi_member_cache = self.member_cache
         app.state.discord_webapi_commands = self.registry
         app.state.discord_webapi_transport = self.transport
+        app.state.discord_webapi_app_role_cache = self.app_role_cache
         app.include_router(build_commands_router())
         app.include_router(build_members_router())
+        app.include_router(build_app_roles_router())
         if serve_dashboard:
             app.include_router(build_default_dashboard_router())
 
@@ -164,6 +187,7 @@ class DiscordWebAPI:
         from sqlalchemy.ext.asyncio import create_async_engine
 
         from discord_webapi.storage.sql import (
+            SQLAuthzStore,
             SQLCommandConfigStore,
             SQLSessionStore,
         )
@@ -196,6 +220,7 @@ class DiscordWebAPI:
             transport=InProcessTransport(),
             auth=auth,
             command_store=SQLCommandConfigStore(engine),
+            authz_store=SQLAuthzStore(engine),
         )
 
         @asynccontextmanager

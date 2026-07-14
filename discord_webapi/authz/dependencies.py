@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict
 
 from discord_webapi.auth.dependencies import get_current_user
 from discord_webapi.auth.models import DiscordUser
+from discord_webapi.authz.app_roles import AppRoleCache
 from discord_webapi.authz.cache import GuildMemberCache
 from discord_webapi.authz.permissions import has_permission
 
@@ -26,6 +27,11 @@ class GuildContext(BaseModel):
 
 def _get_member_cache(request: Request) -> GuildMemberCache:
     cache: GuildMemberCache = request.app.state.discord_webapi_member_cache
+    return cache
+
+
+def _get_app_role_cache(request: Request) -> AppRoleCache:
+    cache: AppRoleCache = request.app.state.discord_webapi_app_role_cache
     return cache
 
 
@@ -78,6 +84,34 @@ def require_role(*, role_id: int) -> Callable[..., Awaitable[GuildContext]]:
         ctx = await _resolve_guild_context(guild_id, request, user)
         if role_id not in ctx.role_ids and not ctx.permissions.administrator:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Missing required role")
+        return ctx
+
+    return _dependency
+
+
+def require_app_role(name: str) -> Callable[..., Awaitable[GuildContext]]:
+    """FastAPI dependency factory: `Depends(require_app_role("moderator"))`.
+
+    Checks a bot-owner-defined `AppRole` (see `authz.models.AppRole`) —
+    independent of Discord's own role/permission system, managed via the
+    `/api/guilds/{guild_id}/app-roles` dashboard endpoints. An administrator
+    always passes, matching the other `require_*` dependencies.
+    """
+
+    async def _dependency(
+        guild_id: int,
+        request: Request,
+        user: DiscordUser = Depends(get_current_user),
+    ) -> GuildContext:
+        ctx = await _resolve_guild_context(guild_id, request, user)
+        if ctx.permissions.administrator:
+            return ctx
+        cache = _get_app_role_cache(request)
+        allowed = await cache.user_has_role(
+            guild_id, name, user_id=user.id, discord_role_ids=ctx.role_ids
+        )
+        if not allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, f"Missing required app role {name!r}")
         return ctx
 
     return _dependency

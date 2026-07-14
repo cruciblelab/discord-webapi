@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from discord_webapi.storage.base import Session
 
 if TYPE_CHECKING:
+    from discord_webapi.authz.models import AppRole
     from discord_webapi.commands.models import CommandOverride
 
 
@@ -47,3 +48,21 @@ class MemoryCommandConfigStore:
 
     async def set_override(self, override: CommandOverride) -> None:
         self._overrides[(override.guild_id, override.command_name)] = copy.deepcopy(override)
+
+
+class MemoryAuthzStore:
+    """Dict-backed AuthzStore. Zero infrastructure — the default for dev/tests."""
+
+    def __init__(self) -> None:
+        self._roles: dict[tuple[int, str], AppRole] = {}
+
+    async def get_all_app_roles(self, guild_id: int) -> list[AppRole]:
+        return [
+            copy.deepcopy(role) for (g_id, _name), role in self._roles.items() if g_id == guild_id
+        ]
+
+    async def set_app_role(self, role: AppRole) -> None:
+        self._roles[(role.guild_id, role.name)] = copy.deepcopy(role)
+
+    async def delete_app_role(self, guild_id: int, name: str) -> None:
+        self._roles.pop((guild_id, name), None)

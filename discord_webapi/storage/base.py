@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Protocol
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from discord_webapi.authz.models import AppRole
     from discord_webapi.commands.models import CommandOverride
 
 
@@ -62,3 +63,17 @@ class CommandConfigStore(Protocol):
     async def get_all_overrides(self, guild_id: int) -> list[CommandOverride]: ...
 
     async def set_override(self, override: CommandOverride) -> None: ...
+
+
+class AuthzStore(Protocol):
+    """Storage for bot-owner-defined `AppRole`s. Unlike `GuildMemberCache`
+    (which must ask the bot process for Discord's own Gateway-cached role
+    data), this is data the library owns outright, so `AppRoleCache` reads
+    it directly with a short TTL rather than routing through Transport.
+    """
+
+    async def get_all_app_roles(self, guild_id: int) -> list[AppRole]: ...
+
+    async def set_app_role(self, role: AppRole) -> None: ...
+
+    async def delete_app_role(self, guild_id: int, name: str) -> None: ...

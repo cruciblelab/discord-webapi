@@ -5,9 +5,10 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from discord_webapi.authz.models import AppRole
 from discord_webapi.commands.models import CommandOverride
 from discord_webapi.storage.base import Session
-from discord_webapi.storage.sql import SQLCommandConfigStore, SQLSessionStore
+from discord_webapi.storage.sql import SQLAuthzStore, SQLCommandConfigStore, SQLSessionStore
 
 
 @pytest_asyncio.fixture
@@ -164,3 +165,52 @@ async def test_sql_command_config_store_get_all_overrides_filters_by_guild(
     overrides = await store.get_all_overrides(1)
 
     assert {o.command_name for o in overrides} == {"kick", "ban"}
+
+
+def _make_app_role(guild_id: int = 1, name: str = "moderator") -> AppRole:
+    return AppRole(guild_id=guild_id, name=name, discord_role_ids=[10], user_ids=[42])
+
+
+async def test_sql_authz_store_set_and_get_all(engine: AsyncEngine) -> None:
+    store = SQLAuthzStore(engine)
+    await store.create_all()
+
+    await store.set_app_role(_make_app_role())
+    roles = await store.get_all_app_roles(1)
+
+    assert len(roles) == 1
+    assert roles[0].discord_role_ids == [10]
+    assert roles[0].user_ids == [42]
+
+
+async def test_sql_authz_store_set_upserts(engine: AsyncEngine) -> None:
+    store = SQLAuthzStore(engine)
+    await store.create_all()
+    await store.set_app_role(_make_app_role())
+
+    updated = _make_app_role().model_copy(update={"user_ids": [999]})
+    await store.set_app_role(updated)
+
+    roles = await store.get_all_app_roles(1)
+    assert len(roles) == 1
+    assert roles[0].user_ids == [999]
+
+
+async def test_sql_authz_store_filters_by_guild(engine: AsyncEngine) -> None:
+    store = SQLAuthzStore(engine)
+    await store.create_all()
+    await store.set_app_role(_make_app_role(guild_id=1))
+    await store.set_app_role(_make_app_role(guild_id=2))
+
+    assert len(await store.get_all_app_roles(1)) == 1
+    assert len(await store.get_all_app_roles(2)) == 1
+
+
+async def test_sql_authz_store_delete(engine: AsyncEngine) -> None:
+    store = SQLAuthzStore(engine)
+    await store.create_all()
+    await store.set_app_role(_make_app_role())
+
+    await store.delete_app_role(1, "moderator")
+
+    assert await store.get_all_app_roles(1) == []
