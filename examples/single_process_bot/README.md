@@ -1,46 +1,57 @@
 # single_process_bot
 
-The v0.1 reference deployment: one process, one asyncio event loop, the bot
-and the dashboard API sharing `InProcessTransport` — no Redis required.
-Sessions and command overrides persist in a local SQLite file
-(`dashboard.sqlite3`, via `discord-webapi[sql]`), so restarting the process
-(e.g. `--reload` picking up a code change) doesn't log you out or forget
-which commands were disabled.
+The v0.1 reference deployment, built with `DiscordWebAPI.quickstart()`: one
+process, one asyncio event loop, `InProcessTransport`, SQLite-backed
+session/command storage — the whole web/auth/storage side in about a dozen
+real lines of code on top of your own discord.py commands (`main.py` is 47
+lines total, most of it a usage comment).
 
 See the walkthrough at the top of `main.py`.
 
 ## What this demonstrates
 
-- **Dashboard UI**: `/` (and `/dashboard`) serve a single self-contained
-  HTML page (`static/dashboard.html`, no build step, plain fetch() calls —
-  works fine from a phone browser, e.g. testing over Termux) with a login
-  link, a Guild ID field, and a member table.
-- **Login**: `/auth/discord/login` → Discord OAuth2 → opaque session cookie.
+- **`DiscordWebAPI.quickstart(bot=bot)`**: reads `DISCORD_BOT_TOKEN` /
+  `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` / `DWA_FERNET_KEY` /
+  `DASHBOARD_BASE_URL` from the environment, wires up SQLite storage
+  (`dashboard.sqlite3`, created automatically), `InProcessTransport`,
+  `DiscordAuth`, the `DiscordWebAPI` facade, and the FastAPI lifespan, and
+  hands back a ready-to-run `FastAPI` app. This is sugar over the
+  composable API (`DiscordAuth(...)` + `DiscordWebAPI(...)` +
+  `api.install(app)`) for the common single-process case — see
+  `DiscordWebAPI`'s docstring if you need a different transport/storage
+  backend or multiple bots.
+- **`default_intents()`**: `Intents.default()` + `members=True` in one call
+  — the member cache and dashboard both need it.
+- **Dashboard UI**: `/` and `/dashboard` serve discord-webapi's *bundled*
+  default dashboard (no build step, plain fetch() calls — works fine from
+  a phone browser, e.g. testing over Termux): a login link, a Guild ID
+  field, and a member table with role badges. Pass
+  `serve_dashboard=False` to `quickstart()`/`install()` once you want your
+  own UI instead.
 - **Member listing**: `GET /api/guilds/{guild_id}/members` — every member
   of that guild with their display name, avatar, and role names, read from
   the bot's own Gateway cache (never a Discord REST call). View-only: no
   ban/kick/moderation actions are exposed.
-- **Command listing**: `GET /api/guilds/{guild_id}/commands` returns both
-  registered commands (`ping`, `say`) with their live enabled/disabled state.
-- **Live disable, no restart**: `PATCH /api/guilds/{guild_id}/commands/ping`
-  with `{"enabled": false}` takes effect on the very next `/ping` invocation
-  in Discord — the command registry's enforcement check is an in-memory
-  lookup kept warm by a Transport event, not a restart or a poll.
+- **Command listing + live disable, no restart**:
+  `GET /api/guilds/{guild_id}/commands` lists `ping`/`say` with their
+  enabled state; `PATCH .../commands/ping {"enabled": false}` takes effect
+  on the very next `/ping` invocation in Discord — the command registry's
+  enforcement check is an in-memory lookup kept warm by a Transport event,
+  not a restart or a poll.
 
 Both the member list and the command list require "Manage Server"
-permission in the target guild (`require_guild_permission("manage_guild")`).
+permission in the target guild (`require_guild_permission("manage_guild")`,
+wired in automatically).
 
 ## Notes
 
-- `cookie_secure` is derived from whether `DASHBOARD_BASE_URL` is `https://`
-  — keep it `http://localhost:...` for local testing, use a real HTTPS URL
-  (and a stable `DWA_FERNET_KEY`) before deploying anywhere real.
-- Sessions and command overrides live in `dashboard.sqlite3` next to this
-  file (via `SQLSessionStore`/`SQLCommandConfigStore`), not in memory — the
-  Memory* stores are still the default when no store is passed to
-  `DiscordAuth`/`DiscordWebAPI` at all, but this example wires the
-  SQL-backed ones in deliberately so you can actually see the difference
-  across a restart.
+- Sessions and command overrides persist in `dashboard.sqlite3` next to
+  this file — restarting the process (e.g. `--reload` picking up a code
+  change) doesn't log you out or forget which commands were disabled.
+- `cookie_secure` is derived from whether `DASHBOARD_BASE_URL` is
+  `https://` — keep it `http://localhost:...` for local testing, use a
+  real HTTPS URL (and a stable `DWA_FERNET_KEY`) before deploying anywhere
+  real.
 
 ## Running this on Termux (Android)
 

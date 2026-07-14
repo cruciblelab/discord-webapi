@@ -1,13 +1,11 @@
-"""Minimal end-to-end demo of discord-webapi's v0.1 core: Discord OAuth2
-login, a browser dashboard listing guild members with their roles, listing
-the bot's registered commands, and disabling one live (no bot restart) via
-`PATCH /api/guilds/{id}/commands/...`.
+"""Minimal end-to-end demo of discord-webapi's v0.1 core, using
+`DiscordWebAPI.quickstart()` -- the whole web/auth/storage side (OAuth2
+login, a member/role dashboard, live command enable/disable) in a handful
+of lines on top of whatever discord.py commands you already write.
 
 Sessions and command overrides are stored in a local SQLite file
-(dashboard.sqlite3, created automatically next to this file) via
-discord-webapi's SQL storage backend, so logins and command toggles
-survive a restart -- unlike the Memory* stores, which are the default
-when no store is passed in.
+(dashboard.sqlite3, created automatically next to this file), so logins
+and command toggles survive a restart.
 
 Run:
     pip install -e ".[sql]"                     # from the repo root
@@ -28,37 +26,12 @@ Try it:
        — then try `/ping` in Discord: it's rejected without a bot restart.
 """
 
-from __future__ import annotations
-
-import os
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from pathlib import Path
-
-import discord
 from discord.ext import commands
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-from sqlalchemy.ext.asyncio import create_async_engine
 
-from discord_webapi import DiscordAuth, DiscordWebAPI, InProcessTransport
-from discord_webapi.storage import SQLCommandConfigStore, SQLSessionStore
-from discord_webapi.storage.sql import create_all as create_all_tables
+from discord_webapi import DiscordWebAPI
+from discord_webapi.bot import default_intents
 
-DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
-DISCORD_CLIENT_ID = os.environ["DISCORD_CLIENT_ID"]
-DISCORD_CLIENT_SECRET = os.environ["DISCORD_CLIENT_SECRET"]
-DASHBOARD_BASE_URL = os.environ.get("DASHBOARD_BASE_URL", "http://localhost:8000")
-DWA_FERNET_KEY = os.environ["DWA_FERNET_KEY"].encode()
-
-# Intents.members is required so `guild.get_member(...)` is populated in the
-# bot's Gateway cache — that cache is what authz.GuildMemberCache reads via
-# the transport's `get_member` RPC, never a REST call. Also enable the
-# "Server Members Intent" toggle for this bot in the Developer Portal.
-intents = discord.Intents.default()
-intents.members = True
-
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+bot = commands.Bot(command_prefix="!", intents=default_intents(), help_command=None)
 
 
 @bot.hybrid_command(name="ping", description="Replies with pong")
@@ -71,47 +44,4 @@ async def say(ctx: commands.Context, message: str) -> None:
     await ctx.reply(message)
 
 
-transport = InProcessTransport()
-
-db_path = Path(__file__).parent / "dashboard.sqlite3"
-db_engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-session_store = SQLSessionStore(db_engine)
-command_store = SQLCommandConfigStore(db_engine)
-
-auth = DiscordAuth(
-    client_id=DISCORD_CLIENT_ID,
-    client_secret=DISCORD_CLIENT_SECRET,
-    redirect_uri=f"{DASHBOARD_BASE_URL}/auth/discord/callback",
-    encryption_keys=DWA_FERNET_KEY,
-    cookie_secure=DASHBOARD_BASE_URL.startswith("https://"),
-    login_success_redirect="/",
-    session_store=session_store,
-)
-
-api = DiscordWebAPI(bot=bot, transport=transport, auth=auth, command_store=command_store)
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    # Both stores share the same declarative Base/engine, so one call
-    # creates both tables. (Use Alembic for real migrations in production.)
-    await create_all_tables(db_engine)
-    async with api.lifespan(DISCORD_BOT_TOKEN):
-        yield
-
-
-app = FastAPI(title="discord-webapi single-process example", lifespan=lifespan)
-api.install(app)
-
-
-_DASHBOARD_HTML = (Path(__file__).parent / "static" / "dashboard.html").read_text()
-
-
-@app.get("/", response_class=HTMLResponse)
-async def index() -> str:
-    return _DASHBOARD_HTML
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard() -> str:
-    return _DASHBOARD_HTML
+app = DiscordWebAPI.quickstart(bot=bot)

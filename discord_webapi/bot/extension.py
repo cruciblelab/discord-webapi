@@ -14,6 +14,19 @@ from discord_webapi.commands.bridge import get_member_permissions, get_member_ro
 from discord_webapi.transport.base import Event, Transport
 
 
+def default_intents() -> discord.Intents:
+    """`Intents.default()` plus `members=True` -- almost every dashboard bot
+    needs the member cache (see `authz.GuildMemberCache` and
+    `members.install_member_listing`), so this saves the two lines every
+    such bot otherwise repeats. Also remember to enable the "Server Members
+    Intent" toggle for the bot in the Discord Developer Portal -- this call
+    alone isn't enough, Discord enforces it server-side too.
+    """
+    intents = discord.Intents.default()
+    intents.members = True
+    return intents
+
+
 def install_member_lookup(bot: commands.Bot, transport: Transport) -> None:
     """Bot-process wiring for `authz.GuildMemberCache`: answers `get_member`
     RPC requests from the bot's own warm Gateway cache (never a REST call),
