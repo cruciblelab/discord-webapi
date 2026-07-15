@@ -53,12 +53,19 @@ versiyon/installer sistemi hâlâ YOK ve hâlâ bilinçli olarak ertelendi —
 `builtins/README.md`'nin son bölümünde neden ertelendiği açıklamasıyla
 birlikte duruyor.
 
+## builtins durumu (güncel)
+
+- `_shared.py`: `check_role_hierarchy`, `notify_member_best_effort` (bağımsız kullanılabilir).
+- `ban.py`, `kick.py`, `timeout.py`: stateless moderasyon komutları, `_shared.py`'i kullanıyor.
+- `warn.py`: **ilk kalıcı-durumlu builtin**. `WarnStore` protokolü + `MemoryWarnStore` (varsayılan) + `SQLWarnStore` (kendi `create_all()`'ı, core `storage.sql.create_all()`'dan tamamen bağımsız — `dwa_builtin_warns` tablosu sadece `SQLWarnStore` gerçekten kullanılırsa oluşur). Opsiyonel `auto_timeout_after=N` ile otomatik timeout eskalasyonu (varsayılan kapalı).
+- `welcome.py`: **ilk komut-olmayan builtin** — `on_member_join` event listener, `setup(bot, channel_id=..., dm_instead=...)`. Kanal asla tahmin edilmiyor, açıkça verilmesi gerekiyor.
+
+Hepsi 154 test ile kapsanıyor (unit: ban/kick/timeout/warn/warn_sql/welcome/shared), ruff+mypy temiz. Commit: bkz. git log.
+
 ## Bir sonraki oturumda muhtemel işler
 
 - Kullanıcının fiziksel test sonuçlarını bekle (`TESTING.md`).
-- Daha fazla builtin (`warn.py` — kendi `WarnStore`'u ile, `on_member_join`
-  welcome event listener gibi) — aynı `setup(bot, **kwargs)` + `_shared.py`
-  yeniden kullanım konvansiyonuyla.
+- Daha fazla builtin fikri: `on_message` otomatik moderasyon (küfür/spam filtresi), rol-atama komutu (`role.py`).
 - Kullanıcı gerçekten üçüncü-taraf paket/manifest sistemini şimdi mi
   istiyor yoksa öneri sırasında bahsedilen uzun vadeli bir vizyon muydu —
   netleştirilmesi gerekebilir.

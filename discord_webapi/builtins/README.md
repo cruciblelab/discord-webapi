@@ -44,15 +44,25 @@ registry.command_meta(category="moderation")(ban_command)
   hierarchy check, not a whole prebuilt command.
 - `ban.py`, `kick.py`, `timeout.py` — each a self-contained `setup(bot,
   **kwargs)`, each reusing `_shared.py` rather than re-implementing the
-  same checks three times.
+  same checks three times. Stateless: just a Discord API call + a reply.
+- `warn.py` — the first builtin with its own persistent state. Ships a
+  `WarnStore` Protocol (`MemoryWarnStore` by default, `SQLWarnStore` behind
+  the `discord-webapi[sql]` extra), following the exact same shape as
+  `AuditStore`/`ConsentStore` in the core library. `SQLWarnStore` manages
+  its own table via its own `create_all()`, entirely independent of
+  `discord_webapi.storage.sql.create_all()` — importing `warn.py` never
+  creates a table for someone who only wanted `ban.py`. Optional
+  auto-timeout escalation after N warnings (`auto_timeout_after=`), off
+  by default.
+- `welcome.py` — the first non-command builtin: a configurable
+  `on_member_join` listener. Same `setup(bot, **kwargs)` shape, proving the
+  convention isn't just for slash/hybrid commands. No channel is guessed;
+  you pass `channel_id` (or `dm_instead=True`) explicitly.
 
-More builtins (warn, plus Gateway event listeners like `on_member_join`
-welcome messages) will land the same way: one file, one `setup()`, no
-forced adoption. Anything needing its own persistent state (e.g. a warn
-counter) gets its own `Store` protocol + Memory/SQL pair — same shape as
-`AuditStore`/`ConsentStore` — so database/cache/permission concerns stay
-separable pieces you can use individually, replace, or skip, exactly like
-everything else in this library.
+Every database/cache/permission concern above stays a separate,
+composable piece — use one function from `_shared.py`, one whole builtin,
+swap `MemoryWarnStore` for your own `WarnStore`, or write the entire
+command from scratch. None of it is an all-or-nothing package.
 
 ## What this is explicitly *not* (yet)
 

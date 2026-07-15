@@ -31,4 +31,10 @@ Convention every module in this package follows:
 See `discord_webapi/builtins/README.md` for the full writeup, including
 what's explicitly *not* attempted here yet (a third-party plugin/package
 format with its own manifest, versioning, and installer) and why.
+
+This convention isn't limited to slash/hybrid commands -- `welcome.py`
+shows it applying just as well to a Gateway event listener
+(`on_member_join`), and `warn.py` shows it applying to a builtin with its
+own persistent state (a `WarnStore` Protocol, following the exact same
+Memory/SQL shape as `AuditStore`/`ConsentStore`).
 """
