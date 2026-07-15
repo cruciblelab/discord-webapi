@@ -305,6 +305,47 @@ talebi çok daha küçük bir topluluk, ileride gerçek talep olursa
 düşünmeyelim." Plan dosyasına da işlendi — bu madde artık v0.4+ aday
 listesinde değil, kapalı bir karar olarak duruyor.
 
+## Çekirdek dayanıklılık (hardening) turu — kullanıcı isteğiyle başlatıldı
+
+Kullanıcı builtins'i yine erteledi, "önce core sistemleri/algoritmaları/
+bağlantıları en sağlam kapsamlı şekilde tamamlayalım, küçük kalırsa hafta
+sonu projesine dönme korkum var" dedi. `code-review` skill'i diff-bazlı
+çalıştığı için (bu branch'te commit'lenmemiş diff yoktu) elle,
+dosya dosya bir inceleme yaptım — **iki gerçek, ciddi bug** bulundu:
+
+1. **`discord_webapi/transport/redis.py`**: `_read_loop`'un Redis bağlantı
+   kopmasına karşı hiçbir dayanıklılığı yoktu — `RedisError` fırlayınca
+   reader task'ı sessizce ölüyor, bir daha asla toparlanmıyordu. Fix:
+   `_read_loop` artık `_read_loop_once()`'u bir dış retry döngüsüyle
+   sarmalıyor, `RedisError` yakalanınca 1 saniye bekleyip
+   `_resubscribe_all()` ile tüm kanallara (events + tüm registered RPC
+   komutları + bekleyen reply kanalları) yeniden abone oluyor. Regresyon
+   testi: `test_reader_loop_reconnects_after_a_dropped_connection`
+   (gerçek Redis gerektirmiyor, fake pubsub ile deterministik).
+2. **`discord_webapi/web/websocket.py`**: `commands_stream`, istemci
+   bağlantıyı kapattığında bunu **hiç fark etmiyordu** — sadece kuyruktan
+   okuyup gönderiyordu, websocket'ten hiç okuma yapmıyordu. O guild'de
+   yeni bir event gelene kadar (belki hiç gelmeyebilir) subscriber+task
+   sonsuza kadar askıda kalıyordu — uzun süreli bir deployment'ta gerçek
+   bir kaynak sızıntısı. Fix: `_relay_until_disconnect()` artık iki paralel
+   task çalıştırıyor (`_forward_events` + `_watch_for_disconnect`,
+   `asyncio.wait(FIRST_COMPLETED)` ile), istemci kapanınca ikisi de düzgün
+   iptal ediliyor. **Yan keşif**: Starlette'in ham `websocket.receive()`'i
+   disconnect'te exception FIRLATMIYOR (sadece `receive_text`/`receive_json`
+   gibi üst seviye metodlar fırlatıyor) — mesaj tipini elle kontrol edip
+   `WebSocketDisconnect`'i kendimiz fırlatmamız gerekti, aksi halde ikinci
+   `receive()` çağrısı `RuntimeError` fırlatıyordu (test bunu hemen yakaladı).
+
+190 test yeşil (18 yeni: Redis reconnect testi + gerçek Redis'e karşı
+çalışan entegrasyon testleri artık local Redis çalıştığı için skip
+olmuyor), ruff+mypy temiz.
+
+**Henüz incelenmedi (bir sonraki oturumda devam edilebilir)**: `storage/
+sql.py`'nin bağlantı/hata dayanıklılığı, `commands/bridge.py`'nin daha
+derin introspection edge case'leri, genel bir güvenlik denetimi (kullanıcı
+sıradaki adım olarak bunu da istemişti — "önce genel inceleme, sonra
+core'u büyütelim" dedi, güvenlik denetimi hâlâ yapılmadı).
+
 ## Sıradaki adaylar (kullanıcı "roadmap'ten devam edelim" dedi, henüz seçim yapılmadı)
 
 1. Bölüm 6+ fiziksel teste devam (yukarıya bakın).

@@ -12,6 +12,7 @@ be forced to pay. With it off, the dashboard just polls
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
@@ -27,6 +28,54 @@ from discord_webapi.transport.base import Event, Transport
 # but not allowed here" without parsing a reason string.
 _CLOSE_UNAUTHORIZED = 4401
 _CLOSE_FORBIDDEN = 4403
+
+
+async def _relay_until_disconnect(
+    websocket: WebSocket, queue: asyncio.Queue[CommandConfigChanged]
+) -> None:
+    """Forwards queued events to the client, *and* watches for the client
+    disconnecting -- without the watch side, a client that closes its tab
+    is never noticed until (if ever) the next event happens to arrive and
+    `send_json` fails, since the relay loop otherwise never touches the
+    socket while waiting on the queue. Left unfixed, a quiet guild (no
+    command changes) with clients that come and go leaks one subscriber +
+    one blocked task per abandoned connection, forever, in a long-running
+    deployment.
+    """
+
+    async def _forward_events() -> None:
+        while True:
+            change = await queue.get()
+            await websocket.send_json(change.model_dump())
+
+    async def _watch_for_disconnect() -> None:
+        while True:
+            # The raw `receive()` does *not* raise on a disconnect message
+            # (only `receive_text`/`receive_json`/etc. do, via their own
+            # `_raise_on_disconnect` check) -- it just returns the message,
+            # and calling `receive()` again afterwards raises a RuntimeError
+            # instead. This client is never expected to send anything on
+            # this socket, so any non-disconnect message is simply ignored.
+            message = await websocket.receive()
+            if message["type"] == "websocket.disconnect":
+                raise WebSocketDisconnect(message.get("code", 1000), message.get("reason"))
+
+    forward_task = asyncio.create_task(_forward_events())
+    watch_task = asyncio.create_task(_watch_for_disconnect())
+    try:
+        done, pending = await asyncio.wait(
+            {forward_task, watch_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        for task in done:
+            task.result()  # re-raises WebSocketDisconnect, or any real error
+    finally:
+        for task in (forward_task, watch_task):
+            task.cancel()
+        for task in (forward_task, watch_task):
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
 
 def build_commands_websocket_router(transport: Transport) -> APIRouter:
@@ -58,9 +107,7 @@ def build_commands_websocket_router(transport: Transport) -> APIRouter:
 
         transport.subscribe(EVENT_TYPE_COMMAND_CONFIG_CHANGED, handler)
         try:
-            while True:
-                change = await queue.get()
-                await websocket.send_json(change.model_dump())
+            await _relay_until_disconnect(websocket, queue)
         except WebSocketDisconnect:
             pass
         finally:

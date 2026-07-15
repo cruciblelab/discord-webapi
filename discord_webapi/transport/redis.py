@@ -9,6 +9,7 @@ from typing import Any
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
+from redis.exceptions import RedisError
 
 from discord_webapi.exceptions import TransportError, TransportTimeoutError
 from discord_webapi.transport.base import (
@@ -19,6 +20,8 @@ from discord_webapi.transport.base import (
 )
 
 logger = logging.getLogger("discord_webapi.transport.redis")
+
+_RECONNECT_DELAY_SECONDS = 1.0
 
 EVENTS_CHANNEL = "discord_webapi:events"
 _RPC_REQUEST_PREFIX = "discord_webapi:rpc:"
@@ -102,6 +105,24 @@ class RedisTransport:
         return self._redis
 
     async def _read_loop(self) -> None:
+        # Without this outer retry, a dropped Redis connection (network
+        # blip, Redis restart) would raise out of `listen()` and silently
+        # kill this task forever -- no more events or RPC replies would
+        # ever be delivered again until the whole process was restarted.
+        while True:
+            try:
+                await self._read_loop_once()
+            except asyncio.CancelledError:
+                raise
+            except RedisError:
+                logger.exception(
+                    "RedisTransport reader lost its connection; reconnecting in %.1fs",
+                    _RECONNECT_DELAY_SECONDS,
+                )
+                await asyncio.sleep(_RECONNECT_DELAY_SECONDS)
+                await self._resubscribe_all()
+
+    async def _read_loop_once(self) -> None:
         assert self._pubsub is not None
         async for message in self._pubsub.listen():
             if message["type"] != "message":
@@ -122,6 +143,22 @@ class RedisTransport:
                 self._resolve_reply(channel, envelope)
             elif channel.startswith(_RPC_REQUEST_PREFIX):
                 asyncio.create_task(self._handle_rpc_request(channel, envelope))
+
+    async def _resubscribe_all(self) -> None:
+        # Re-establishes every channel this instance cares about after a
+        # reconnect: the shared events channel, every registered RPC
+        # command's request channel, and any reply channels an in-flight
+        # `request()` call is still waiting on.
+        assert self._pubsub is not None
+        channels = [
+            EVENTS_CHANNEL,
+            *(_rpc_request_channel(c) for c in self._handlers),
+            *self._pending_replies.keys(),
+        ]
+        try:
+            await self._pubsub.subscribe(*channels)
+        except RedisError:
+            logger.exception("Failed to resubscribe after Redis reconnect; will retry")
 
     async def _dispatch_event(self, envelope: dict[str, Any]) -> None:
         event = Event(

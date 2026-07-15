@@ -5,9 +5,11 @@ same-instance contract suite in tests/transport/test_contract.py.
 """
 
 import asyncio
+import contextlib
 import os
 
 import pytest
+from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import RedisError
 
 from discord_webapi.exceptions import TransportError
@@ -107,3 +109,60 @@ async def test_remote_handler_exception_is_relayed_as_transport_error(two_transp
 
     with pytest.raises(TransportError, match="boom"):
         await web_side.request("broken", {})
+
+
+async def test_reader_loop_reconnects_after_a_dropped_connection() -> None:
+    """Regression test: a dropped Redis connection used to kill the
+    reader task forever -- no more events/RPC replies would ever be
+    delivered again without a full process restart. Uses a fake pubsub
+    (no real Redis needed) so the connection drop is fully deterministic.
+    """
+    transport = RedisTransport("redis://unused")
+
+    class _FakePubSub:
+        def __init__(self) -> None:
+            self.subscribe_calls: list[tuple[str, ...]] = []
+            self._first_listen = True
+
+        async def subscribe(self, *channels: str) -> None:
+            self.subscribe_calls.append(channels)
+
+        async def listen(self):
+            if self._first_listen:
+                self._first_listen = False
+                raise RedisConnectionError("Connection lost")
+            yield {
+                "type": "message",
+                "channel": "discord_webapi:events",
+                "data": '{"type": "ping", "payload": {}, "source": null}',
+            }
+            await asyncio.sleep(3600)  # keep the generator alive; test cancels the task
+
+        async def aclose(self) -> None:
+            pass
+
+    fake_pubsub = _FakePubSub()
+    transport._pubsub = fake_pubsub  # type: ignore[assignment]
+
+    received: list[str] = []
+
+    async def on_ping(event: Event) -> None:
+        received.append(event.type)
+
+    transport.subscribe("ping", on_ping)
+
+    reader_task = asyncio.create_task(transport._read_loop())
+    try:
+        for _ in range(80):
+            await asyncio.sleep(0.05)
+            if received:
+                break
+    finally:
+        reader_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reader_task
+
+    assert received == ["ping"]
+    # The reconnect resubscribed to the events channel (at least once,
+    # beyond whatever initial subscribe start() would have done).
+    assert any("discord_webapi:events" in calls for calls in fake_pubsub.subscribe_calls)
