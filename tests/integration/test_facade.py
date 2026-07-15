@@ -38,7 +38,12 @@ def _build_app() -> tuple[FastAPI, DiscordWebAPI]:
         encryption_keys=Fernet.generate_key(),
         cookie_secure=False,
     )
-    api = DiscordWebAPI(bot=bot, transport=transport, auth=auth)
+    # sync_commands=False: this test simulates on_ready without a real
+    # Gateway connection, so the bot never gets an application_id -- a
+    # real bot always has one by the time on_ready fires, but faking that
+    # here isn't what this test is about (see test_quickstart.py /
+    # test_command_cooldown.py for real command-sync-adjacent coverage).
+    api = DiscordWebAPI(bot=bot, transport=transport, auth=auth, sync_commands=False)
     api.install(app)
     return app, api
 
@@ -95,3 +100,94 @@ async def test_facade_registers_member_lookup_handler() -> None:
     response = await api.transport.request("get_member", {"guild_id": 1, "user_id": 2})
 
     assert response == {"found": False}
+
+
+async def test_on_ready_syncs_commands_globally_by_default() -> None:
+    """discord.py never pushes slash commands to Discord on its own --
+    without this, /commands never show up in Discord's UI at all, no
+    error, no warning, just silence. This is the regression test for
+    that trap."""
+    from unittest.mock import AsyncMock
+
+    transport = InProcessTransport()
+    bot = _build_bot()
+    auth = DiscordAuth(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://testserver/auth/discord/callback",
+        encryption_keys=Fernet.generate_key(),
+        cookie_secure=False,
+    )
+    api = DiscordWebAPI(bot=bot, transport=transport, auth=auth)
+    bot.tree.sync = AsyncMock()  # type: ignore[method-assign]
+
+    await api._on_ready()
+
+    bot.tree.sync.assert_awaited_once_with()
+
+
+async def test_on_ready_syncs_to_a_single_guild_when_configured() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    transport = InProcessTransport()
+    bot = _build_bot()
+    auth = DiscordAuth(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://testserver/auth/discord/callback",
+        encryption_keys=Fernet.generate_key(),
+        cookie_secure=False,
+    )
+    api = DiscordWebAPI(bot=bot, transport=transport, auth=auth, sync_guild_id=999)
+    bot.tree.sync = AsyncMock()  # type: ignore[method-assign]
+    bot.tree.copy_global_to = MagicMock()  # type: ignore[method-assign]
+
+    await api._on_ready()
+
+    bot.tree.copy_global_to.assert_called_once()
+    bot.tree.sync.assert_awaited_once()
+    _, kwargs = bot.tree.sync.call_args
+    assert kwargs["guild"].id == 999
+
+
+async def test_on_ready_never_syncs_when_disabled() -> None:
+    from unittest.mock import AsyncMock
+
+    transport = InProcessTransport()
+    bot = _build_bot()
+    auth = DiscordAuth(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://testserver/auth/discord/callback",
+        encryption_keys=Fernet.generate_key(),
+        cookie_secure=False,
+    )
+    api = DiscordWebAPI(bot=bot, transport=transport, auth=auth, sync_commands=False)
+    bot.tree.sync = AsyncMock()  # type: ignore[method-assign]
+
+    await api._on_ready()
+
+    bot.tree.sync.assert_not_awaited()
+
+
+async def test_on_ready_only_syncs_once_across_multiple_calls() -> None:
+    """`on_ready` can fire more than once (Gateway reconnects) -- syncing
+    every single time would be wasteful and risks rate limits."""
+    from unittest.mock import AsyncMock
+
+    transport = InProcessTransport()
+    bot = _build_bot()
+    auth = DiscordAuth(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://testserver/auth/discord/callback",
+        encryption_keys=Fernet.generate_key(),
+        cookie_secure=False,
+    )
+    api = DiscordWebAPI(bot=bot, transport=transport, auth=auth)
+    bot.tree.sync = AsyncMock()  # type: ignore[method-assign]
+
+    await api._on_ready()
+    await api._on_ready()
+
+    bot.tree.sync.assert_awaited_once_with()

@@ -36,6 +36,15 @@ def test_default_intents_enables_members() -> None:
     assert intents.guilds is True  # still has the Intents.default() baseline
 
 
+def test_default_intents_enables_message_content() -> None:
+    """Without this, prefix/hybrid commands (`!ping`) never fire --
+    discord.py can't read a message's text to match it against
+    `command_prefix`, so the bot silently never responds, no error."""
+    intents = default_intents()
+
+    assert intents.message_content is True
+
+
 def test_quickstart_builds_a_working_app(tmp_path: Path) -> None:
     bot = _build_bot()
 

@@ -23,15 +23,21 @@ from discord_webapi.transport.base import Event, Transport
 
 
 def default_intents() -> discord.Intents:
-    """`Intents.default()` plus `members=True` -- almost every dashboard bot
-    needs the member cache (see `authz.GuildMemberCache` and
-    `members.install_member_listing`), so this saves the two lines every
-    such bot otherwise repeats. Also remember to enable the "Server Members
-    Intent" toggle for the bot in the Discord Developer Portal -- this call
-    alone isn't enough, Discord enforces it server-side too.
+    """`Intents.default()` plus `members=True` and `message_content=True` --
+    almost every dashboard bot needs the member cache (see
+    `authz.GuildMemberCache` and `members.install_member_listing`), and
+    prefix/hybrid commands (`!ping`) silently never fire without
+    `message_content` (discord.py can't read a message's text to match it
+    against `command_prefix` otherwise -- slash-only commands don't need
+    it, but this saves you from that trap the moment you add a prefix
+    command). Also remember to enable both the "Server Members Intent" and
+    "Message Content Intent" toggles for the bot in the Discord Developer
+    Portal -- this call alone isn't enough, Discord enforces both
+    server-side too.
     """
     intents = discord.Intents.default()
     intents.members = True
+    intents.message_content = True
     return intents
 
 

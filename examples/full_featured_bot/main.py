@@ -65,8 +65,15 @@ setup_welcome(bot, channel_id=None)
 # truncated address bar.
 _base_url = os.environ.get("DASHBOARD_BASE_URL", "http://localhost:8000")
 
+# Global slash-command sync can take up to an hour to show up everywhere;
+# set TEST_GUILD_ID (your test server's ID) in .env for near-instant sync
+# to just that one guild while you're testing. Leave unset for a normal
+# global sync.
+_test_guild_id = os.environ.get("TEST_GUILD_ID")
+
 app = DiscordWebAPI.quickstart(
     bot=bot,
+    sync_guild_id=int(_test_guild_id) if _test_guild_id else None,
     enable_websocket=True,
     enable_audit_log=True,
     enable_cookie_consent=True,

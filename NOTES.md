@@ -169,6 +169,48 @@ oturumda da devam edecek bir iş akışı, unutma).
   gerektiriyor. Kullanıcıya bu daraltma söylenmeli (henüz söylenmedi
   olabilir — sohbetin geri kalanını kontrol et).
 
+## KRİTİK BUG BULUNDU VE DÜZELTİLDİ: slash komutlar hiç senkronize edilmiyordu
+
+Bölüm 3'te kullanıcı `/ping` yazınca Discord'da slash komut hiç
+görünmedi, `!ping` de cevap vermedi. Kod incelemesinde iki gerçek,
+ciddi bug bulundu (kullanıcı hatası değil):
+
+1. **`bot.tree.sync()` hiçbir yerde çağrılmıyordu.** discord.py, slash
+   komutları `sync()` çağrılmadıkça Discord'a hiç göndermiyor — hatasız,
+   sessizce. Bu, kütüphanenin en başından beri (v0.1'den) var olan bir
+   eksiklik, hiçbir zaman fark edilmemiş çünkü hiçbir otomatik test gerçek
+   bir Discord bağlantısı üzerinden `/komut` çalıştırmıyor.
+   **Fix**: `DiscordWebAPI._on_ready()` artık `bot.tree.sync()`'i
+   otomatik çağırıyor (`sync_commands: bool = True` yeni parametre,
+   `DiscordWebAPI(...)` ve `quickstart(...)`'a eklendi). `on_ready` birden
+   fazla kez tetiklenebileceği için (Gateway reconnect) sadece bir kez
+   sync ediliyor (`self._commands_synced` guard). `sync_guild_id: int |
+   None = None` yeni parametresiyle global sync yerine (ki ~1 saate kadar
+   yayılma gecikmesi olabiliyor) tek bir test sunucusuna anında sync
+   yapılabiliyor (`copy_global_to` + `sync(guild=...)`).
+2. **`default_intents()` `message_content` intent'ini açmıyordu.** Bu
+   olmadan discord.py mesaj metnini okuyamıyor, prefix komutlar
+   (`!ping`) hiç eşleşmiyor. **Fix**: `default_intents()` artık
+   `intents.message_content = True` da yapıyor; docstring Discord
+   Developer Portal'da "Message Content Intent"i de açmak gerektiğini
+   hatırlatıyor.
+
+Testler: `tests/integration/test_facade.py`'ye 4 yeni test (sync
+davranışı: varsayılan global, guild-scoped, kapalıyken hiç, birden fazla
+`on_ready`'de sadece bir kez), `test_quickstart.py`'ye
+`message_content` testi. `test_facade.py`'nin mevcut testi de
+`sync_commands=False` ile güncellendi (o test gerçek bir Gateway
+bağlantısı simüle etmiyor, `application_id` olmadan `sync()` zaten
+patlardı — bu discord.py'nin kendi davranışı, kütüphane bugı değil).
+171 test yeşil, ruff+mypy temiz.
+
+`examples/full_featured_bot/main.py` ve `.env.example`'a `TEST_GUILD_ID`
+env var'ı eklendi — doldurulursa `sync_guild_id`'ye geçiliyor.
+
+**Bu, kullanıcının fiziksel testinin gerçek değerini kanıtlıyor** —
+otomatik test paketi hiçbir zaman bunu yakalayamazdı, sadece gerçek bir
+Discord sunucusunda gerçek bir bot çalıştırmak bunu ortaya çıkardı.
+
 ## Sıradaki iş akışı: bölüm bölüm kurulum + test (kullanıcının istediği format)
 
 Kullanıcı şunu istedi: önce temiz bir kurulum + test planını **bölümlere

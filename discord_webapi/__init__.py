@@ -6,6 +6,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import discord
 from discord.ext import commands
 from fastapi import FastAPI
 
@@ -169,10 +170,15 @@ class DiscordWebAPI:
         consent_store: ConsentStore | None = None,
         member_cache_ttl_seconds: float = 45.0,
         channel_permission_cache_ttl_seconds: float = 30.0,
+        sync_commands: bool = True,
+        sync_guild_id: int | None = None,
     ) -> None:
         self.bot = bot
         self.transport = transport
         self.auth = auth
+        self._sync_commands = sync_commands
+        self._sync_guild_id = sync_guild_id
+        self._commands_synced = False
         self.command_store = command_store or MemoryCommandConfigStore()
         self.authz_store = authz_store or MemoryAuthzStore()
         self.audit_store = audit_store or MemoryAuditStore()
@@ -191,6 +197,19 @@ class DiscordWebAPI:
 
     async def _on_ready(self) -> None:
         await self.registry.register_all()
+        if self._sync_commands and not self._commands_synced:
+            # discord.py never pushes slash commands to Discord on its own
+            # -- without this, /commands you define never show up in
+            # Discord's own UI at all, silently. Guarded so a Gateway
+            # reconnect (on_ready can fire more than once) doesn't re-sync
+            # every time.
+            if self._sync_guild_id is not None:
+                guild = discord.Object(id=self._sync_guild_id)
+                self.bot.tree.copy_global_to(guild=guild)
+                await self.bot.tree.sync(guild=guild)
+            else:
+                await self.bot.tree.sync()
+            self._commands_synced = True
 
     def install(
         self,
@@ -254,6 +273,8 @@ class DiscordWebAPI:
         enable_cookie_consent: bool = False,
         cookie_consent_message: str = DEFAULT_COOKIE_CONSENT_MESSAGE,
         cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
+        sync_commands: bool = True,
+        sync_guild_id: int | None = None,
     ) -> FastAPI:
         """One-call setup for the single-process case: reads
         `DISCORD_BOT_TOKEN`/`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`/
@@ -284,6 +305,14 @@ class DiscordWebAPI:
         `session_id` right there in the URL's query string to copy, which
         you then send as `Authorization: Bearer <session_id>` on every
         request instead of a cookie.
+
+        `sync_commands=True` (the default) pushes your slash commands to
+        Discord once the bot is ready -- discord.py never does this on its
+        own, so without it your `/commands` silently never appear in
+        Discord's UI at all. Global sync (`sync_guild_id=None`) can take
+        up to an hour to propagate everywhere; pass your test server's
+        guild ID as `sync_guild_id` while developing for near-instant
+        propagation to just that one guild instead.
         """
         from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -329,6 +358,8 @@ class DiscordWebAPI:
             authz_store=SQLAuthzStore(engine),
             audit_store=SQLAuditStore(engine),
             consent_store=SQLConsentStore(engine),
+            sync_commands=sync_commands,
+            sync_guild_id=sync_guild_id,
         )
 
         @asynccontextmanager
