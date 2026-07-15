@@ -1,9 +1,11 @@
 from discord_webapi.authz.api import build_app_roles_router
 from discord_webapi.authz.app_roles import AppRoleCache
-from discord_webapi.authz.cache import GuildMemberCache, GuildMemberInfo
+from discord_webapi.authz.cache import ChannelPermissionCache, GuildMemberCache, GuildMemberInfo
 from discord_webapi.authz.dependencies import (
+    ChannelContext,
     GuildContext,
     require_app_role,
+    require_channel_permission,
     require_guild_permission,
     require_role,
 )
@@ -14,12 +16,15 @@ __all__ = [
     "AppRole",
     "AppRoleCache",
     "AppRolePatch",
+    "ChannelContext",
+    "ChannelPermissionCache",
     "GuildContext",
     "GuildMemberCache",
     "GuildMemberInfo",
     "build_app_roles_router",
     "has_permission",
     "require_app_role",
+    "require_channel_permission",
     "require_guild_permission",
     "require_role",
 ]

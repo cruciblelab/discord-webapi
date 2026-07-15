@@ -134,3 +134,26 @@ def get_member_permissions(
     if member is None:
         return None
     return member.guild_permissions
+
+
+def get_channel_permissions(
+    bot: commands.Bot, guild_id: int, channel_id: int, user_id: int
+) -> discord.Permissions | None:
+    """Effective permissions for a member in a specific channel --
+    guild-level roles *plus* that channel's own permission overwrites
+    (`channel.permissions_for` folds both together, matching what
+    Discord's own UI shows as "these are your permissions here"). Answers
+    from the bot's warm Gateway cache only, same no-REST-call principle as
+    `get_member_permissions`. Returns `None` if the guild/member/channel
+    isn't cached.
+    """
+    guild = bot.get_guild(guild_id)
+    if guild is None:
+        return None
+    member = guild.get_member(user_id)
+    if member is None:
+        return None
+    channel = guild.get_channel(channel_id)
+    if channel is None:
+        return None
+    return channel.permissions_for(member)

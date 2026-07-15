@@ -159,6 +159,23 @@ Bu özellik varsayılan kapalı. `enable_cookie_consent=True` ile botu başlat
 - [ ] Tarayıcının localStorage'ını temizle (dev tools → Application → Local Storage), Discord ile giriş yap, `/api/consent`'i çağır (`curl` veya tarayıcı konsolundan `fetch`) → henüz onay verilmediyse `null`, "Accept"e tıklandıktan sonra `consent_version`/`given_at` alanlarıyla dolu bir kayıt döndüğünü doğrula.
 - [ ] `cookie_consent_message`/`cookie_consent_version`'ı değiştirip botu yeniden başlat → banner metninin değiştiğini ve (versiyon değiştiği için) daha önce onaylamış bir kullanıcıya bile banner'ın tekrar gösterildiğini doğrula.
 
+## 13. Kanal Bazlı İzin Override (v0.4, yeni)
+
+`require_guild_permission`'dan farkı: guild seviyesinde bir izne sahip
+olsan bile, o kanala özel bir override o izni geri alabiliyorsa bu kontrol
+seni reddediyor. `full_featured_bot`'ta demo endpoint zaten hazır:
+`GET /api/guilds/{guild_id}/channels/{channel_id}/can-send`.
+
+- [ ] Sunucunda "Send Messages" iznin olan bir kanalda bu endpoint'i çağır → 200 ve `user_id`/`channel_id` döndüğünü doğrula:
+  ```
+  curl -H "Authorization: Bearer $DWA_SESSION" \
+      http://localhost:8000/api/guilds/<guild_id>/channels/<channel_id>/can-send
+  ```
+- [ ] Discord'da o kanala özel bir override ekle: kanal ayarları → İzinler → kendi rolün için "Send Messages"i **Deny** yap.
+- [ ] Aynı endpoint'i tekrar çağır → **45 saniye içinde** (varsayılan `channel_permission_cache_ttl_seconds=30`) 403 döndüğünü doğrula — cache TTL'inin dolmasını beklemen gerekebilir, hemen değişmeyebilir.
+- [ ] Override'ı kaldır (Deny'ı temizle) → TTL dolduktan sonra tekrar 200 döndüğünü doğrula.
+- [ ] Var olmayan bir `channel_id` ile çağır → 403 (bulunamadı) aldığını doğrula.
+
 ---
 
 Bir adım beklenmedik davranış gösterirse (özellikle WebSocket round-trip veya

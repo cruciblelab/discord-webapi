@@ -9,8 +9,16 @@ from typing import Any
 import discord
 from discord.ext import commands
 
-from discord_webapi.authz.cache import COMMAND_GET_MEMBER, EVENT_TYPE_MEMBER_UPDATED
-from discord_webapi.commands.bridge import get_member_permissions, get_member_roles
+from discord_webapi.authz.cache import (
+    COMMAND_GET_CHANNEL_PERMISSIONS,
+    COMMAND_GET_MEMBER,
+    EVENT_TYPE_MEMBER_UPDATED,
+)
+from discord_webapi.commands.bridge import (
+    get_channel_permissions,
+    get_member_permissions,
+    get_member_roles,
+)
 from discord_webapi.transport.base import Event, Transport
 
 
@@ -68,6 +76,28 @@ def install_member_lookup(bot: commands.Bot, transport: Transport) -> None:
 
     bot.add_listener(on_member_update, name="on_member_update")
     bot.add_listener(on_member_remove, name="on_member_remove")
+
+
+def install_channel_permission_lookup(bot: commands.Bot, transport: Transport) -> None:
+    """Bot-process wiring for `authz.ChannelPermissionCache`: answers
+    `get_channel_permissions` RPC requests from the bot's own warm Gateway
+    cache (never a REST call) -- see `commands.bridge.get_channel_permissions`
+    for what "effective permissions" means here (role permissions folded
+    together with the channel's own overwrites).
+    """
+
+    async def handle_get_channel_permissions(payload: dict[str, Any]) -> dict[str, Any]:
+        guild_id, channel_id, user_id = (
+            payload["guild_id"],
+            payload["channel_id"],
+            payload["user_id"],
+        )
+        permissions = get_channel_permissions(bot, guild_id, channel_id, user_id)
+        if permissions is None:
+            return {"found": False}
+        return {"found": True, "permissions": permissions.value}
+
+    transport.register_handler(COMMAND_GET_CHANNEL_PERMISSIONS, handle_get_channel_permissions)
 
 
 @asynccontextmanager

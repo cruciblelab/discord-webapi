@@ -137,18 +137,49 @@ sorun tamamen elle URL yazmaktan kaynaklanan bir kullanıcı hatasıydı.
 - Yeni test: `test_dashboard_has_a_clickable_mobile_login_link`. 159 test
   yeşil, ruff+mypy temiz.
 
-## Bir sonraki oturumda muhtemel işler (kullanıcı üçünü de istiyor, sırada)
+## v0.4 tamamlandı: Channel-level permission overwrite
 
-1. **Multi-bot/shard routing** — birden fazla bot instance/shard'ın aynı
-   dashboard'u paylaşması (orijinal v0.1 planının v0.3+ listesinden).
-2. **Channel-level permission overwrite** — Discord'un kanal bazlı izin
-   override sistemini authz katmanına yansıtmak.
-3. Kullanıcının fiziksel test sonuçlarını bekle (`TESTING.md`).
-4. Builtin eklemeye ara verildi ("şuan zamanı değil") — tekrar gündeme
-   gelirse `on_message` otomatik moderasyon, rol-atama komutu gibi fikirler
-   NOTES.md'nin önceki sürümünde vardı.
-5. Kullanıcı gerçekten üçüncü-taraf paket/manifest sistemini şimdi mi
-   istiyor yoksa uzun vadeli bir vizyon muydu — netleştirilmesi gerekebilir.
+Kullanıcı Termux/mobil test sürecinde çok kafası karıştığı için ("kafam
+çok karışıyor") büyük, kapsamlı bir v0.4 güncellemesi istedi: yeni
+özellikler + sağlamlaştırma, sonra kontrolleri yap, sonra **bölüm bölüm**
+kurulum + test adımlarını ver (her bölümden sonra kullanıcı rapor verecek,
+ben kontrol edip düzeltip bir sonraki bölümü vereceğim — bu bir sonraki
+oturumda da devam edecek bir iş akışı, unutma).
+
+- **`require_channel_permission`**: `require_guild_permission`'dan farkı,
+  guild-level izne sahip olsan bile o kanala özel bir override (Discord'un
+  "Kanal İzinleri" / channel overwrite sistemi) o izni geri alabiliyorsa
+  reddediyor. `ChannelPermissionCache` (`authz/cache.py`, TTL'li — 30sn
+  varsayılan, `AppRoleCache` ile aynı basit desende, push-invalidation
+  yok çünkü channel overwrite'lar guild membership'ten çok daha az
+  değişiyor). Bot tarafında `install_channel_permission_lookup`
+  (`bot/extension.py`) — Discord'un kendi `channel.permissions_for(member)`'ını
+  kullanıyor (guild rolleri + kanal overwrite'ları otomatik birleşiyor),
+  ekstra REST çağrısı yok, aynı warm-Gateway-cache-only ilkesi.
+  `commands/bridge.py`'de `get_channel_permissions()`.
+- `DiscordWebAPI(channel_permission_cache_ttl_seconds=30.0)` yeni parametre.
+- `full_featured_bot`'ta demo endpoint: `GET /api/guilds/{guild_id}/channels/{channel_id}/can-send`.
+- Testler: `tests/unit/test_authz.py`'ye 3 yeni `ChannelPermissionCache`
+  testi, yeni `tests/integration/test_channel_permissions.py` (4 test).
+  166 test yeşil, ruff+mypy temiz.
+- **Multi-bot/shard routing bilinçli olarak ertelendi** — üçüncü-taraf
+  paket sistemiyle aynı gerekçe: birden fazla bot instance/shard'ın aynı
+  dashboard'u paylaşması, `Transport`'un hangi guild'in hangi shard'a ait
+  olduğunu nasıl bileceği gibi sorular kendi başına ayrı bir tasarım turu
+  gerektiriyor. Kullanıcıya bu daraltma söylenmeli (henüz söylenmedi
+  olabilir — sohbetin geri kalanını kontrol et).
+
+## Sıradaki iş akışı: bölüm bölüm kurulum + test (kullanıcının istediği format)
+
+Kullanıcı şunu istedi: önce temiz bir kurulum + test planını **bölümlere
+ayır**, ilk bölümü ver, kullanıcı fiziksel olarak test edip rapor versin,
+ben kontrol edip gerekirse düzeltmeleri yapayım, sonra 2. bölümü vereyim
+— böyle devam etsin. Bu, `TESTING.md`'nin mevcut 13 bölümünü (0'dan 13'e)
+kullanıcıya tek seferde değil, birkaçar bölümlük gruplar halinde sırayla
+sunmak anlamına geliyor. **Bir sonraki oturumda kaldığı yerden devam et**:
+hangi bölüme kadar geldiğini, kullanıcının hangi rapor(lar)ı verdiğini ve
+hangi düzeltmelerin yapıldığını burada takip et (bu oturumda ilk bölüm
+henüz kullanıcıya verilmedi — bir sonraki mesajda verilecek).
 
 ## Genel süreç hatırlatmaları (tekrar unutulmasın diye)
 

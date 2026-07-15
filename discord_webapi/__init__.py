@@ -15,14 +15,21 @@ from discord_webapi.authz import (
     AppRole,
     AppRoleCache,
     AppRolePatch,
+    ChannelContext,
+    ChannelPermissionCache,
     GuildContext,
     GuildMemberCache,
     build_app_roles_router,
     require_app_role,
+    require_channel_permission,
     require_guild_permission,
     require_role,
 )
-from discord_webapi.bot.extension import install_member_lookup, single_process_lifespan
+from discord_webapi.bot.extension import (
+    install_channel_permission_lookup,
+    install_member_lookup,
+    single_process_lifespan,
+)
 from discord_webapi.commands import (
     CommandOverride,
     CommandRegistry,
@@ -67,6 +74,8 @@ __all__ = [
     "AuditLogger",
     "AuditStore",
     "AuthzStore",
+    "ChannelContext",
+    "ChannelPermissionCache",
     "CommandConfigStore",
     "CommandOverride",
     "CommandRegistry",
@@ -100,6 +109,7 @@ __all__ = [
     "build_members_router",
     "get_current_user",
     "require_app_role",
+    "require_channel_permission",
     "require_guild_permission",
     "require_role",
 ]
@@ -158,6 +168,7 @@ class DiscordWebAPI:
         audit_store: AuditStore | None = None,
         consent_store: ConsentStore | None = None,
         member_cache_ttl_seconds: float = 45.0,
+        channel_permission_cache_ttl_seconds: float = 30.0,
     ) -> None:
         self.bot = bot
         self.transport = transport
@@ -168,9 +179,13 @@ class DiscordWebAPI:
         self.consent_store = consent_store or MemoryConsentStore()
         self.registry = CommandRegistry(bot, transport=transport, store=self.command_store)
         self.member_cache = GuildMemberCache(transport, ttl_seconds=member_cache_ttl_seconds)
+        self.channel_permission_cache = ChannelPermissionCache(
+            transport, ttl_seconds=channel_permission_cache_ttl_seconds
+        )
         self.app_role_cache = AppRoleCache(self.authz_store)
 
         install_member_lookup(bot, transport)
+        install_channel_permission_lookup(bot, transport)
         install_member_listing(bot, transport)
         bot.add_listener(self._on_ready, name="on_ready")
 
@@ -190,6 +205,7 @@ class DiscordWebAPI:
     ) -> None:
         self.auth.install(app)
         app.state.discord_webapi_member_cache = self.member_cache
+        app.state.discord_webapi_channel_permission_cache = self.channel_permission_cache
         app.state.discord_webapi_commands = self.registry
         app.state.discord_webapi_transport = self.transport
         app.state.discord_webapi_app_role_cache = self.app_role_cache

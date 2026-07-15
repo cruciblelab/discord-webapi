@@ -20,9 +20,11 @@ Run:
 import os
 
 from discord.ext import commands
+from fastapi import Depends
 from fastapi.responses import HTMLResponse
 
 from discord_webapi import DiscordWebAPI
+from discord_webapi.authz import ChannelContext, require_channel_permission
 from discord_webapi.bot import default_intents
 from discord_webapi.builtins.ban import setup as setup_ban
 from discord_webapi.builtins.kick import setup as setup_kick
@@ -104,3 +106,17 @@ async def mobile_login_done(session_id: str = "", expires_at: str = "") -> str:
     </p>
     <p style="font-size:0.85rem; color:#555;">Geçerlilik: {expires_at}</p>
     """
+
+
+@app.get("/api/guilds/{guild_id}/channels/{channel_id}/can-send")
+async def can_send_in_channel(
+    guild_id: int,
+    channel_id: int,
+    ctx: ChannelContext = Depends(require_channel_permission("send_messages")),
+) -> dict:
+    """Demo endpoint for the new channel-level permission overwrite
+    feature (v0.4): unlike `require_guild_permission`, this checks
+    *effective* permissions in this specific channel -- if the channel has
+    an overwrite denying `send_messages` to this member's role, this 403s
+    even though they might have `send_messages` at the guild level."""
+    return {"guild_id": guild_id, "channel_id": channel_id, "user_id": ctx.user.id}

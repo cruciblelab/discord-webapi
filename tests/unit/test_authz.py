@@ -1,7 +1,7 @@
 import discord
 import pytest
 
-from discord_webapi.authz.cache import GuildMemberCache
+from discord_webapi.authz.cache import ChannelPermissionCache, GuildMemberCache
 from discord_webapi.authz.permissions import has_permission
 from discord_webapi.transport import Event, InProcessTransport
 
@@ -87,3 +87,52 @@ async def test_member_updated_event_invalidates_cache(transport: InProcessTransp
     second = await cache.get(guild_id=1, user_id=2)
     assert second is not None
     assert second.role_ids == [2]
+
+
+async def test_channel_permission_cache_hits_transport_and_caches_result(
+    transport: InProcessTransport,
+) -> None:
+    call_count = 0
+
+    async def handle_get_channel_permissions(payload: dict) -> dict:
+        nonlocal call_count
+        call_count += 1
+        return {"found": True, "permissions": discord.Permissions(send_messages=True).value}
+
+    transport.register_handler("get_channel_permissions", handle_get_channel_permissions)
+    cache = ChannelPermissionCache(transport, ttl_seconds=60)
+
+    perms1 = await cache.get(guild_id=1, channel_id=10, user_id=2)
+    perms2 = await cache.get(guild_id=1, channel_id=10, user_id=2)
+
+    assert call_count == 1
+    assert perms1 is not None
+    assert perms1.send_messages is True
+    assert perms2 == perms1
+
+
+async def test_channel_permission_cache_returns_none_when_not_found(
+    transport: InProcessTransport,
+) -> None:
+    async def handle_get_channel_permissions(payload: dict) -> dict:
+        return {"found": False}
+
+    transport.register_handler("get_channel_permissions", handle_get_channel_permissions)
+    cache = ChannelPermissionCache(transport)
+
+    assert await cache.get(guild_id=1, channel_id=10, user_id=999) is None
+
+
+async def test_channel_permission_cache_scopes_by_channel(transport: InProcessTransport) -> None:
+    async def handle_get_channel_permissions(payload: dict) -> dict:
+        allowed = payload["channel_id"] == 10
+        return {"found": True, "permissions": discord.Permissions(send_messages=allowed).value}
+
+    transport.register_handler("get_channel_permissions", handle_get_channel_permissions)
+    cache = ChannelPermissionCache(transport, ttl_seconds=60)
+
+    allowed_channel = await cache.get(guild_id=1, channel_id=10, user_id=2)
+    denied_channel = await cache.get(guild_id=1, channel_id=20, user_id=2)
+
+    assert allowed_channel is not None and allowed_channel.send_messages is True
+    assert denied_channel is not None and denied_channel.send_messages is False

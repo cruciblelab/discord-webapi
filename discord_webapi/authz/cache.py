@@ -60,3 +60,46 @@ class GuildMemberCache:
         user_id = event.payload.get("user_id")
         if guild_id is not None and user_id is not None:
             self._cache.pop((guild_id, user_id), None)
+
+
+COMMAND_GET_CHANNEL_PERMISSIONS = "get_channel_permissions"
+
+
+class ChannelPermissionCache:
+    """Web-side cache for effective per-channel permissions (guild role
+    permissions folded together with that channel's own overwrites --
+    see `commands.bridge.get_channel_permissions`).
+
+    Deliberately TTL-only, no push invalidation (unlike `GuildMemberCache`):
+    channel overwrites change far less often than guild membership/roles,
+    and reacting to every `on_guild_channel_update` across every channel
+    isn't worth the complexity for something that's already eventually
+    consistent within `ttl_seconds` -- same tradeoff `AppRoleCache` already
+    makes for its own, even-less-frequently-changing data.
+    """
+
+    def __init__(self, transport: Transport, *, ttl_seconds: float = 30.0) -> None:
+        self.transport = transport
+        self.ttl_seconds = ttl_seconds
+        self._cache: dict[tuple[int, int, int], tuple[float, discord.Permissions]] = {}
+
+    async def get(
+        self, guild_id: int, channel_id: int, user_id: int
+    ) -> discord.Permissions | None:
+        key = (guild_id, channel_id, user_id)
+        cached = self._cache.get(key)
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < self.ttl_seconds:
+            return cached[1]
+
+        response = await self.transport.request(
+            COMMAND_GET_CHANNEL_PERMISSIONS,
+            {"guild_id": guild_id, "channel_id": channel_id, "user_id": user_id},
+        )
+        if not response.get("found"):
+            self._cache.pop(key, None)
+            return None
+
+        permissions = discord.Permissions(response["permissions"])
+        self._cache[key] = (now, permissions)
+        return permissions
