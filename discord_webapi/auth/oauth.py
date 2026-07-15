@@ -11,7 +11,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from starlette.requests import HTTPConnection
 
-from discord_webapi.auth.models import DiscordUser
+from discord_webapi.auth.models import DiscordUser, SessionSummary
 from discord_webapi.exceptions import InvalidStateError, SessionExpiredError
 from discord_webapi.storage.base import Session, SessionStore
 from discord_webapi.storage.memory import MemorySessionStore
@@ -182,6 +182,32 @@ class DiscordAuth:
         @router.get("/me")
         async def me(request: Request) -> DiscordUser:
             return await self.get_current_user(request)
+
+        @router.get("/sessions")
+        async def list_sessions(request: Request) -> list[SessionSummary]:
+            user = await self.get_current_user(request)
+            current_session_id = request.cookies.get(
+                self.session_cookie_name
+            ) or _extract_bearer_token(request)
+            sessions = await self.session_store.list_by_user(user.id)
+            return [
+                SessionSummary(
+                    session_id=session.session_id,
+                    created_at=session.created_at,
+                    expires_at=session.expires_at,
+                    is_current=session.session_id == current_session_id,
+                )
+                for session in sessions
+            ]
+
+        @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+        async def revoke_session(session_id: str, request: Request) -> Response:
+            user = await self.get_current_user(request)
+            session = await self.session_store.get(session_id)
+            if session is None or session.user_id != user.id:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
+            await self.session_store.delete(session_id)
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
 
         return router
 

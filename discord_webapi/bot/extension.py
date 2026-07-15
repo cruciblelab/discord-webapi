@@ -18,8 +18,11 @@ from discord_webapi.commands.bridge import (
     get_channel_permissions,
     get_member_permissions,
     get_member_roles,
+    list_manageable_guilds,
 )
 from discord_webapi.transport.base import Event, Transport
+
+COMMAND_LIST_MANAGEABLE_GUILDS = "list_manageable_guilds"
 
 
 def default_intents() -> discord.Intents:
@@ -104,6 +107,19 @@ def install_channel_permission_lookup(bot: commands.Bot, transport: Transport) -
         return {"found": True, "permissions": permissions.value}
 
     transport.register_handler(COMMAND_GET_CHANNEL_PERMISSIONS, handle_get_channel_permissions)
+
+
+def install_guild_listing(bot: commands.Bot, transport: Transport) -> None:
+    """Bot-process wiring for `GET /api/guilds`: answers
+    `list_manageable_guilds` RPC requests from the bot's own warm Gateway
+    cache -- see `commands.bridge.list_manageable_guilds`.
+    """
+
+    async def handle_list_manageable_guilds(payload: dict[str, Any]) -> dict[str, Any]:
+        guilds = list_manageable_guilds(bot, payload["guild_ids"], payload["user_id"])
+        return {"guilds": guilds}
+
+    transport.register_handler(COMMAND_LIST_MANAGEABLE_GUILDS, handle_list_manageable_guilds)
 
 
 @asynccontextmanager

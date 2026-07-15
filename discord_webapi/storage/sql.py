@@ -267,6 +267,11 @@ class SQLSessionStore:
                 await db.delete(row)
                 await db.commit()
 
+    async def list_by_user(self, user_id: int) -> list[Session]:
+        async with self._sessionmaker() as db:
+            result = await db.execute(select(SessionRow).where(SessionRow.user_id == user_id))
+            return [_row_to_session(row) for row in result.scalars()]
+
 
 class SQLCommandConfigStore:
     """CommandConfigStore backed by SQLAlchemy 2.0 async. Call

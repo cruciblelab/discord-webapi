@@ -54,3 +54,17 @@ async def test_delete_removes_session() -> None:
     await store.delete(session.session_id)
 
     assert await store.get(session.session_id) is None
+
+
+async def test_list_by_user_returns_only_that_users_sessions() -> None:
+    store = MemorySessionStore()
+    mine_1 = _make_session("sess-1")
+    mine_2 = _make_session("sess-2")
+    other = _make_session("sess-3").model_copy(update={"user_id": 456})
+    await store.create(mine_1)
+    await store.create(mine_2)
+    await store.create(other)
+
+    sessions = await store.list_by_user(123)
+
+    assert {s.session_id for s in sessions} == {"sess-1", "sess-2"}

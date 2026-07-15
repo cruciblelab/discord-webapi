@@ -108,6 +108,23 @@ async def test_sql_session_store_timestamps_stay_tz_aware_after_round_trip(
     assert fetched.expires_at > datetime.now(UTC)
 
 
+async def test_sql_session_store_list_by_user_returns_only_that_users_sessions(
+    engine: AsyncEngine,
+) -> None:
+    store = SQLSessionStore(engine)
+    await store.create_all()
+    mine_1 = _make_session("sess-1")
+    mine_2 = _make_session("sess-2")
+    other = _make_session("sess-3").model_copy(update={"user_id": 456})
+    await store.create(mine_1)
+    await store.create(mine_2)
+    await store.create(other)
+
+    sessions = await store.list_by_user(123)
+
+    assert {s.session_id for s in sessions} == {"sess-1", "sess-2"}
+
+
 def _make_override(guild_id: int = 1, command_name: str = "kick") -> CommandOverride:
     return CommandOverride(
         guild_id=guild_id,

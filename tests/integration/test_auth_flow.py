@@ -128,3 +128,61 @@ def test_logout_clears_session() -> None:
     assert logout_resp.status_code == 204
     me_resp = client.get("/auth/discord/me")
     assert me_resp.status_code == 401
+
+
+@respx.mock
+def test_list_sessions_marks_the_calling_session_as_current() -> None:
+    app, _auth = _make_app()
+    client = TestClient(app)
+    state = _login_and_get_state(client)
+    _mock_discord_endpoints(respx.mock)
+    client.get(f"/auth/discord/callback?code=some-code&state={state}", follow_redirects=False)
+
+    resp = client.get("/auth/discord/sessions")
+
+    assert resp.status_code == 200
+    sessions = resp.json()
+    assert len(sessions) == 1
+    assert sessions[0]["is_current"] is True
+    assert "encrypted_access_token" not in sessions[0]
+
+
+def test_list_sessions_without_session_returns_401() -> None:
+    app, _auth = _make_app()
+    client = TestClient(app)
+
+    resp = client.get("/auth/discord/sessions")
+
+    assert resp.status_code == 401
+
+
+@respx.mock
+def test_revoke_session_logs_it_out() -> None:
+    app, _auth = _make_app()
+    client = TestClient(app)
+    state = _login_and_get_state(client)
+    _mock_discord_endpoints(respx.mock)
+    client.get(f"/auth/discord/callback?code=some-code&state={state}", follow_redirects=False)
+    session_id = client.cookies["dwa_session"]
+
+    revoke_resp = client.delete(f"/auth/discord/sessions/{session_id}")
+
+    assert revoke_resp.status_code == 204
+    me_resp = client.get("/auth/discord/me")
+    assert me_resp.status_code == 401
+
+
+@respx.mock
+def test_revoke_someone_elses_session_returns_404() -> None:
+    app, auth = _make_app()
+    client = TestClient(app)
+    state = _login_and_get_state(client)
+    _mock_discord_endpoints(respx.mock)
+    client.get(f"/auth/discord/callback?code=some-code&state={state}", follow_redirects=False)
+
+    resp = client.delete("/auth/discord/sessions/not-a-real-session-id")
+
+    assert resp.status_code == 404
+    # sanity: the caller's own session is unaffected
+    me_resp = client.get("/auth/discord/me")
+    assert me_resp.status_code == 200

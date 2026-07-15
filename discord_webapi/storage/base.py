@@ -48,6 +48,8 @@ class SessionStore(Protocol):
 
     async def delete(self, session_id: str) -> None: ...
 
+    async def list_by_user(self, user_id: int) -> list[Session]: ...
+
 
 class CommandConfigStore(Protocol):
     """Storage for per-guild command overrides (enabled/disabled, cooldowns, ...).

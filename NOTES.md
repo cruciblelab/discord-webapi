@@ -1,5 +1,37 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## v0.5 — genişleme: `GET /api/guilds`, oturum yönetimi (bu oturumda tamamlandı)
+
+Hardening turu bittikten sonra kullanıcının "ikisini de yap" dediği iki
+genişleme özelliği:
+
+1. **`GET /api/guilds`** (`discord_webapi/guilds/`): kullanıcının kendi
+   Discord `guild_ids` listesindeki hangi sunucuların hem bu bot'un içinde
+   olduğunu HEM DE kullanıcının orada "Manage Server" yetkisi olduğunu
+   döndürür — "sunucu seç" ekranı için, tüketicinin tek tek her guild'i
+   deneyip 403/404 almasına gerek kalmadan. Bot tarafı
+   (`commands/bridge.py::list_manageable_guilds` + `bot/extension.py::
+   install_guild_listing`) botun warm Gateway cache'inden cevaplıyor, web
+   tarafı (`guilds/api.py`) `has_permission(..., "manage_guild")` ile
+   filtreliyor (izin kontrolü kasıtlı olarak transport cevabından SONRA,
+   web tarafında yapılıyor).
+2. **Oturum yönetimi / "her yerden çıkış yap"**: `SessionStore` protokolüne
+   `list_by_user(user_id)` eklendi (Memory + SQL), `DiscordAuth`'a
+   `GET /auth/discord/sessions` (kendi aktif oturumlarını listele,
+   `is_current` bayrağıyla, şifreli token alanları asla dönmez —
+   `SessionSummary` modeli bilerek dar) ve
+   `DELETE /auth/discord/sessions/{session_id}` (sadece kendi oturumunu
+   iptal edebilir — başka bir `user_id`'ye ait session_id 404 döner, 403
+   değil — session'ın var olup olmadığını sızdırmamak için).
+
+Her ikisi de mevcut modül-başına-endpoint deseniyle (authz/consent/audit
+gibi) uyumlu; yeni testler: `tests/integration/test_guilds_api.py`,
+`tests/integration/test_auth_flow.py`'ye eklenen 4 test, `tests/unit/
+test_storage.py` ve `test_sql_storage.py`'ye eklenen `list_by_user` testi.
+177 test yeşil (Postgres-bağlantısı gerektiren 1 test yerelde ortam
+yüzünden skip/fail oluyor, kod tarafıyla ilgisiz), ruff+mypy temiz.
+
+
 Bu dosya proje reposunun içinde tutuluyor (git ile push ediliyor) çünkü
 oturum hafızası kalıcı değil ve bazen proje dizini dışına (plan dosyaları,
 scratchpad vb.) yazılan notlar bir sonraki oturumda erişilemez hale

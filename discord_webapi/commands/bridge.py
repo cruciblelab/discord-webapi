@@ -157,3 +157,35 @@ def get_channel_permissions(
     if channel is None:
         return None
     return channel.permissions_for(member)
+
+
+def list_manageable_guilds(
+    bot: commands.Bot, guild_ids: list[int], user_id: int
+) -> list[dict[str, Any]]:
+    """For each candidate guild_id (typically a user's full Discord
+    `guild_ids` from their session -- every server they're a member of,
+    whether or not this bot is there too): answers whether the bot is
+    actually in that guild and the user is a member of it, and if so their
+    permissions there. Lets a consumer build a "pick a server" screen
+    without looping over guilds themselves and hitting this library's
+    per-guild endpoints one at a time to find out which ones even apply.
+    Guilds the bot isn't in, or where the user isn't a cached member, are
+    silently omitted -- not an error, just not a candidate to manage.
+    """
+    results: list[dict[str, Any]] = []
+    for guild_id in guild_ids:
+        guild = bot.get_guild(guild_id)
+        if guild is None:
+            continue
+        member = guild.get_member(user_id)
+        if member is None:
+            continue
+        results.append(
+            {
+                "guild_id": guild_id,
+                "name": guild.name,
+                "icon_url": str(guild.icon.url) if guild.icon else None,
+                "permissions": member.guild_permissions.value,
+            }
+        )
+    return results

@@ -11,7 +11,7 @@ from discord.ext import commands
 from fastapi import FastAPI
 
 from discord_webapi.audit import AuditLogger, build_audit_log_router
-from discord_webapi.auth import DiscordAuth, DiscordUser, get_current_user
+from discord_webapi.auth import DiscordAuth, DiscordUser, SessionSummary, get_current_user
 from discord_webapi.authz import (
     AppRole,
     AppRoleCache,
@@ -28,6 +28,7 @@ from discord_webapi.authz import (
 )
 from discord_webapi.bot.extension import (
     install_channel_permission_lookup,
+    install_guild_listing,
     install_member_lookup,
     single_process_lifespan,
 )
@@ -39,6 +40,7 @@ from discord_webapi.commands import (
     build_commands_router,
 )
 from discord_webapi.consent import ConsentRecord, build_consent_router
+from discord_webapi.guilds import ManageableGuild, build_guilds_router
 from discord_webapi.members import MemberInfo, build_members_router, install_member_listing
 from discord_webapi.storage import (
     AuditStore,
@@ -91,6 +93,7 @@ __all__ = [
     "GuildContext",
     "GuildMemberCache",
     "InProcessTransport",
+    "ManageableGuild",
     "MemberInfo",
     "MemoryAuditStore",
     "MemoryAuthzStore",
@@ -102,11 +105,13 @@ __all__ = [
     "SQLCommandConfigStore",
     "SQLConsentStore",
     "SQLSessionStore",
+    "SessionSummary",
     "Transport",
     "build_app_roles_router",
     "build_audit_log_router",
     "build_commands_router",
     "build_consent_router",
+    "build_guilds_router",
     "build_members_router",
     "get_current_user",
     "require_app_role",
@@ -193,6 +198,7 @@ class DiscordWebAPI:
         install_member_lookup(bot, transport)
         install_channel_permission_lookup(bot, transport)
         install_member_listing(bot, transport)
+        install_guild_listing(bot, transport)
         bot.add_listener(self._on_ready, name="on_ready")
 
     async def _on_ready(self) -> None:
@@ -231,6 +237,7 @@ class DiscordWebAPI:
         app.include_router(build_commands_router())
         app.include_router(build_members_router())
         app.include_router(build_app_roles_router())
+        app.include_router(build_guilds_router())
         if serve_dashboard:
             app.include_router(
                 build_default_dashboard_router(

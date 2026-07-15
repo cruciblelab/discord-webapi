@@ -30,6 +30,9 @@ class MemorySessionStore:
     async def delete(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
+    async def list_by_user(self, user_id: int) -> list[Session]:
+        return [s for s in self._sessions.values() if s.user_id == user_id]
+
 
 class MemoryCommandConfigStore:
     """Dict-backed CommandConfigStore. Zero infrastructure — the default for dev/tests."""
