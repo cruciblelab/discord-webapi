@@ -6,6 +6,13 @@ kontrol listesidir. Otomatik test paketi (`pytest`) zaten yeşil — burada
 amaç, otomatik testlerin kapsamadığı ("gerçek tarayıcı", "gerçek Discord
 Gateway", "gerçek OAuth2 redirect") uçtan uca senaryoları doğrulamak.
 
+**Hazır test botu**: Her adımı elle kurmak yerine `examples/full_featured_bot/`
+kullan — WebSocket relay, audit log, cookie-consent banner ve her builtin
+(`ban`/`kick`/`timeout`/`warn`/`welcome`) açık şekilde tek bir bot içinde
+hazır (bkz. o klasördeki `README.md`). WebSocket'in gerçek canlı yayın
+testini yapmak için aynı klasördeki `ws_test_client.py` scripti var —
+madde 8'de bu script kullanılıyor.
+
 ## 0. Ön Hazırlık
 
 - [ ] Bir test Discord sunucusu oluştur (veya mevcut bir test sunucusu kullan) ve botu davet et (`applications.commands` + `bot` scope, gerekli izinlerle).
@@ -85,20 +92,11 @@ test dosyanda bunu ekleyip botu yeniden başlat.)
 Bu özellik varsayılan kapalı. Test için `enable_websocket=True` ile botu başlat
 (`DiscordWebAPI.quickstart(..., enable_websocket=True)` veya `api.install(app, enable_websocket=True)`).
 
-- [ ] Bir WebSocket istemcisi ile bağlan: `websocat`, tarayıcı konsolu (`new WebSocket(...)`), veya basit bir Python scripti kullanabilirsin:
-  ```python
-  import asyncio, websockets
-  async def main():
-      # cookie ile: extra_headers={"Cookie": f"dwa_session={SESSION_ID}"}
-      # veya bearer: extra_headers={"Authorization": f"Bearer {SESSION_ID}"}
-      async with websockets.connect(
-          "ws://localhost:8000/api/guilds/{GUILD_ID}/commands/stream",
-          extra_headers={"Cookie": f"dwa_session={SESSION_ID}"},
-      ) as ws:
-          async for message in ws:
-              print("event:", message)
-  asyncio.run(main())
-  ```
+- [ ] Bir WebSocket istemcisi ile bağlan: `websocat`, tarayıcı konsolu
+      (`new WebSocket(...)`), veya `examples/full_featured_bot/ws_test_client.py`
+      (`pip install websockets`, sonra `python ws_test_client.py <guild_id>
+      <session_id>` — `session_id`'yi tarayıcıda `/dashboard`'a login olduktan
+      sonra dev tools'tan `dwa_session` cookie'sinin değeri olarak al).
 - [ ] **Auth testi**: Cookie/Bearer olmadan bağlanmayı dene → bağlantının `4401` koduyla kapandığını doğrula.
 - [ ] **Yetki testi**: `manage_guild` izni olmayan bir kullanıcının session'ıyla bağlan → `4403` ile kapandığını doğrula.
 - [ ] **Canlı yayın testi (asıl amaç)**: Yukarıdaki script'i geçerli/yetkili bir session ile bağlı bırak; başka bir terminalden (veya curl ile) `PATCH /api/guilds/{guild_id}/commands/{command_name}` çağırarak bir override değiştir → bağlı WebSocket istemcisinin **anında** (`{"guild_id": ..., "command_name": ...}` şeklinde) bir mesaj aldığını doğrula. Bu, otomatik test paketinin kapsayamadığı asıl round-trip senaryosu.
@@ -117,6 +115,26 @@ Bu özellik varsayılan kapalı. Test için `enable_websocket=True` ile botu ba�
 - [ ] Bot ve web'i **iki ayrı süreç** olarak, ikisi de `RedisTransport(redis_url=...)` kullanacak şekilde başlat (facade'i `InProcessTransport` yerine `RedisTransport` ile elle kur — `quickstart()` şu an `InProcessTransport` kullanıyor, bu senaryo composable API gerektirir).
 - [ ] Web sürecinden `PATCH .../commands/{command_name}` çağır → bot sürecinin (ayrı process, ayrı event loop) komutu gerçekten devre dışı bıraktığını Discord'da doğrula.
 - [ ] Web sürecinden `GET /api/guilds/{guild_id}/members` gibi bot-cache'ine giden bir istek at → botun kendi Gateway cache'inden (Redis RPC üzerinden) doğru veriyi döndürdüğünü doğrula.
+
+## 11. Audit Log (opt-in)
+
+Bu özellik varsayılan kapalı. `enable_audit_log=True` ile botu başlat
+(`examples/full_featured_bot`'ta zaten açık).
+
+- [ ] `PATCH /api/guilds/{guild_id}/commands/{command_name}` ile bir override değiştir.
+- [ ] `PUT`/`DELETE /api/guilds/{guild_id}/app-roles/{name}` ile bir AppRole değiştir.
+- [ ] `GET /api/guilds/{guild_id}/audit-log` çağır → her iki aksiyonun da `action` (`command.set_override`, `app_role.set`/`app_role.delete`), `actor_user_id`, `target` ve `created_at` alanlarıyla, en yeni en üstte olacak şekilde listelendiğini doğrula.
+- [ ] `manage_guild` izni olmayan bir kullanıcıyla aynı endpoint'e eriş → 403 aldığını doğrula.
+
+## 12. Cookie-Consent Banner (opt-in)
+
+Bu özellik varsayılan kapalı. `enable_cookie_consent=True` ile botu başlat
+(`examples/full_featured_bot`'ta zaten açık, özel bir mesaj metniyle).
+
+- [ ] `/dashboard`'ı **giriş yapmadan** aç → sayfanın altında cookie-consent banner'ının göründüğünü doğrula.
+- [ ] "Accept" butonuna tıkla → banner'ın kapandığını doğrula. Sayfayı yenile → banner'ın (localStorage sayesinde) tekrar çıkmadığını doğrula.
+- [ ] Tarayıcının localStorage'ını temizle (dev tools → Application → Local Storage), Discord ile giriş yap, `/api/consent`'i çağır (`curl` veya tarayıcı konsolundan `fetch`) → henüz onay verilmediyse `null`, "Accept"e tıklandıktan sonra `consent_version`/`given_at` alanlarıyla dolu bir kayıt döndüğünü doğrula.
+- [ ] `cookie_consent_message`/`cookie_consent_version`'ı değiştirip botu yeniden başlat → banner metninin değiştiğini ve (versiyon değiştiği için) daha önce onaylamış bir kullanıcıya bile banner'ın tekrar gösterildiğini doğrula.
 
 ---
 
