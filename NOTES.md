@@ -211,6 +211,46 @@ env var'ı eklendi — doldurulursa `sync_guild_id`'ye geçiliyor.
 otomatik test paketi hiçbir zaman bunu yakalayamazdı, sadece gerçek bir
 Discord sunucusunda gerçek bir bot çalıştırmak bunu ortaya çıkardı.
 
+## İKİNCİ KRİTİK BUG: cooldown/invocation_count slash-hybrid'de çift işleniyordu
+
+Bölüm 4'te kullanıcı `ping`'e "30 saniyede 1 kullanım" cooldown koyunca
+komut **kalıcı olarak** cevap vermez oldu (2 dakika bekledi, hâlâ hiç
+cevap yok). Kök neden analizi (discord.py kaynak kodu okunarak, tahmin
+değil): `HybridCommand._check_can_run` (discord.py'nin kendi
+`hybrid.py`'si) yorum satırında açıkça şunu söylüyor: "Bot global check
+once / Bot global check" — yani bir hybrid komut **slash** olarak
+çağrıldığında, `CommandTree._call` önce bizim wrap ettiğimiz
+`interaction_check`'i çalıştırıyor, SONRA `HybridCommand.can_run` →
+`_check_can_run` → `bot.can_run(ctx)` ile bizim `global_check`'imizi
+**tekrar** çalıştırıyor — aynı tek çağrı için iki kez.
+
+Sonuç: her gerçek `/ping` çağrısı cooldown bucket'ından 2 token
+tüketiyordu (1 yerine), `invocation_count` 2'şer 2'şer artıyordu
+(kullanıcının PATCH cevabında gördüğü `invocation_count: 6` tam olarak
+3 gerçek çağrı × 2 ile eşleşiyor). "1 kullanımda 30sn" ayarlandığında
+tek bir gerçek çağrı bucket'ı hemen negatife düşürüyor ve her yeni
+deneme de (cooldown'dayken bile) `update_rate_limit()`'i tekrar
+çağırarak `_last`'ı güncelliyor — pencere gerçekten sıfırlanana kadar
+sürekli "hâlâ cooldown'dasın" durumuna dönüyordu, kullanıcı defalarca
+deneyince bu neredeyse hiç bitmeyen bir döngüye benziyordu.
+
+**Fix** (`discord_webapi/commands/registry.py`, `global_check`):
+`ctx.interaction is not None` ise (yani bu zaten `interaction_check`
+tarafından ele alınmış bir slash çağrısıysa) hiçbir şey yapmadan `True`
+dön. Prefix-only çağrılar (`ctx.interaction is None`) hâlâ normal
+şekilde kontrol ediliyor — onlar hiçbir zaman `interaction_check`'e
+uğramıyor.
+
+Yeni regresyon testi: `test_global_check_is_a_noop_for_slash_invoked_hybrid_commands`
+(`tests/unit/test_command_cooldown.py`) — `global_check`'i art arda iki
+kez çağırıp (discord.py'nin gerçekten yaptığı gibi) cooldown'un
+tetiklenmediğini ve sayacın artmadığını doğruluyor. 172 test yeşil,
+ruff+mypy temiz.
+
+**Bu, kullanıcının ısrarla fiziksel test yapmasının değerini bir kez
+daha kanıtlıyor** — hem sync bug'ı hem bu ikisi de hiçbir otomatik testte
+yakalanamazdı, ikisi de gerçek Discord etkileşimi gerektiriyordu.
+
 ## Sıradaki iş akışı: bölüm bölüm kurulum + test (kullanıcının istediği format)
 
 Kullanıcı şunu istedi: önce temiz bir kurulum + test planını **bölümlere

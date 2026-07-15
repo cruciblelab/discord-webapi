@@ -128,6 +128,19 @@ class CommandRegistry:
         self.bot.tree.interaction_check = _interaction_check  # type: ignore[method-assign]
 
     async def global_check(self, ctx: commands.Context[Any]) -> bool:
+        if ctx.interaction is not None:
+            # A HybridCommand invoked via slash already went through
+            # `_wrap_interaction_check` (see `tree.interaction_check`,
+            # called first by discord.py's `CommandTree._call`).
+            # `HybridCommand.can_run` -> `_check_can_run` *also* runs
+            # `bot.can_run(ctx)` (this global check) a second time for the
+            # very same invocation -- without this early return, that
+            # would double-consume the cooldown token and double-count
+            # `invocation_count` for every single slash-invoked hybrid
+            # command call. Prefix invocations (`ctx.interaction is None`)
+            # never touch `interaction_check` at all, so they still need
+            # this check to run for real.
+            return True
         if ctx.guild is None or ctx.command is None:
             return True
         guild_id, name = ctx.guild.id, ctx.command.qualified_name

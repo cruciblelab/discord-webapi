@@ -23,7 +23,7 @@ COMMAND_NAME = "kick"
 
 
 def _fake_context(user_id: int) -> SimpleNamespace:
-    return SimpleNamespace(author=SimpleNamespace(id=user_id))
+    return SimpleNamespace(author=SimpleNamespace(id=user_id), interaction=None)
 
 
 def _fake_interaction(user_id: int) -> SimpleNamespace:
@@ -113,6 +113,7 @@ async def test_global_check_raises_command_on_cooldown() -> None:
         guild=SimpleNamespace(id=GUILD_ID),
         command=SimpleNamespace(qualified_name=COMMAND_NAME),
         author=SimpleNamespace(id=42),
+        interaction=None,
     )
 
     assert await registry.global_check(ctx) is True  # first use consumes the token
@@ -132,6 +133,7 @@ async def test_disabled_command_short_circuits_before_cooldown_check() -> None:
         guild=SimpleNamespace(id=GUILD_ID),
         command=SimpleNamespace(qualified_name=COMMAND_NAME),
         author=SimpleNamespace(id=42),
+        interaction=None,
     )
 
     assert await registry.global_check(ctx) is False
@@ -160,6 +162,7 @@ async def test_successful_invocation_increments_counter() -> None:
         guild=SimpleNamespace(id=GUILD_ID),
         command=SimpleNamespace(qualified_name=COMMAND_NAME),
         author=SimpleNamespace(id=42),
+        interaction=None,
     )
 
     await registry.global_check(ctx)
@@ -167,6 +170,37 @@ async def test_successful_invocation_increments_counter() -> None:
 
     status = registry._status_for(GUILD_ID, COMMAND_NAME)
     assert status.invocation_count == 2
+
+
+async def test_global_check_is_a_noop_for_slash_invoked_hybrid_commands() -> None:
+    """Regression test for a real bug found via physical testing: discord.py
+    invokes *both* our wrapped `tree.interaction_check` *and* `global_check`
+    (via `HybridCommand._check_can_run` -> `bot.can_run(ctx)`) for a single
+    hybrid command invoked as a slash command -- `ctx.interaction` is set
+    in that case. Without this early return, cooldown tokens and
+    `invocation_count` would both be consumed/incremented twice per real
+    invocation (exactly what happened: enabling a 1-use cooldown made the
+    command appear permanently stuck, and invocation_count counted 2 per
+    `/ping`)."""
+    registry = await _build_registry()
+    _set_cooldown(registry, uses=1, seconds=60)
+    ctx = SimpleNamespace(
+        guild=SimpleNamespace(id=GUILD_ID),
+        command=SimpleNamespace(qualified_name=COMMAND_NAME),
+        author=SimpleNamespace(id=42),
+        interaction=SimpleNamespace(user=SimpleNamespace(id=42)),
+    )
+
+    # Called twice, as discord.py really does for one slash invocation of
+    # a hybrid command -- must not raise CommandOnCooldown and must not
+    # double-count.
+    assert await registry.global_check(ctx) is True
+    assert await registry.global_check(ctx) is True
+
+    status = registry._status_for(GUILD_ID, COMMAND_NAME)
+    assert status.invocation_count == 0  # global_check never counts here
+    # The cooldown bucket itself was never touched by global_check either.
+    assert registry._check_cooldown(GUILD_ID, COMMAND_NAME, ctx.interaction) is None
 
 
 async def test_disabled_command_does_not_increment_counter() -> None:
@@ -181,6 +215,7 @@ async def test_disabled_command_does_not_increment_counter() -> None:
         guild=SimpleNamespace(id=GUILD_ID),
         command=SimpleNamespace(qualified_name=COMMAND_NAME),
         author=SimpleNamespace(id=42),
+        interaction=None,
     )
 
     await registry.global_check(ctx)
