@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from discord.ext import commands
 from fastapi import FastAPI
 
+from discord_webapi.audit import AuditLogger, build_audit_log_router
 from discord_webapi.auth import DiscordAuth, DiscordUser, get_current_user
 from discord_webapi.authz import (
     AppRole,
@@ -29,30 +30,45 @@ from discord_webapi.commands import (
     CommandStatus,
     build_commands_router,
 )
+from discord_webapi.consent import ConsentRecord, build_consent_router
 from discord_webapi.members import MemberInfo, build_members_router, install_member_listing
 from discord_webapi.storage import (
+    AuditStore,
     AuthzStore,
     CommandConfigStore,
+    ConsentStore,
+    MemoryAuditStore,
     MemoryAuthzStore,
     MemoryCommandConfigStore,
+    MemoryConsentStore,
 )
 from discord_webapi.transport import Event, InProcessTransport, Transport
 from discord_webapi.web import build_commands_websocket_router, build_default_dashboard_router
 
 if TYPE_CHECKING:
-    from discord_webapi.storage.sql import SQLAuthzStore, SQLCommandConfigStore, SQLSessionStore
+    from discord_webapi.storage.sql import (
+        SQLAuditStore,
+        SQLAuthzStore,
+        SQLCommandConfigStore,
+        SQLConsentStore,
+        SQLSessionStore,
+    )
     from discord_webapi.transport.redis import RedisTransport
 
 __all__ = [
     "AppRole",
     "AppRoleCache",
     "AppRolePatch",
+    "AuditLogger",
+    "AuditStore",
     "AuthzStore",
     "CommandConfigStore",
     "CommandOverride",
     "CommandRegistry",
     "CommandSpec",
     "CommandStatus",
+    "ConsentRecord",
+    "ConsentStore",
     "DiscordAuth",
     "DiscordUser",
     "DiscordWebAPI",
@@ -61,15 +77,21 @@ __all__ = [
     "GuildMemberCache",
     "InProcessTransport",
     "MemberInfo",
+    "MemoryAuditStore",
     "MemoryAuthzStore",
     "MemoryCommandConfigStore",
+    "MemoryConsentStore",
     "RedisTransport",
+    "SQLAuditStore",
     "SQLAuthzStore",
     "SQLCommandConfigStore",
+    "SQLConsentStore",
     "SQLSessionStore",
     "Transport",
     "build_app_roles_router",
+    "build_audit_log_router",
     "build_commands_router",
+    "build_consent_router",
     "build_members_router",
     "get_current_user",
     "require_app_role",
@@ -83,7 +105,13 @@ def __getattr__(name: str) -> object:
         from discord_webapi.transport.redis import RedisTransport
 
         return RedisTransport
-    if name in ("SQLSessionStore", "SQLCommandConfigStore", "SQLAuthzStore"):
+    if name in (
+        "SQLSessionStore",
+        "SQLCommandConfigStore",
+        "SQLAuthzStore",
+        "SQLAuditStore",
+        "SQLConsentStore",
+    ):
         from discord_webapi.storage import sql
 
         return getattr(sql, name)
@@ -122,6 +150,8 @@ class DiscordWebAPI:
         auth: DiscordAuth,
         command_store: CommandConfigStore | None = None,
         authz_store: AuthzStore | None = None,
+        audit_store: AuditStore | None = None,
+        consent_store: ConsentStore | None = None,
         member_cache_ttl_seconds: float = 45.0,
     ) -> None:
         self.bot = bot
@@ -129,6 +159,8 @@ class DiscordWebAPI:
         self.auth = auth
         self.command_store = command_store or MemoryCommandConfigStore()
         self.authz_store = authz_store or MemoryAuthzStore()
+        self.audit_store = audit_store or MemoryAuditStore()
+        self.consent_store = consent_store or MemoryConsentStore()
         self.registry = CommandRegistry(bot, transport=transport, store=self.command_store)
         self.member_cache = GuildMemberCache(transport, ttl_seconds=member_cache_ttl_seconds)
         self.app_role_cache = AppRoleCache(self.authz_store)
@@ -141,7 +173,13 @@ class DiscordWebAPI:
         await self.registry.register_all()
 
     def install(
-        self, app: FastAPI, *, serve_dashboard: bool = True, enable_websocket: bool = False
+        self,
+        app: FastAPI,
+        *,
+        serve_dashboard: bool = True,
+        enable_websocket: bool = False,
+        enable_audit_log: bool = False,
+        enable_cookie_consent: bool = False,
     ) -> None:
         self.auth.install(app)
         app.state.discord_webapi_member_cache = self.member_cache
@@ -155,6 +193,13 @@ class DiscordWebAPI:
             app.include_router(build_default_dashboard_router())
         if enable_websocket:
             app.include_router(build_commands_websocket_router(self.transport))
+        if enable_audit_log:
+            app.state.discord_webapi_audit_store = self.audit_store
+            app.state.discord_webapi_audit_logger = AuditLogger(self.audit_store)
+            app.include_router(build_audit_log_router())
+        if enable_cookie_consent:
+            app.state.discord_webapi_consent_store = self.consent_store
+            app.include_router(build_consent_router())
 
     def lifespan(self, token: str) -> AbstractAsyncContextManager[None]:
         return single_process_lifespan(self.bot, self.transport, token)
@@ -175,6 +220,8 @@ class DiscordWebAPI:
         title: str = "discord-webapi",
         serve_dashboard: bool = True,
         enable_websocket: bool = False,
+        enable_audit_log: bool = False,
+        enable_cookie_consent: bool = False,
     ) -> FastAPI:
         """One-call setup for the single-process case: reads
         `DISCORD_BOT_TOKEN`/`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`/
@@ -201,8 +248,10 @@ class DiscordWebAPI:
         from sqlalchemy.ext.asyncio import create_async_engine
 
         from discord_webapi.storage.sql import (
+            SQLAuditStore,
             SQLAuthzStore,
             SQLCommandConfigStore,
+            SQLConsentStore,
             SQLSessionStore,
         )
         from discord_webapi.storage.sql import (
@@ -237,6 +286,8 @@ class DiscordWebAPI:
             auth=auth,
             command_store=SQLCommandConfigStore(engine),
             authz_store=SQLAuthzStore(engine),
+            audit_store=SQLAuditStore(engine),
+            consent_store=SQLConsentStore(engine),
         )
 
         @asynccontextmanager
@@ -246,5 +297,11 @@ class DiscordWebAPI:
                 yield
 
         app = FastAPI(title=title, lifespan=lifespan)
-        api.install(app, serve_dashboard=serve_dashboard, enable_websocket=enable_websocket)
+        api.install(
+            app,
+            serve_dashboard=serve_dashboard,
+            enable_websocket=enable_websocket,
+            enable_audit_log=enable_audit_log,
+            enable_cookie_consent=enable_cookie_consent,
+        )
         return app

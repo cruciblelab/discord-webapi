@@ -6,8 +6,10 @@ from typing import TYPE_CHECKING, Protocol
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
+    from discord_webapi.audit.models import AuditLogEntry
     from discord_webapi.authz.models import AppRole
     from discord_webapi.commands.models import CommandOverride
+    from discord_webapi.consent.models import ConsentRecord
 
 
 class Session(BaseModel):
@@ -77,3 +79,21 @@ class AuthzStore(Protocol):
     async def set_app_role(self, role: AppRole) -> None: ...
 
     async def delete_app_role(self, guild_id: int, name: str) -> None: ...
+
+
+class AuditStore(Protocol):
+    """Storage for the (opt-in) audit trail of state-changing dashboard
+    actions. Nothing writes here unless `enable_audit_log=True`."""
+
+    async def record(self, entry: AuditLogEntry) -> None: ...
+
+    async def list_entries(self, guild_id: int, *, limit: int = 100) -> list[AuditLogEntry]: ...
+
+
+class ConsentStore(Protocol):
+    """Storage for the (opt-in) cookie/privacy consent record. Nothing
+    writes here unless `enable_cookie_consent=True`."""
+
+    async def get(self, user_id: int) -> ConsentRecord | None: ...
+
+    async def set(self, record: ConsentRecord) -> None: ...

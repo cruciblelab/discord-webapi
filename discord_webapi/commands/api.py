@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
+from discord_webapi.audit.logger import AuditLogger
 from discord_webapi.authz.dependencies import GuildContext, require_guild_permission
 from discord_webapi.commands.models import CommandOverridePatch, CommandStatus
 from discord_webapi.commands.ratelimit import TokenBucketLimiter, rate_limit_dependency
@@ -13,6 +14,11 @@ _DEFAULT_PATCH_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
 def _get_registry(request: Request) -> CommandRegistry:
     registry: CommandRegistry = request.app.state.discord_webapi_commands
     return registry
+
+
+def _get_audit_logger(request: Request) -> AuditLogger | None:
+    # Only present when enable_audit_log=True -- see DiscordWebAPI.install.
+    return getattr(request.app.state, "discord_webapi_audit_logger", None)
 
 
 def build_commands_router(*, patch_rate_limiter: TokenBucketLimiter | None = None) -> APIRouter:
@@ -45,7 +51,7 @@ def build_commands_router(*, patch_rate_limiter: TokenBucketLimiter | None = Non
     ) -> CommandStatus:
         registry = _get_registry(request)
         try:
-            return await registry.set_override(
+            status_result = await registry.set_override(
                 guild_id,
                 command_name,
                 enabled=body.enabled,
@@ -55,5 +61,16 @@ def build_commands_router(*, patch_rate_limiter: TokenBucketLimiter | None = Non
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+
+        audit = _get_audit_logger(request)
+        if audit is not None:
+            await audit.record(
+                guild_id=guild_id,
+                actor_user_id=ctx.user.id,
+                action="command.set_override",
+                target=command_name,
+                detail=body.model_dump(),
+            )
+        return status_result
 
     return router

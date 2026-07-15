@@ -2,15 +2,17 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
-## [Unreleased] — v0.3 (planlama aşamasında)
+## [0.3.0] — Audit log, cookie consent, builtins
 
-Henüz kod yazılmadı. Ayrıntılı plan ve açık sorular için `NOTES.md`'ye bakın.
+### Eklenenler
 
-### Planlanan
+- **Audit log** (opt-in, `enable_audit_log=False` varsayılan): `AuditStore` (Memory/SQL), `AuditLogger`, `GET /api/guilds/{id}/audit-log`. Şu an komut override yazmalarını ve AppRole set/delete'lerini kaydediyor; auth login/logout olayları kapsam dışı.
+- **Cookie/gizlilik consent kaydı** (opt-in, `enable_cookie_consent=False` varsayılan): `ConsentStore` (Memory/SQL), `GET/POST /api/consent`. Notice'ın metni/UI'ı tamamen tüketiciye ait — kütüphane sadece "kim, hangi versiyonu, ne zaman onayladı" kaydını tutar, yasal zorunluluk dışında hiçbir davranış dayatmaz.
+- **`discord_webapi.builtins`**: hazır, tam-özellikli, serbestçe import edilebilir komutlar için yeni bir alt paket. İlk örnek: `builtins.ban` — rol-hiyerarşisi kontrolü, opsiyonel ban-öncesi DM, configlenebilir mesaj-silme penceresi, `require_reason` aç/kapa. Her builtin kendi dosyasında, `setup(bot, **kwargs)` ile açıkça çağrılır — otomatik yükleme yok, hiçbir zorunlu şablon dayatılmaz.
 
-- Cookie/gizlilik bildirimi desteği (yasal uyumluluk amaçlı, config ile aç/kapa, düzenlenebilir metin, consent kaydı için DB alanı/store).
-- Audit log (dashboard üzerinden yapılan state-changing aksiyonların kim/ne zaman/ne yaptı kaydı), config ile aç/kapa.
-- Genişletilebilir builtin komut/event-listener sistemi: ayrı bir alt klasörde, her biri kendi dosyasında, kullanıcının serbestçe import edip kullanabileceği/değiştirebileceği hazır komutlar ve Gateway event handler'ları. Sınırlama yok — builtin'ler birer varsayılan öneri, zorunlu şablon değil.
+### Kapsam dışı bırakılan (bilinçli karar)
+
+- Üçüncü-taraf paket/manifest formatı (JSON manifest, versiyonlama, installer/"VM" benzeri bir çalıştırma sistemi) bu sürüme dahil edilmedi — ayrı, çok daha büyük bir tasarım gerektiriyor. Bkz. `discord_webapi/builtins/README.md`.
 
 ## [0.2.0] — WebSocket relay, invocation counter, AppRole, cooldown, çoklu DB
 

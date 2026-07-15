@@ -6,8 +6,10 @@ from typing import TYPE_CHECKING
 from discord_webapi.storage.base import Session
 
 if TYPE_CHECKING:
+    from discord_webapi.audit.models import AuditLogEntry
     from discord_webapi.authz.models import AppRole
     from discord_webapi.commands.models import CommandOverride
+    from discord_webapi.consent.models import ConsentRecord
 
 
 class MemorySessionStore:
@@ -66,3 +68,31 @@ class MemoryAuthzStore:
 
     async def delete_app_role(self, guild_id: int, name: str) -> None:
         self._roles.pop((guild_id, name), None)
+
+
+class MemoryAuditStore:
+    """List-backed AuditStore. Zero infrastructure — the default for dev/tests."""
+
+    def __init__(self) -> None:
+        self._entries: list[AuditLogEntry] = []
+
+    async def record(self, entry: AuditLogEntry) -> None:
+        self._entries.append(copy.deepcopy(entry))
+
+    async def list_entries(self, guild_id: int, *, limit: int = 100) -> list[AuditLogEntry]:
+        matching = [copy.deepcopy(e) for e in self._entries if e.guild_id == guild_id]
+        return sorted(matching, key=lambda e: e.created_at, reverse=True)[:limit]
+
+
+class MemoryConsentStore:
+    """Dict-backed ConsentStore. Zero infrastructure — the default for dev/tests."""
+
+    def __init__(self) -> None:
+        self._records: dict[int, ConsentRecord] = {}
+
+    async def get(self, user_id: int) -> ConsentRecord | None:
+        record = self._records.get(user_id)
+        return copy.deepcopy(record) if record is not None else None
+
+    async def set(self, record: ConsentRecord) -> None:
+        self._records[record.user_id] = copy.deepcopy(record)

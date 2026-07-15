@@ -8,13 +8,25 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, LargeBinary, String, select
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    Integer,
+    LargeBinary,
+    String,
+    select,
+)
 from sqlalchemy.dialects import mysql
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from discord_webapi.audit.models import AuditLogEntry
 from discord_webapi.authz.models import AppRole
 from discord_webapi.commands.models import CommandOverride
+from discord_webapi.consent.models import ConsentRecord
 from discord_webapi.storage.base import Session
 
 # MySQL/MariaDB's DATETIME defaults to 0 fractional-second precision --
@@ -65,6 +77,26 @@ class AppRoleRow(Base):
     name: Mapped[str] = mapped_column(String(128), primary_key=True)
     discord_role_ids: Mapped[list[int]] = mapped_column(JSON)
     user_ids: Mapped[list[int]] = mapped_column(JSON)
+
+
+class AuditLogRow(Base):
+    __tablename__ = "dwa_audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    actor_user_id: Mapped[int] = mapped_column(BigInteger)
+    action: Mapped[str] = mapped_column(String(128))
+    target: Mapped[str] = mapped_column(String(256))
+    detail: Mapped[dict[str, object]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
+
+
+class ConsentRecordRow(Base):
+    __tablename__ = "dwa_consent_records"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    consent_version: Mapped[str] = mapped_column(String(64))
+    given_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
 
 
 async def create_all(engine: AsyncEngine) -> None:
@@ -119,6 +151,25 @@ def _row_to_override(row: CommandOverrideRow) -> CommandOverride:
         required_app_role=row.required_app_role,
         updated_at=_as_utc(row.updated_at),
         updated_by_user_id=row.updated_by_user_id,
+    )
+
+
+def _row_to_audit_entry(row: AuditLogRow) -> AuditLogEntry:
+    return AuditLogEntry(
+        guild_id=row.guild_id,
+        actor_user_id=row.actor_user_id,
+        action=row.action,
+        target=row.target,
+        detail=row.detail,
+        created_at=_as_utc(row.created_at),
+    )
+
+
+def _row_to_consent_record(row: ConsentRecordRow) -> ConsentRecord:
+    return ConsentRecord(
+        user_id=row.user_id,
+        consent_version=row.consent_version,
+        given_at=_as_utc(row.given_at),
     )
 
 
@@ -255,3 +306,66 @@ class SQLAuthzStore:
             if row is not None:
                 await db.delete(row)
                 await db.commit()
+
+
+class SQLAuditStore:
+    """AuditStore backed by SQLAlchemy 2.0 async. Call `create_all()` once
+    at startup to create its table (or manage it via Alembic)."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+        self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_all(self) -> None:
+        await create_all(self._engine)
+
+    async def record(self, entry: AuditLogEntry) -> None:
+        async with self._sessionmaker() as db:
+            db.add(
+                AuditLogRow(
+                    guild_id=entry.guild_id,
+                    actor_user_id=entry.actor_user_id,
+                    action=entry.action,
+                    target=entry.target,
+                    detail=entry.detail,
+                    created_at=entry.created_at,
+                )
+            )
+            await db.commit()
+
+    async def list_entries(self, guild_id: int, *, limit: int = 100) -> list[AuditLogEntry]:
+        async with self._sessionmaker() as db:
+            result = await db.execute(
+                select(AuditLogRow)
+                .where(AuditLogRow.guild_id == guild_id)
+                .order_by(AuditLogRow.created_at.desc())
+                .limit(limit)
+            )
+            return [_row_to_audit_entry(row) for row in result.scalars()]
+
+
+class SQLConsentStore:
+    """ConsentStore backed by SQLAlchemy 2.0 async. Call `create_all()`
+    once at startup to create its table (or manage it via Alembic)."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+        self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_all(self) -> None:
+        await create_all(self._engine)
+
+    async def get(self, user_id: int) -> ConsentRecord | None:
+        async with self._sessionmaker() as db:
+            row = await db.get(ConsentRecordRow, user_id)
+            return _row_to_consent_record(row) if row is not None else None
+
+    async def set(self, record: ConsentRecord) -> None:
+        async with self._sessionmaker() as db:
+            row = await db.get(ConsentRecordRow, record.user_id)
+            if row is None:
+                row = ConsentRecordRow(user_id=record.user_id)
+                db.add(row)
+            row.consent_version = record.consent_version
+            row.given_at = record.given_at
+            await db.commit()
