@@ -251,17 +251,70 @@ ruff+mypy temiz.
 daha kanıtlıyor** — hem sync bug'ı hem bu ikisi de hiçbir otomatik testte
 yakalanamazdı, ikisi de gerçek Discord etkileşimi gerektiriyordu.
 
-## Sıradaki iş akışı: bölüm bölüm kurulum + test (kullanıcının istediği format)
+## Bölüm bölüm fiziksel test — durum (duraklatıldı, Bölüm 6'dan devam edilecek)
 
-Kullanıcı şunu istedi: önce temiz bir kurulum + test planını **bölümlere
-ayır**, ilk bölümü ver, kullanıcı fiziksel olarak test edip rapor versin,
-ben kontrol edip gerekirse düzeltmeleri yapayım, sonra 2. bölümü vereyim
-— böyle devam etsin. Bu, `TESTING.md`'nin mevcut 13 bölümünü (0'dan 13'e)
-kullanıcıya tek seferde değil, birkaçar bölümlük gruplar halinde sırayla
-sunmak anlamına geliyor. **Bir sonraki oturumda kaldığı yerden devam et**:
-hangi bölüme kadar geldiğini, kullanıcının hangi rapor(lar)ı verdiğini ve
-hangi düzeltmelerin yapıldığını burada takip et (bu oturumda ilk bölüm
-henüz kullanıcıya verilmedi — bir sonraki mesajda verilecek).
+Kullanıcı `TESTING.md`'yi bölüm bölüm test etti (ben bölümü veriyorum,
+o fiziksel olarak deniyor, rapor veriyor, ben kontrol edip düzeltiyorum,
+sonra sıradaki bölümü veriyorum). **Şu ana kadar tamamlanan**:
+- Bölüm 1 (kurulum): birkaç Termux'a özel sorun çıktı ve çözüldü (bkz.
+  yukarıdaki "Termux fiziksel test sürecinde çıkan..." notu) — özetle:
+  paylaşılan depolamada çalışmak (symlink desteklemiyor), venv
+  aktivasyonunu unutmak, `--system-site-packages` sonrası `uvicorn`
+  komutunun sistem kopyasını bulması (çözüm: `python -m uvicorn`).
+- Bölüm 2 (auth: tarayıcı + mobil): sorunsuz geçti.
+- Bölüm 3 (komut listeleme + enable/disable): **kritik bug bulundu**
+  (slash komutlar hiç sync edilmiyordu + `message_content` intent eksikti)
+  — ikisi de düzeltildi, sonra bölüm baştan tekrar denendi, sorunsuz geçti.
+- Bölüm 4 (cooldown): **ikinci kritik bug bulundu** (hybrid komutlar slash
+  olarak çağrılınca cooldown/invocation_count çift işleniyordu) —
+  düzeltildi, tekrar denendi, sorunsuz geçti.
+- Bölüm 5 (AppRole): sorunsuz geçti.
+- **Bölüm 6'dan (guild-rol tabanlı yetkilendirme) itibaren henüz test
+  edilmedi** — kullanıcı test sürecini duraklatıp mimari/felsefe
+  konusunda bir endişesini konuştu (aşağıya bakın), sonra roadmap'ten
+  devam etmeyi seçti. **Bir sonraki oturumda ya Bölüm 6'dan teste devam
+  et, ya da kullanıcı başka bir şey isterse ona göre yönlen.**
+
+## Kullanıcının mimari/felsefe endişesi (çözüldü, kod değişikliği gerekmedi)
+
+Kullanıcı test sırasında "biz FastAPI gibi özgür değil de şablon/template
+sistemi mi olduk" endişesi dile getirdi. Kök neden: bundled dashboard'da
+komut enable/disable, cooldown ayarlama gibi işlemler için **hiç UI
+yok** — bu yüzden test ederken curl/terminal kullanmak zorunda kalması
+"böyle yapmalısınız" gibi hissettirmiş. Açıklandı ve kullanıcı kabul
+etti: kütüphanenin kendisi (Protocol'ler, composable API, builtins'in
+opt-in oluşu) gerçekten istenen özgür/FastAPI-gibi felsefede; sorun
+sadece test aracının (bundled dashboard) bu spesifik işlemler için UI
+sunmaması. **Kod değişikliği yapılmadı** — kullanıcı "şuan gerek yok"
+dedi, ama gelecekte bundled dashboard'a enable/disable + cooldown UI'ı
+eklemek roadmap'e not edildi (yukarıdaki v0.4+ aday listesine bakın).
+
+## disnake/py-cord desteği: araştırıldı, kullanıcı kararıyla süresiz ertelendi
+
+py-cord ayrı bir venv'de kurulup gerçek test paketimiz (172 test) onun
+üstünde çalıştırıldı — **21 dosya import hatasıyla patladı**: py-cord'un
+slash-komut mimarisi (`SlashCommand`/`ApplicationCommandMixin`,
+`discord.app_commands`/`CommandTree` yok) discord.py'den kökten farklı.
+"Aynı `discord` isim alanını kullanıyor, drop-in'dir" varsayımı somut
+veriyle çürütüldü. Destek eklemek `commands/bridge.py` +
+`commands/registry.py`'yi (kütüphanenin en kırılgan katmanı, az önce
+tam da burada iki gerçek bug bulduk) iki ayrı mimariye göre yazmak
+demek. **Kullanıcı kararı**: "discord.py'ye odaklanalım, py-cord/disnake
+talebi çok daha küçük bir topluluk, ileride gerçek talep olursa
+`discord-webapi-pycord` gibi ayrı bir paket çıkarılabilir, şimdi hiç
+düşünmeyelim." Plan dosyasına da işlendi — bu madde artık v0.4+ aday
+listesinde değil, kapalı bir karar olarak duruyor.
+
+## Sıradaki adaylar (kullanıcı "roadmap'ten devam edelim" dedi, henüz seçim yapılmadı)
+
+1. Bölüm 6+ fiziksel teste devam (yukarıya bakın).
+2. Daha fazla builtin (`on_message` otomatik moderasyon, rol-atama komutu).
+3. Multi-bot/shard routing tasarımına başlamak (büyük, ayrı bir tasarım
+   turu gerektiriyor — üçüncü-taraf paket sistemiyle aynı kategori).
+4. Bundled dashboard'a enable/disable + cooldown UI'ı eklemek.
+Bir sonraki oturumda kullanıcıya hangisini istediğini sor (daha önce
+`AskUserQuestion` ile sorulmuştu, disnake/py-cord seçilmiş ve şimdi
+kapandı — geri kalan üç madde hâlâ açık).
 
 ## Genel süreç hatırlatmaları (tekrar unutulmasın diye)
 
