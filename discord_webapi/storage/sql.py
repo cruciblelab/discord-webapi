@@ -6,7 +6,9 @@ e.g. `aiosqlite` for SQLite or `asyncpg` for Postgres).
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from typing import TypeVar
 
 from sqlalchemy import (
     JSON,
@@ -20,7 +22,8 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.dialects import mysql
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from discord_webapi.audit.models import AuditLogEntry
@@ -173,6 +176,38 @@ def _row_to_consent_record(row: ConsentRecordRow) -> ConsentRecord:
     )
 
 
+_Row = TypeVar("_Row")
+
+
+async def _commit_upsert(
+    db: AsyncSession,
+    *,
+    is_new: bool,
+    get_existing: Callable[[], Awaitable[_Row | None]],
+    apply_fields: Callable[[_Row], None],
+) -> None:
+    """Commits a get-or-create write, tolerating a concurrent insert of the
+    same row (two requests racing to set the same guild/command,
+    guild/app-role, or user's consent record for the first time). Without
+    this, the loser's commit raises an unhandled IntegrityError -- a 500
+    for what should just be "apply my update after theirs". Only relevant
+    for genuinely new rows: updates to an existing row have no such race
+    since the row (and its lock, under the DB's own concurrency control)
+    already exists.
+    """
+    if not is_new:
+        await db.commit()
+        return
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await get_existing()
+        assert existing is not None, "IntegrityError implies the row now exists"
+        apply_fields(existing)
+        await db.commit()
+
+
 class SQLSessionStore:
     """SessionStore backed by SQLAlchemy 2.0 async. Call `create_all()`
     once at startup to create its table (or manage it via Alembic)."""
@@ -258,20 +293,30 @@ class SQLCommandConfigStore:
             return [_row_to_override(row) for row in result.scalars()]
 
     async def set_override(self, override: CommandOverride) -> None:
-        async with self._sessionmaker() as db:
-            row = await db.get(CommandOverrideRow, (override.guild_id, override.command_name))
-            if row is None:
-                row = CommandOverrideRow(
-                    guild_id=override.guild_id, command_name=override.command_name
-                )
-                db.add(row)
+        def _apply(row: CommandOverrideRow) -> None:
             row.enabled = override.enabled
             row.cooldown_seconds = override.cooldown_seconds
             row.cooldown_uses = override.cooldown_uses
             row.required_app_role = override.required_app_role
             row.updated_at = override.updated_at
             row.updated_by_user_id = override.updated_by_user_id
-            await db.commit()
+
+        key = (override.guild_id, override.command_name)
+        async with self._sessionmaker() as db:
+            row = await db.get(CommandOverrideRow, key)
+            is_new = row is None
+            if row is None:
+                row = CommandOverrideRow(
+                    guild_id=override.guild_id, command_name=override.command_name
+                )
+                db.add(row)
+            _apply(row)
+            await _commit_upsert(
+                db,
+                is_new=is_new,
+                get_existing=lambda: db.get(CommandOverrideRow, key),
+                apply_fields=_apply,
+            )
 
 
 class SQLAuthzStore:
@@ -291,14 +336,21 @@ class SQLAuthzStore:
             return [_row_to_app_role(row) for row in result.scalars()]
 
     async def set_app_role(self, role: AppRole) -> None:
+        def _apply(row: AppRoleRow) -> None:
+            row.discord_role_ids = role.discord_role_ids
+            row.user_ids = role.user_ids
+
+        key = (role.guild_id, role.name)
         async with self._sessionmaker() as db:
-            row = await db.get(AppRoleRow, (role.guild_id, role.name))
+            row = await db.get(AppRoleRow, key)
+            is_new = row is None
             if row is None:
                 row = AppRoleRow(guild_id=role.guild_id, name=role.name)
                 db.add(row)
-            row.discord_role_ids = role.discord_role_ids
-            row.user_ids = role.user_ids
-            await db.commit()
+            _apply(row)
+            await _commit_upsert(
+                db, is_new=is_new, get_existing=lambda: db.get(AppRoleRow, key), apply_fields=_apply
+            )
 
     async def delete_app_role(self, guild_id: int, name: str) -> None:
         async with self._sessionmaker() as db:
@@ -361,11 +413,20 @@ class SQLConsentStore:
             return _row_to_consent_record(row) if row is not None else None
 
     async def set(self, record: ConsentRecord) -> None:
+        def _apply(row: ConsentRecordRow) -> None:
+            row.consent_version = record.consent_version
+            row.given_at = record.given_at
+
         async with self._sessionmaker() as db:
             row = await db.get(ConsentRecordRow, record.user_id)
+            is_new = row is None
             if row is None:
                 row = ConsentRecordRow(user_id=record.user_id)
                 db.add(row)
-            row.consent_version = record.consent_version
-            row.given_at = record.given_at
-            await db.commit()
+            _apply(row)
+            await _commit_upsert(
+                db,
+                is_new=is_new,
+                get_existing=lambda: db.get(ConsentRecordRow, record.user_id),
+                apply_fields=_apply,
+            )

@@ -119,3 +119,52 @@ async def test_authz_store_round_trip_across_backends(engine: AsyncEngine) -> No
     assert len(roles) == 1
     assert roles[0].discord_role_ids == [10, 20]
     assert roles[0].user_ids == [42]
+
+
+@pytest_asyncio.fixture
+async def postgres_engine() -> AsyncEngine:
+    # Concurrency (racing writes to the same not-yet-existing row) needs a
+    # backend with genuine per-connection isolation -- SQLite's StaticPool
+    # setup above shares one physical connection across "concurrent"
+    # sessions, which doesn't reproduce the race at all, only Postgres/
+    # MySQL do here.
+    eng = create_async_engine(POSTGRES_URL)
+    try:
+        async with eng.begin():
+            pass
+    except (SQLAlchemyError, OSError):
+        await eng.dispose()
+        pytest.skip("No postgres reachable for concurrency test (set DWA_TEST_POSTGRES_URL)")
+    try:
+        yield eng
+    finally:
+        async with eng.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+        await eng.dispose()
+
+
+async def test_command_config_store_concurrent_first_writes_dont_raise(
+    postgres_engine: AsyncEngine,
+) -> None:
+    """Regression test: two requests racing to set the *first* override for
+    the same (guild_id, command_name) both see no existing row and both try
+    to INSERT -- without the upsert-retry in `_commit_upsert`, the loser
+    raises an unhandled IntegrityError (a 500) instead of just applying its
+    update after the winner's."""
+    import asyncio
+
+    await create_all(postgres_engine)
+    store = SQLCommandConfigStore(postgres_engine)
+
+    first = CommandOverride(
+        guild_id=1, command_name="race", enabled=True, updated_at=datetime.now(UTC)
+    )
+    second = CommandOverride(
+        guild_id=1, command_name="race", enabled=False, updated_at=datetime.now(UTC)
+    )
+
+    await asyncio.gather(store.set_override(first), store.set_override(second))
+
+    fetched = await store.get_override(1, "race")
+    assert fetched is not None
+    assert fetched.enabled in (True, False)  # one of the two writes won, neither raised

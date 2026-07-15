@@ -340,11 +340,24 @@ dosya dosya bir inceleme yaptım — **iki gerçek, ciddi bug** bulundu:
 çalışan entegrasyon testleri artık local Redis çalıştığı için skip
 olmuyor), ruff+mypy temiz.
 
-**Henüz incelenmedi (bir sonraki oturumda devam edilebilir)**: `storage/
-sql.py`'nin bağlantı/hata dayanıklılığı, `commands/bridge.py`'nin daha
-derin introspection edge case'leri, genel bir güvenlik denetimi (kullanıcı
-sıradaki adım olarak bunu da istemişti — "önce genel inceleme, sonra
-core'u büyütelim" dedi, güvenlik denetimi hâlâ yapılmadı).
+3. **`discord_webapi/storage/sql.py`**: `set_override`/`set_app_role`/
+   consent'in `set()`'i "oku, yoksa oluştur" deseninde — aynı satırı ilk
+   kez yazmaya çalışan iki eşzamanlı istek, ikisi de "yok" görüp ikisi de
+   INSERT deniyordu, kaybeden yakalanmamış bir `IntegrityError` (500)
+   alıyordu. Fix: paylaşılan `_commit_upsert()` yardımcı fonksiyonu —
+   `IntegrityError` yakalanırsa rollback edip satırı tekrar okuyup update
+   olarak uyguluyor. Regresyon testi gerçek Postgres'e karşı yazıldı
+   (`tests/unit/test_sql_storage_multidb.py`) — SQLite'ta StaticPool'un
+   tek fiziksel bağlantıyı paylaşması yüzünden bu yarış hiç
+   tetiklenemiyor, gerçek izole bağlantılar (Postgres/MySQL) gerekiyor.
+
+191 test yeşil, ruff+mypy temiz (bkz. commit `fc0f94a` sonrası).
+
+**Kullanıcı kararı**: genişleme (yeni sistemler/özellikler) bittikten
+sonra **tek seferde** kapsamlı bir güvenlik denetimi yapılacak — şimdi
+değil, çünkü genişleme sonrası zaten tekrar gerekecekti. Henüz
+incelenmedi: `commands/bridge.py`'nin daha derin introspection edge
+case'leri (ayrı, daha küçük bir hardening maddesi olarak kalabilir).
 
 ## Sıradaki adaylar (kullanıcı "roadmap'ten devam edelim" dedi, henüz seçim yapılmadı)
 
