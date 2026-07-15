@@ -43,7 +43,12 @@ from discord_webapi.storage import (
     MemoryConsentStore,
 )
 from discord_webapi.transport import Event, InProcessTransport, Transport
-from discord_webapi.web import build_commands_websocket_router, build_default_dashboard_router
+from discord_webapi.web import (
+    DEFAULT_COOKIE_CONSENT_MESSAGE,
+    DEFAULT_COOKIE_CONSENT_VERSION,
+    build_commands_websocket_router,
+    build_default_dashboard_router,
+)
 
 if TYPE_CHECKING:
     from discord_webapi.storage.sql import (
@@ -180,6 +185,8 @@ class DiscordWebAPI:
         enable_websocket: bool = False,
         enable_audit_log: bool = False,
         enable_cookie_consent: bool = False,
+        cookie_consent_message: str = DEFAULT_COOKIE_CONSENT_MESSAGE,
+        cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
     ) -> None:
         self.auth.install(app)
         app.state.discord_webapi_member_cache = self.member_cache
@@ -190,7 +197,13 @@ class DiscordWebAPI:
         app.include_router(build_members_router())
         app.include_router(build_app_roles_router())
         if serve_dashboard:
-            app.include_router(build_default_dashboard_router())
+            app.include_router(
+                build_default_dashboard_router(
+                    enable_cookie_consent=enable_cookie_consent,
+                    cookie_consent_message=cookie_consent_message,
+                    cookie_consent_version=cookie_consent_version,
+                )
+            )
         if enable_websocket:
             app.include_router(build_commands_websocket_router(self.transport))
         if enable_audit_log:
@@ -222,6 +235,8 @@ class DiscordWebAPI:
         enable_websocket: bool = False,
         enable_audit_log: bool = False,
         enable_cookie_consent: bool = False,
+        cookie_consent_message: str = DEFAULT_COOKIE_CONSENT_MESSAGE,
+        cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
     ) -> FastAPI:
         """One-call setup for the single-process case: reads
         `DISCORD_BOT_TOKEN`/`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`/
@@ -303,5 +318,7 @@ class DiscordWebAPI:
             enable_websocket=enable_websocket,
             enable_audit_log=enable_audit_log,
             enable_cookie_consent=enable_cookie_consent,
+            cookie_consent_message=cookie_consent_message,
+            cookie_consent_version=cookie_consent_version,
         )
         return app

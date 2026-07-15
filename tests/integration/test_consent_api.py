@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from discord_webapi.auth import DiscordAuth
 from discord_webapi.consent import build_consent_router
 from discord_webapi.storage import MemoryConsentStore
+from discord_webapi.web import build_default_dashboard_router
 
 TOKEN_URL = "https://discord.com/api/v10/oauth2/token"
 ME_URL = "https://discord.com/api/v10/users/@me"
@@ -84,3 +85,26 @@ def test_consent_requires_authentication() -> None:
     with TestClient(app) as client:
         resp = client.get("/api/consent")
         assert resp.status_code == 401
+
+
+def test_dashboard_banner_and_consent_api_share_the_same_version() -> None:
+    """The banner's `POST /api/consent` call must record a version that
+    `GET /api/consent` (used to decide whether to show it again) actually
+    matches -- exercised end to end, not just each endpoint in isolation.
+    """
+    app = _build_app()
+    app.include_router(
+        build_default_dashboard_router(
+            enable_cookie_consent=True, cookie_consent_version="7"
+        )
+    )
+    with TestClient(app) as client:
+        _log_in(client)
+
+        page = client.get("/")
+        assert 'COOKIE_CONSENT_VERSION = "7"' in page.text
+
+        client.post("/api/consent", json={"consent_version": "7"})
+
+        get_resp = client.get("/api/consent")
+        assert get_resp.json()["consent_version"] == "7"

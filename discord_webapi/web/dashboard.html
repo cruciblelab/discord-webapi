@@ -17,10 +17,15 @@
   #error { color: #d33; margin-top: 0.5rem; }
   #whoami { color: #555; }
   .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.75rem; }
+  #cookie-consent-banner { position: fixed; left: 0; right: 0; bottom: 0; background: #1a1a1a; color: white; padding: 1rem; display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  #cookie-consent-banner p { margin: 0; flex: 1 1 320px; }
+  #cookie-consent-banner button { background: white; color: #1a1a1a; }
 </style>
 </head>
 <body>
   <h1>discord-webapi test dashboard</h1>
+  <!--COOKIE_CONSENT_BANNER-->
+
 
   <div id="login-section" style="display:none">
     <p>Giriş yapılmadı.</p>
@@ -111,6 +116,7 @@ document.getElementById("load-members-btn").addEventListener("click", async () =
 });
 
 checkAuth();
+/*COOKIE_CONSENT_SCRIPT*/
 </script>
 </body>
 </html>

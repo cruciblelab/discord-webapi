@@ -62,16 +62,48 @@ birlikte duruyor.
 
 Hepsi 154 test ile kapsanıyor (unit: ban/kick/timeout/warn/warn_sql/welcome/shared), ruff+mypy temiz. Commit: bkz. git log.
 
-## Bir sonraki oturumda muhtemel işler
+## Cookie-consent banner dashboard entegrasyonu (tamamlandı)
 
-- Kullanıcının fiziksel test sonuçlarını bekle (`TESTING.md`).
-- Daha fazla builtin fikri: `on_message` otomatik moderasyon (küfür/spam filtresi), rol-atama komutu (`role.py`).
-- Kullanıcı gerçekten üçüncü-taraf paket/manifest sistemini şimdi mi
-  istiyor yoksa öneri sırasında bahsedilen uzun vadeli bir vizyon muydu —
-  netleştirilmesi gerekebilir.
-- Cookie consent notice'ının dashboard.html'e nasıl entegre edileceği
-  (opsiyonel, kullanıcı isterse) hâlâ tamamen tüketiciye bırakıldı —
-  kütüphane bir örnek/varsayılan banner sunmuyor, sadece store+API var.
+Kullanıcı builtin eklemeyi durdurup ("hazır komut eklemeyelim şuan zamanı
+değil") ana plana dönmemizi istedi; plan dosyası (`/root/.claude/plans/
+encapsulated-nibbling-pnueli.md`) v0.3'ün tamamını (audit/consent/builtins
+kararları + bilinçli ertelenen paket sistemi) yansıtacak şekilde
+güncellendi, sonra kullanıcı üç açık v0.3+ maddesinden ("cookie-consent
+banner", "multi-bot/shard routing", "channel-level permission overwrite")
+ilkiyle başlamayı seçti — **hepsini istiyor, sırayla ekleyeceğiz**.
+
+- `discord_webapi/web/dashboard.html`: `<!--COOKIE_CONSENT_BANNER-->` ve
+  `/*COOKIE_CONSENT_SCRIPT*/` yer tutucuları eklendi.
+- `discord_webapi/web/dashboard.py`: `build_default_dashboard_router(
+  enable_cookie_consent=, cookie_consent_message=, cookie_consent_version=)`
+  — banner metni tamamen tüketiciye ait (varsayılan bir İngilizce cümle var
+  ama serbestçe override edilebiliyor), `cookie_consent_version` değişince
+  herkes tekrar onaylamak zorunda kalıyor (localStorage + `/api/consent`
+  karşılaştırması `COOKIE_CONSENT_VERSION` üzerinden).
+- Banner JS'i: giriş yapılmamışsa `/api/consent` 401 döner, bu durumda
+  localStorage'a "reddedilmiş/kapatılmış" bayrağı yazıp göstermeye devam
+  ediyor; "Accept" tıklanınca hem localStorage hem (giriş yapılmışsa)
+  `POST /api/consent` ile kalıcı kayıt.
+- `DiscordWebAPI.install()`/`quickstart()`'a `cookie_consent_message`/
+  `cookie_consent_version` parametreleri eklendi, `enable_cookie_consent=True`
+  olduğunda hem consent API'sini hem dashboard banner'ını aynı config'le
+  bağlıyor.
+- Testler: `test_default_dashboard.py`'de banner var/yok + özelleştirme
+  testleri, `test_consent_api.py`'de banner+API'nin aynı versiyonu
+  paylaştığını doğrulayan uçtan uca test. 158 test yeşil, ruff+mypy temiz.
+
+## Bir sonraki oturumda muhtemel işler (kullanıcı üçünü de istiyor, sırada)
+
+1. **Multi-bot/shard routing** — birden fazla bot instance/shard'ın aynı
+   dashboard'u paylaşması (orijinal v0.1 planının v0.3+ listesinden).
+2. **Channel-level permission overwrite** — Discord'un kanal bazlı izin
+   override sistemini authz katmanına yansıtmak.
+3. Kullanıcının fiziksel test sonuçlarını bekle (`TESTING.md`).
+4. Builtin eklemeye ara verildi ("şuan zamanı değil") — tekrar gündeme
+   gelirse `on_message` otomatik moderasyon, rol-atama komutu gibi fikirler
+   NOTES.md'nin önceki sürümünde vardı.
+5. Kullanıcı gerçekten üçüncü-taraf paket/manifest sistemini şimdi mi
+   istiyor yoksa uzun vadeli bir vizyon muydu — netleştirilmesi gerekebilir.
 
 ## Genel süreç hatırlatmaları (tekrar unutulmasın diye)
 
