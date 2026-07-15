@@ -19,6 +19,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from discord_webapi.builtins._shared import check_role_hierarchy, notify_member_best_effort
+
 DEFAULT_DELETE_MESSAGE_SECONDS = 0
 MAX_DELETE_MESSAGE_SECONDS = 7 * 24 * 3600  # Discord's own API ceiling
 
@@ -72,30 +74,18 @@ def setup(
         if ctx.guild is None:
             return
 
-        me = ctx.guild.me
-        if me is not None and member.top_role >= me.top_role:
-            await ctx.reply(
-                "I can't ban this member -- their highest role outranks mine.", ephemeral=True
-            )
-            return
-        if isinstance(ctx.author, discord.Member) and member.top_role >= ctx.author.top_role:
-            await ctx.reply(
-                "You can't ban this member -- their highest role outranks yours.", ephemeral=True
-            )
+        hierarchy_error = check_role_hierarchy(ctx, member)
+        if hierarchy_error is not None:
+            await ctx.reply(hierarchy_error, ephemeral=True)
             return
 
-        delete_message_seconds = max(
-            0, min(delete_message_seconds, MAX_DELETE_MESSAGE_SECONDS)
-        )
+        delete_message_seconds = max(0, min(delete_message_seconds, MAX_DELETE_MESSAGE_SECONDS))
 
         if dm_before_ban:
-            try:
-                notice = f"You have been banned from **{ctx.guild.name}**."
-                if reason:
-                    notice += f"\nReason: {reason}"
-                await member.send(notice)
-            except discord.Forbidden:
-                pass  # closed DMs / blocked the bot -- never blocks the ban itself
+            notice = f"You have been banned from **{ctx.guild.name}**."
+            if reason:
+                notice += f"\nReason: {reason}"
+            await notify_member_best_effort(member, notice)
 
         audit_reason = f"{ctx.author} (via discord-webapi): {reason}" if reason else str(ctx.author)
         await ctx.guild.ban(

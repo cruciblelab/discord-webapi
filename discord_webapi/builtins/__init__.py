@@ -19,6 +19,14 @@ Convention every module in this package follows:
   checks, an optional DM before the ban, and a configurable message-deletion
   window — the kind of thing every real moderation bot ends up needing, not
   a bare one-line `guild.ban(member)` wrapper.
+- Shared, independently-usable pieces live in `_shared.py` (role-hierarchy
+  checks, best-effort DM delivery) — take just those into a command you
+  wrote from scratch, use a whole builtin as-is, or mix both. Nothing here
+  requires an all-or-nothing adoption. Any future builtin needing its own
+  persistent state (a warn counter, a mute-role registry, ...) gets its own
+  `Store` protocol + Memory/SQL pair, the same pattern `AuditStore`/
+  `ConsentStore` already follow — never a hidden dependency bolted onto a
+  command file.
 
 See `discord_webapi/builtins/README.md` for the full writeup, including
 what's explicitly *not* attempted here yet (a third-party plugin/package

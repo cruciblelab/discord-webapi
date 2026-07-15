@@ -22,7 +22,7 @@ kararlar buraya da yansıtılıyor).
 - `quickstart()`, `default_intents()`, bundled dashboard HTML
 - **Audit log** (`discord_webapi/audit/`): `AuditStore` (Memory/SQL), `AuditLogger`, `GET /api/guilds/{id}/audit-log`. Opt-in (`enable_audit_log=False` varsayılan). Şu an sadece komut override'ları (`command.set_override`) ve AppRole yazmaları (`app_role.set`/`app_role.delete`) kaydediliyor — auth login/logout kapsam dışı (kullanıcı bunu seçti).
 - **Cookie/consent kaydı** (`discord_webapi/consent/`): `ConsentStore` (Memory/SQL, ayrı protokol — `Session`'a alan eklenmedi), `GET/POST /api/consent`. Opt-in (`enable_cookie_consent=False` varsayılan). Notice'ın metni/UI'ı tamamen tüketiciye bırakıldı — kütüphane sadece "kullanıcı X, Y versiyonunu Z zamanında onayladı" kaydını tutuyor.
-- **`discord_webapi/builtins/`**: hazır, tam-özellikli, serbestçe import edilebilir komutlar için klasör. Şu an içinde `ban.py` (flagship örnek — rol hiyerarşisi kontrolü, opsiyonel DM, configlenebilir `delete_message_seconds`, `require_reason` aç/kapa) + `README.md` (konvansiyonu açıklıyor). Her dosya bağımsız, `setup(bot, **kwargs)` döndürür, otomatik yükleme yok.
+- **`discord_webapi/builtins/`**: hazır, tam-özellikli, serbestçe import edilebilir komutlar için klasör. `_shared.py`'de ortak, bağımsız kullanılabilir parçalar (`check_role_hierarchy`, `notify_member_best_effort`) — kullanıcı isterse sadece bunları alıp sıfırdan yazdığı komuta gömebilir, isterse hazır komutu (`ban.py`/`kick.py`/`timeout.py`) olduğu gibi kullanır, isterse hibrit yapar (kullanıcının bu oturumda tam olarak istediği şey: "ayrı ayrı kullanmak isteyenler yerde kullanır ya da sıfırdan yazarlar ya da hibrit kullanırlar"). Şu an: `ban.py`, `kick.py`, `timeout.py` (Discord'un kendi native timeout'unu kullanıyor, ayrı mute-role sistemi yok) + `README.md`. Kalıcı veri gerektiren gelecekteki builtin'ler (ör. `warn.py`) `AuditStore`/`ConsentStore` ile aynı desende kendi `Store` protokolünü alacak — DB/cache/permission katmanları hep ayrı, birleştirilebilir parçalar olarak kalacak, tek bir dosyaya gizli bağımlılık gömülmeyecek.
 - `TESTING.md`: fiziksel test kontrol listesi (kullanıcı henüz Termux'ta çalıştırmadı).
 
 Tüm otomatik testler yeşil (128 passed, 20 skipped — skip'ler yerelde
@@ -43,19 +43,22 @@ kod çalıştırmanın güvenlik incelemesi, versiyonlama politikası) — zaten
 orijinal v0.1 planında "core donunca, vakit geçirmek için eklenir" diye
 ertelenmiş "extension/structure sistemi" fikriyle aynı kategoride.
 
-**Bu oturumda bilinçli olarak küçültülmüş/somut bir versiyonu teslim
-edildi**: `discord_webapi/builtins/` klasörü + tek dosyalık, gerçekten
-tam-özellikli, serbestçe import edilebilir bir örnek komut (`ban.py`).
-Manifest/versiyon/installer sistemi YOK — `builtins/README.md`'nin son
-bölümünde bu, neden ertelendiği açıklamasıyla birlikte not edildi.
-**Kullanıcıya bu kapsam daraltmasını söylemek gerekiyor** — henüz
-söylenmedi olabilir, sohbetin geri kalanını kontrol et.
+**Bu oturumda teslim edilen/küçültülen versiyon**: `discord_webapi/builtins/`
+klasörü, `_shared.py`'de ayrıştırılmış bağımsız parçalar +
+`ban.py`/`kick.py`/`timeout.py`. Kullanıcıya kapsam daraltması söylendi ve
+kullanıcı onayladı ("ertelemen iyi ama altyapısı iyi olsun, zaten süs bu,
+ana yemek değil — meze; her şeyi ayrı ayrı kullanmak isteyenler kullanır,
+sıfırdan yazarlar ya da hibrit yaparlar, kendileri bilir"). Manifest/
+versiyon/installer sistemi hâlâ YOK ve hâlâ bilinçli olarak ertelendi —
+`builtins/README.md`'nin son bölümünde neden ertelendiği açıklamasıyla
+birlikte duruyor.
 
 ## Bir sonraki oturumda muhtemel işler
 
 - Kullanıcının fiziksel test sonuçlarını bekle (`TESTING.md`).
-- Daha fazla builtin (kick, timeout/mute, warn, `on_member_join` welcome
-  event listener gibi) — aynı `setup(bot, **kwargs)` konvansiyonuyla.
+- Daha fazla builtin (`warn.py` — kendi `WarnStore`'u ile, `on_member_join`
+  welcome event listener gibi) — aynı `setup(bot, **kwargs)` + `_shared.py`
+  yeniden kullanım konvansiyonuyla.
 - Kullanıcı gerçekten üçüncü-taraf paket/manifest sistemini şimdi mi
   istiyor yoksa öneri sırasında bahsedilen uzun vadeli bir vizyon muydu —
   netleştirilmesi gerekebilir.

@@ -38,11 +38,21 @@ registry.command_meta(category="moderation")(ban_command)
 
 ## What's here so far
 
-- `ban.py` — the flagship example (see above).
+- `_shared.py` — role-hierarchy checks and best-effort DM delivery, factored
+  out because every moderation command needs them. Import just this if
+  you're writing your own command from scratch and only want the
+  hierarchy check, not a whole prebuilt command.
+- `ban.py`, `kick.py`, `timeout.py` — each a self-contained `setup(bot,
+  **kwargs)`, each reusing `_shared.py` rather than re-implementing the
+  same checks three times.
 
-More builtins (kick, timeout/mute, warn, plus Gateway event listeners like
-`on_member_join` welcome messages) will land the same way: one file, one
-`setup()`, no forced adoption.
+More builtins (warn, plus Gateway event listeners like `on_member_join`
+welcome messages) will land the same way: one file, one `setup()`, no
+forced adoption. Anything needing its own persistent state (e.g. a warn
+counter) gets its own `Store` protocol + Memory/SQL pair — same shape as
+`AuditStore`/`ConsentStore` — so database/cache/permission concerns stay
+separable pieces you can use individually, replace, or skip, exactly like
+everything else in this library.
 
 ## What this is explicitly *not* (yet)
 
