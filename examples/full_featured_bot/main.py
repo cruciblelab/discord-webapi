@@ -20,6 +20,7 @@ Run:
 import os
 
 from discord.ext import commands
+from fastapi.responses import HTMLResponse
 
 from discord_webapi import DiscordWebAPI
 from discord_webapi.bot import default_intents
@@ -56,11 +57,10 @@ setup_welcome(bot, channel_id=None)
 
 # Enables GET /auth/discord/login?mobile=true -- useful for testing
 # without ever reading a cookie out of a mobile browser: after Discord
-# login, the browser lands here with `?session_id=...` right there in the
-# URL to copy, then you send it as `Authorization: Bearer <session_id>`
-# on every request (curl, ws_test_client.py, ...) instead of a cookie.
-# There's no real page at this path -- you're only reading the URL bar,
-# a 404 here is expected and fine.
+# login, the browser lands on /mobile-login-done (defined below) with
+# `?session_id=...` in the URL, which that route renders as a big,
+# selectable/copyable block instead of leaving you to squint at a
+# truncated address bar.
 _base_url = os.environ.get("DASHBOARD_BASE_URL", "http://localhost:8000")
 
 app = DiscordWebAPI.quickstart(
@@ -74,3 +74,33 @@ app = DiscordWebAPI.quickstart(
     ),
     mobile_redirect_uri=f"{_base_url}/mobile-login-done",
 )
+
+
+@app.get("/mobile-login-done", response_class=HTMLResponse, include_in_schema=False)
+async def mobile_login_done(session_id: str = "", expires_at: str = "") -> str:
+    """Lands here after `/auth/discord/login?mobile=true` completes. Not
+    part of the library -- just this example's own tiny page so you don't
+    have to fight a mobile browser's address bar to read `session_id` out
+    of the URL. If `session_id` shows up empty below, the redirect you
+    followed didn't actually come from a real mobile login just now (e.g.
+    you typed/pasted this URL by hand, or the `mobile=true` query param
+    got mangled on the way in -- try the "Mobil giriş" button on `/` again
+    instead of typing the URL).
+    """
+    if not session_id:
+        return (
+            "<p>session_id boş geldi -- bu sayfaya gerçek bir mobil "
+            "login yönlendirmesiyle gelmedin. <a href='/'>Baştan dene</a>: "
+            "ana sayfadaki \"Mobil giriş (session_id al)\" butonuna tıkla, "
+            "URL'i elle yazma/yapıştırma.</p>"
+        )
+    return f"""
+    <p>Giriş başarılı. Aşağıdaki değeri (dokunup basılı tutup "Kopyala" ile)
+    kopyala -- bunu her istekte <code>Authorization: Bearer &lt;değer&gt;</code>
+    header'ı olarak kullanacaksın.</p>
+    <p style="font-size:1.1rem; word-break:break-all; background:#eee;
+       padding:0.75rem; border-radius:6px;">
+      <code id="sid">{session_id}</code>
+    </p>
+    <p style="font-size:0.85rem; color:#555;">Geçerlilik: {expires_at}</p>
+    """

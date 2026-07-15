@@ -16,6 +16,21 @@ def test_default_dashboard_serves_html_at_root_and_dashboard() -> None:
         assert "discord-webapi" in resp.text
 
 
+def test_dashboard_has_a_clickable_mobile_login_link() -> None:
+    """A link, not just documentation telling people to hand-type
+    `?mobile=true` -- typing it wrong (e.g. a stray space before
+    `mobile=true`) silently falls back to a normal, non-mobile login
+    with no error, which is exactly the kind of confusing failure a
+    clickable link avoids entirely."""
+    app = FastAPI()
+    app.include_router(build_default_dashboard_router())
+    client = TestClient(app)
+
+    resp = client.get("/")
+
+    assert 'href="/auth/discord/login?mobile=true"' in resp.text
+
+
 def test_cookie_consent_banner_is_absent_by_default() -> None:
     app = FastAPI()
     app.include_router(build_default_dashboard_router())

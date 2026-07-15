@@ -42,8 +42,8 @@ mobilde tarayıcı cookie'si kazmadan test yapmanın en pratik yolu** —
 madde 3 ve sonrasındaki tüm `curl` komutları için `session_id`'yi burada
 alacaksın.
 
-- [ ] `http://localhost:8000/auth/discord/login?mobile=true` aç.
-- [ ] Discord'da onayla → tarayıcı `http://localhost:8000/mobile-login-done?session_id=...&expires_at=...` adresine yönlenir. Bu path'te gerçek bir sayfa yok, **404 görmen normal** — önemli olan adres çubuğundaki `session_id` değerini kopyalaman.
+- [ ] `http://localhost:8000/dashboard`'ı aç, **URL'i elle yazma** — "Discord ile giriş yap" butonunun altındaki **"Mobil giriş (session_id al)"** butonuna tıkla. (Elle yazarsan `?mobile=true` önüne yanlışlıkla boşluk girebiliyor, bu da sessizce normal girişe düşüyor — buton bunu tamamen ortadan kaldırıyor.)
+- [ ] Discord'da onayla → `/mobile-login-done` sayfası `session_id`'yi büyük, kolayca kopyalanabilir bir kutuda gösterir (bu, örnek projenin kendi küçük sayfası — kütüphanenin bir parçası değil). Boş görünüyorsa sayfa zaten "gerçek bir mobil login yönlendirmesiyle gelmedin" diye uyarıyor — o zaman `/`'a dönüp butona tekrar tıkla.
 - [ ] O `session_id` değeriyle `curl -H "Authorization: Bearer <session_id>" http://localhost:8000/auth/discord/me` çağır → aynı kullanıcı bilgisinin döndüğünü doğrula (cookie olmadan, sadece header ile).
 - [ ] Aynı bearer token ile `logout` sonrası tekrar `/me` çağır → 401 döndüğünü doğrula.
 - [ ] Bu `session_id`'yi bir yere not et (ör. Termux'ta `export DWA_SESSION=<değer>`) — aşağıdaki tüm adımlarda tekrar kullanacaksın.

@@ -111,6 +111,32 @@ ilkiyle başlamayı seçti — **hepsini istiyor, sırayla ekleyeceğiz**.
    akışı ve somut `curl -X PATCH -H "Authorization: Bearer ..."` komutlarını
    içeriyor.
 
+## `session_id` boş geliyor sorunu (çözüldü — kod bugı değildi)
+
+Kullanıcı `/mobile-login-done`'da hep boş `session_id` gördü. uvicorn
+access log'unu inceleyince asıl sebep ortaya çıktı: kullanıcı gerçek bir
+OAuth yönlendirmesiyle değil, **URL'i elle yazarak/yapıştırarak** o
+sayfaya gidiyordu; log'da bir de gerçek mobil giriş denemesinde
+`GET /auth/discord/login?%20mobile=true` görüldü — `%20` bir boşluk,
+yani `?mobile=true` değil `? mobile=true` yazılmış/yapıştırılmış, bu da
+FastAPI'nin `mobile` parametresini tanımamasına (sessizce `mobile=False`
+varsaymasına) yol açtı. Otomatik testler (`test_mobile_auth.py`)
+kütüphanenin kendisinin bu konuda sorunsuz olduğunu zaten kanıtlıyordu —
+sorun tamamen elle URL yazmaktan kaynaklanan bir kullanıcı hatasıydı.
+
+**Kalıcı çözüm** (URL yazma ihtiyacını tamamen ortadan kaldırıyor):
+- Bundled `dashboard.html`'e tıklanabilir bir **"Mobil giriş (session_id
+  al)"** butonu eklendi (`/auth/discord/login?mobile=true`'ya gidiyor) —
+  artık kimse bu URL'i elle yazmak zorunda değil.
+- `examples/full_featured_bot/main.py`'ye gerçek bir `/mobile-login-done`
+  sayfası eklendi (önceden 404'tü) — `session_id`'yi büyük, kolayca
+  seçilebilir/kopyalanabilir bir kutuda gösteriyor; `session_id` boşsa
+  "gerçek bir mobil login yönlendirmesiyle gelmedin, butona tekrar tıkla"
+  diye açıkça uyarıyor (sessiz 404 yerine).
+- `TESTING.md` madde 2 artık "URL'i elle yazma, butona tıkla" diyor.
+- Yeni test: `test_dashboard_has_a_clickable_mobile_login_link`. 159 test
+  yeşil, ruff+mypy temiz.
+
 ## Bir sonraki oturumda muhtemel işler (kullanıcı üçünü de istiyor, sırada)
 
 1. **Multi-bot/shard routing** — birden fazla bot instance/shard'ın aynı
