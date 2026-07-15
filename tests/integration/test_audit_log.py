@@ -11,7 +11,11 @@ from fastapi.testclient import TestClient
 from discord_webapi.audit import AuditLogger, build_audit_log_router
 from discord_webapi.auth import DiscordAuth
 from discord_webapi.authz import AppRoleCache, GuildMemberCache, build_app_roles_router
-from discord_webapi.commands import CommandRegistry, build_commands_router
+from discord_webapi.commands import (
+    CommandRegistry,
+    build_commands_router,
+    install_command_registry_bridge,
+)
 from discord_webapi.storage import MemoryAuditStore, MemoryAuthzStore, MemoryCommandConfigStore
 from discord_webapi.transport import InProcessTransport
 
@@ -33,6 +37,7 @@ async def _build_app() -> FastAPI:
     async def kick(ctx: dpy_commands.Context, member: discord.Member) -> None: ...
 
     registry = CommandRegistry(bot, transport=transport, store=MemoryCommandConfigStore())
+    install_command_registry_bridge(registry, transport)
     await registry.register_all()
 
     authz_store = MemoryAuthzStore()
@@ -54,7 +59,7 @@ async def _build_app() -> FastAPI:
     transport.register_handler("get_member", handle_get_member)
 
     app.state.discord_webapi_member_cache = GuildMemberCache(transport)
-    app.state.discord_webapi_commands = registry
+    app.state.discord_webapi_transport = transport
     app.state.discord_webapi_app_role_cache = AppRoleCache(authz_store)
     app.state.discord_webapi_audit_store = audit_store
     app.state.discord_webapi_audit_logger = AuditLogger(audit_store)

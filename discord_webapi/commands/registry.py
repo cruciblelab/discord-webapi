@@ -264,3 +264,43 @@ class CommandRegistry:
             self._override_cache[key] = override
         else:
             self._override_cache.pop(key, None)
+
+
+COMMAND_LIST_COMMAND_STATUS = "list_command_status"
+COMMAND_SET_COMMAND_OVERRIDE = "set_command_override"
+
+
+def install_command_registry_bridge(registry: CommandRegistry, transport: Transport) -> None:
+    """Wiring for whichever process owns the live `CommandRegistry` --
+    wherever `register_all()`/enforcement actually run (the bot process in
+    a split bot/web deployment, or the single process in the default
+    single-process deployment). Answers the dashboard's command-listing/
+    override RPCs from it.
+
+    This is what lets `commands.api` behave identically whether the web
+    side is co-located (`InProcessTransport`, same object, same process)
+    or running as its own separate replica set against `RedisTransport` --
+    the registry's in-memory specs/override cache/invocation counters
+    never need to leave the process that owns them.
+    """
+
+    async def handle_list_command_status(payload: dict[str, Any]) -> dict[str, Any]:
+        statuses = registry.list_status(payload["guild_id"])
+        return {"statuses": [s.model_dump(mode="json") for s in statuses]}
+
+    async def handle_set_command_override(payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            status_result = await registry.set_override(
+                payload["guild_id"],
+                payload["command_name"],
+                enabled=payload["enabled"],
+                cooldown_seconds=payload.get("cooldown_seconds"),
+                cooldown_uses=payload.get("cooldown_uses"),
+                updated_by_user_id=payload.get("updated_by_user_id"),
+            )
+        except ValueError as exc:
+            return {"error": str(exc)}
+        return {"status": status_result.model_dump(mode="json")}
+
+    transport.register_handler(COMMAND_LIST_COMMAND_STATUS, handle_list_command_status)
+    transport.register_handler(COMMAND_SET_COMMAND_OVERRIDE, handle_set_command_override)

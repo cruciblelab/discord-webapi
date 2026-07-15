@@ -13,7 +13,7 @@ from discord_webapi.auth import DiscordAuth
 from discord_webapi.authz import GuildMemberCache
 from discord_webapi.commands.api import build_commands_router
 from discord_webapi.commands.ratelimit import TokenBucketLimiter
-from discord_webapi.commands.registry import CommandRegistry
+from discord_webapi.commands.registry import CommandRegistry, install_command_registry_bridge
 from discord_webapi.storage import MemoryCommandConfigStore
 from discord_webapi.transport import InProcessTransport
 
@@ -45,6 +45,7 @@ def _build_app(
     store = MemoryCommandConfigStore()
     bot = _build_bot()
     registry = CommandRegistry(bot, transport=transport, store=store)
+    install_command_registry_bridge(registry, transport)
 
     auth = DiscordAuth(
         client_id="cid",
@@ -62,7 +63,7 @@ def _build_app(
     transport.register_handler("get_member", handle_get_member)
 
     app.state.discord_webapi_member_cache = GuildMemberCache(transport)
-    app.state.discord_webapi_commands = registry
+    app.state.discord_webapi_transport = transport
 
     app.include_router(build_commands_router(patch_rate_limiter=patch_rate_limiter))
     return app, registry, transport

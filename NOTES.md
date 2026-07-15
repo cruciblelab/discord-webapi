@@ -1,6 +1,63 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Kapsamlı güvenlik denetimi (v0.5 sonrası, bu oturumda tamamlandı)
+## Çoklu sunucu/makine deployment (bot ve web ayrı process, bu oturumda tamamlandı)
+
+Kullanıcı "5-6 büyük sunucuda çalışan botlar için sağlam bir sistem"
+istedi — netleştirince asıl istenen: bot'un Discord Gateway bağlantısı bir
+process'te, FastAPI dashboard'ı ayrı process'te/makinede, web tarafı N
+replica olarak yatay ölçeklenebilsin (load balancer arkasında). Çoklu
+bot (birden fazla farklı bot/token) ve job queue şimdilik ertelendi
+(kullanıcı: "kuyruk sistemi ve çoklu botu şuanlık boşverelim").
+
+**Kritik keşif**: `RedisTransport` zaten multi-process/multi-machine için
+tasarlanmıştı (v0.1'den beri), ve authz/members/guilds gibi her alt sistem
+zaten SADECE `Transport` üzerinden konuşuyordu — bot objesine hiç direkt
+erişmiyorlardı. Tek istisna: `commands/api.py` (dashboard'un command
+listeleme/override endpoint'leri), `app.state.discord_webapi_commands`
+üzerinden CANLI bir `CommandRegistry` nesnesine DOĞRUDAN erişiyordu — bu,
+web ve bot'un aynı process'te olmasını zorunlu kılan TEK parçaydı.
+
+**Yapılanlar**:
+1. `commands/registry.py::install_command_registry_bridge(registry, transport)`
+   eklendi — `list_command_status`/`set_command_override` RPC'lerini
+   registry'nin yaşadığı process'te cevaplıyor.
+2. `commands/api.py` artık `app.state.discord_webapi_commands`'a hiç
+   bakmıyor, sadece `transport.request(...)` çağırıyor — tek-process modda
+   (`InProcessTransport`) davranış birebir aynı kalıyor (sadece bir RPC
+   round-trip'e dönüşüyor, aynı process içinde).
+3. `DiscordWebAPI.__init__`'te `bot`/`auth` artık opsiyonel (`None`
+   olabilir) — `self.registry` de `CommandRegistry | None` oldu, sadece
+   `bot is not None` olduğunda kuruluyor (RedisTransport'un "bir command'a
+   sadece bir handler" kuralı gereği — web-only process asla bu RPC'leri
+   register etmemeli).
+4. İki yeni classmethod: `DiscordWebAPI.for_bot_process(bot=..., transport=...)`
+   (FastAPI yok, sadece bot-side wiring) ve
+   `DiscordWebAPI.for_web_process(transport=..., auth=...)` (bot yok,
+   sadece web-side wiring). Mevcut `DiscordWebAPI(bot=..., auth=...)` /
+   `quickstart()` API'si hiç değişmeden çalışmaya devam ediyor.
+5. `bot/extension.py`'ye `run_bot_process(bot, transport, token)`
+   (FastAPI'siz, sonsuza kadar bekleyen bot-only entry point) ve
+   `web_only_lifespan(transport)` (bot'suz FastAPI lifespan) eklendi.
+6. `examples/split_deployment/` (`bot_process.py` + `web_process.py` +
+   README) — gerçek Redis+Postgres ile nasıl çalıştırılacağını gösteriyor.
+7. Yeni test: `tests/integration/test_split_deployment.py` — iki ayrı
+   `DiscordWebAPI` nesnesi (birbirine hiç referans vermeden, sadece
+   paylaşılan `InProcessTransport` — gerçek `RedisTransport`'un makineler
+   arası paylaşımının yerine geçiyor) ile GET/PATCH commands API'sinin
+   gerçekten sadece Transport üzerinden çalıştığını doğruluyor.
+
+Mevcut testlerden ikisi (`test_commands_api.py`, `test_audit_log.py`)
+`app.state.discord_webapi_commands` yerine `install_command_registry_bridge`
++ `app.state.discord_webapi_transport` kullanacak şekilde güncellendi.
+
+182 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
+**Sırada (kullanıcı isterse)**: çoklu bot (farklı bot/token'ları tek
+dashboard'dan yönetme — guild_id→hangi bot routing'i gerektirir, bilinçli
+olarak ayrı/opt-in bir katman olarak ele alınmalı) ve job queue (Celery/arq
+tarzı, `Transport` gibi opt-in bir modül olarak) hâlâ ertelenmiş durumda.
+
+## Kapsamlı güvenlik denetimi (v0.5 sonrası, tamamlandı)
 
 Genişleme bittikten sonra planlanmış olan tam kapsamlı güvenlik denetimi
 bir subagent ile yapıldı (diff değil, tüm paket okunarak). Sonuç: mimari

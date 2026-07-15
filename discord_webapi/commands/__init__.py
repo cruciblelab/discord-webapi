@@ -8,7 +8,7 @@ from discord_webapi.commands.models import (
     ParamSpec,
 )
 from discord_webapi.commands.ratelimit import TokenBucketLimiter
-from discord_webapi.commands.registry import CommandRegistry
+from discord_webapi.commands.registry import CommandRegistry, install_command_registry_bridge
 
 __all__ = [
     "EVENT_TYPE_COMMAND_CONFIG_CHANGED",
@@ -21,4 +21,5 @@ __all__ = [
     "ParamSpec",
     "TokenBucketLimiter",
     "build_commands_router",
+    "install_command_registry_bridge",
 ]

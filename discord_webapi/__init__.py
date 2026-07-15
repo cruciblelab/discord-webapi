@@ -31,6 +31,7 @@ from discord_webapi.bot.extension import (
     install_guild_listing,
     install_member_lookup,
     single_process_lifespan,
+    web_only_lifespan,
 )
 from discord_webapi.commands import (
     CommandOverride,
@@ -38,6 +39,7 @@ from discord_webapi.commands import (
     CommandSpec,
     CommandStatus,
     build_commands_router,
+    install_command_registry_bridge,
 )
 from discord_webapi.consent import ConsentRecord, build_consent_router
 from discord_webapi.guilds import ManageableGuild, build_guilds_router
@@ -161,14 +163,23 @@ class DiscordWebAPI:
     collapses all of the above (env var reads, SQLite storage, auth,
     transport, the facade itself, the lifespan, and `FastAPI(...)`) into one
     call — see its docstring.
+
+    For large bots that want the bot process and the FastAPI dashboard
+    running as entirely separate processes/machines (so the web side can
+    be scaled horizontally behind a load balancer, independent of the
+    single Discord Gateway connection), see `DiscordWebAPI.for_bot_process`
+    and `DiscordWebAPI.for_web_process` instead — both talk over the same
+    `RedisTransport`, and require no code changes to any route/dependency
+    in this package (they were already written only against `Transport`,
+    never a concrete bot object).
     """
 
     def __init__(
         self,
         *,
-        bot: commands.Bot,
         transport: Transport,
-        auth: DiscordAuth,
+        bot: commands.Bot | None = None,
+        auth: DiscordAuth | None = None,
         command_store: CommandConfigStore | None = None,
         authz_store: AuthzStore | None = None,
         audit_store: AuditStore | None = None,
@@ -188,20 +199,87 @@ class DiscordWebAPI:
         self.authz_store = authz_store or MemoryAuthzStore()
         self.audit_store = audit_store or MemoryAuditStore()
         self.consent_store = consent_store or MemoryConsentStore()
-        self.registry = CommandRegistry(bot, transport=transport, store=self.command_store)
         self.member_cache = GuildMemberCache(transport, ttl_seconds=member_cache_ttl_seconds)
         self.channel_permission_cache = ChannelPermissionCache(
             transport, ttl_seconds=channel_permission_cache_ttl_seconds
         )
         self.app_role_cache = AppRoleCache(self.authz_store)
 
-        install_member_lookup(bot, transport)
-        install_channel_permission_lookup(bot, transport)
-        install_member_listing(bot, transport)
-        install_guild_listing(bot, transport)
-        bot.add_listener(self._on_ready, name="on_ready")
+        self.registry: CommandRegistry | None = None
+        if bot is not None:
+            # All bot-process-only wiring: a web-only process (see
+            # `for_web_process`) must NOT own a `CommandRegistry` or
+            # register any of these RPC handlers -- RedisTransport's plain
+            # pub/sub has undefined behavior if two processes both
+            # `register_handler()` the same command name (see its
+            # docstring), so exactly the one process that actually owns
+            # the live bot may do this.
+            self.registry = CommandRegistry(bot, transport=transport, store=self.command_store)
+            install_command_registry_bridge(self.registry, transport)
+            install_member_lookup(bot, transport)
+            install_channel_permission_lookup(bot, transport)
+            install_member_listing(bot, transport)
+            install_guild_listing(bot, transport)
+            bot.add_listener(self._on_ready, name="on_ready")
+
+    @classmethod
+    def for_bot_process(
+        cls,
+        *,
+        bot: commands.Bot,
+        transport: Transport,
+        command_store: CommandConfigStore | None = None,
+        sync_commands: bool = True,
+        sync_guild_id: int | None = None,
+    ) -> DiscordWebAPI:
+        """Construct the bot-side half of a split bot/web deployment: owns
+        the live `CommandRegistry` and answers every bot-process RPC
+        (member/channel-permission/guild-listing lookups, command status/
+        overrides) — no FastAPI here at all. Run its `.lifespan(token)` (or
+        `bot.extension.run_bot_process`) in a standalone process, pointed
+        at a `RedisTransport` so any number of `for_web_process` FastAPI
+        replicas/machines can reach it.
+        """
+        return cls(
+            transport=transport,
+            bot=bot,
+            command_store=command_store,
+            sync_commands=sync_commands,
+            sync_guild_id=sync_guild_id,
+        )
+
+    @classmethod
+    def for_web_process(
+        cls,
+        *,
+        transport: Transport,
+        auth: DiscordAuth,
+        authz_store: AuthzStore | None = None,
+        audit_store: AuditStore | None = None,
+        consent_store: ConsentStore | None = None,
+        member_cache_ttl_seconds: float = 45.0,
+        channel_permission_cache_ttl_seconds: float = 30.0,
+    ) -> DiscordWebAPI:
+        """Construct the web-side half of a split bot/web deployment: no
+        `discord.Bot` object at all — every dashboard route already talks
+        only to `Transport`/the shared stores, never to a concrete bot, so
+        this is simply the same facade with the bot-only pieces skipped.
+        Run as many of these as you want (separate processes, separate
+        machines, behind a load balancer), all pointed at the same
+        `RedisTransport` and database as the one `for_bot_process`.
+        """
+        return cls(
+            transport=transport,
+            auth=auth,
+            authz_store=authz_store,
+            audit_store=audit_store,
+            consent_store=consent_store,
+            member_cache_ttl_seconds=member_cache_ttl_seconds,
+            channel_permission_cache_ttl_seconds=channel_permission_cache_ttl_seconds,
+        )
 
     async def _on_ready(self) -> None:
+        assert self.bot is not None and self.registry is not None  # only a listener when bot is set
         await self.registry.register_all()
         if self._sync_commands and not self._commands_synced:
             # discord.py never pushes slash commands to Discord on its own
@@ -228,10 +306,14 @@ class DiscordWebAPI:
         cookie_consent_message: str = DEFAULT_COOKIE_CONSENT_MESSAGE,
         cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
     ) -> None:
+        if self.auth is None:
+            raise RuntimeError(
+                "install() needs auth=... -- this DiscordWebAPI was built via "
+                "for_bot_process(), which has no FastAPI app to install onto"
+            )
         self.auth.install(app)
         app.state.discord_webapi_member_cache = self.member_cache
         app.state.discord_webapi_channel_permission_cache = self.channel_permission_cache
-        app.state.discord_webapi_commands = self.registry
         app.state.discord_webapi_transport = self.transport
         app.state.discord_webapi_app_role_cache = self.app_role_cache
         app.include_router(build_commands_router())
@@ -257,7 +339,20 @@ class DiscordWebAPI:
             app.include_router(build_consent_router())
 
     def lifespan(self, token: str) -> AbstractAsyncContextManager[None]:
+        if self.bot is None:
+            raise RuntimeError(
+                "lifespan(token) needs a bot -- this DiscordWebAPI was built via "
+                "for_web_process(), which has no bot to start. Use web_lifespan() "
+                "instead (or run_bot_process()/for_bot_process().lifespan(token) "
+                "in the separate bot process)."
+            )
         return single_process_lifespan(self.bot, self.transport, token)
+
+    def web_lifespan(self) -> AbstractAsyncContextManager[None]:
+        """FastAPI lifespan for a web-only process in a split bot/web
+        deployment (see `for_web_process`) -- starts/stops this process's
+        own connection to the shared Transport, with no bot involved."""
+        return web_only_lifespan(self.transport)
 
     @classmethod
     def quickstart(

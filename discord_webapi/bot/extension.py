@@ -158,3 +158,32 @@ async def single_process_lifespan(
         with contextlib.suppress(asyncio.CancelledError):
             await bot_task
         await transport.stop()
+
+
+@asynccontextmanager
+async def web_only_lifespan(transport: Transport) -> AsyncIterator[None]:
+    """FastAPI lifespan for a web-only process in a split bot/web
+    deployment (see `DiscordWebAPI.for_web_process`) -- no discord.py bot
+    here at all. Just starts/stops this process's own connection to the
+    shared Transport (e.g. RedisTransport's Redis connection) around the
+    app's lifetime; the bot itself runs in a separate process started via
+    `run_bot_process`/`DiscordWebAPI.for_bot_process`.
+    """
+    await transport.start()
+    try:
+        yield
+    finally:
+        await transport.stop()
+
+
+async def run_bot_process(bot: commands.Bot, transport: Transport, token: str) -> None:
+    """Entry point for a standalone bot-only process in a split bot/web
+    deployment: connects to Discord and to the shared Transport (typically
+    `RedisTransport`, so it can be reached by any number of separate
+    `for_web_process` FastAPI replicas/machines), then blocks until
+    interrupted (Ctrl+C / SIGINT/SIGTERM cancels the enclosing
+    `asyncio.run`). No FastAPI involved at all -- run exactly one of these
+    per bot account/token.
+    """
+    async with single_process_lifespan(bot, transport, token):
+        await asyncio.Event().wait()
