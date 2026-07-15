@@ -228,6 +228,7 @@ class DiscordWebAPI:
         fernet_key: str | bytes | None = None,
         base_url: str | None = None,
         redirect_uri: str | None = None,
+        mobile_redirect_uri: str | None = None,
         db_path: str | Path | None = None,
         database_url: str | None = None,
         title: str = "discord-webapi",
@@ -259,6 +260,14 @@ class DiscordWebAPI:
         composable API: construct `DiscordAuth`/`DiscordWebAPI` yourself
         (see the class docstring) for a different transport, a different
         storage backend, or multiple bots.
+
+        `mobile_redirect_uri`, if set, enables `/auth/discord/login?mobile=true`
+        (see `DiscordAuth`'s docstring) -- useful for testing without ever
+        having to read a cookie out of a browser: after completing the
+        Discord login, the browser lands on `mobile_redirect_uri` with
+        `session_id` right there in the URL's query string to copy, which
+        you then send as `Authorization: Bearer <session_id>` on every
+        request instead of a cookie.
         """
         from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -294,6 +303,7 @@ class DiscordWebAPI:
             encryption_keys=key,
             cookie_secure=base_url.startswith("https://"),
             session_store=SQLSessionStore(engine),
+            mobile_redirect_uri=mobile_redirect_uri,
         )
         api = cls(
             bot=bot,

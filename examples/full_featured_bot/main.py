@@ -17,6 +17,8 @@ Run:
     uvicorn main:app --reload --app-dir examples/full_featured_bot
 """
 
+import os
+
 from discord.ext import commands
 
 from discord_webapi import DiscordWebAPI
@@ -52,6 +54,15 @@ setup_warn(bot, auto_timeout_after=3, auto_timeout_minutes=10)
 # test server to actually see the welcome message on a new member join.
 setup_welcome(bot, channel_id=None)
 
+# Enables GET /auth/discord/login?mobile=true -- useful for testing
+# without ever reading a cookie out of a mobile browser: after Discord
+# login, the browser lands here with `?session_id=...` right there in the
+# URL to copy, then you send it as `Authorization: Bearer <session_id>`
+# on every request (curl, ws_test_client.py, ...) instead of a cookie.
+# There's no real page at this path -- you're only reading the URL bar,
+# a 404 here is expected and fine.
+_base_url = os.environ.get("DASHBOARD_BASE_URL", "http://localhost:8000")
+
 app = DiscordWebAPI.quickstart(
     bot=bot,
     enable_websocket=True,
@@ -61,4 +72,5 @@ app = DiscordWebAPI.quickstart(
         "This test dashboard uses a cookie to keep your login session. "
         "Continuing means you're OK with that."
     ),
+    mobile_redirect_uri=f"{_base_url}/mobile-login-done",
 )

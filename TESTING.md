@@ -36,22 +36,45 @@ madde 8'de bu script kullanılıyor.
 
 ## 2. Mobil / Bearer Token Akışı
 
-(Bu adım için `DiscordAuth(mobile_redirect_uri=...)` ayarlı olmalı — kendi
-test dosyanda bunu ekleyip botu yeniden başlat.)
+`examples/full_featured_bot`'ta bu zaten açık (`mobile_redirect_uri`
+`DASHBOARD_BASE_URL + "/mobile-login-done"` olarak ayarlı). **Bu akış,
+mobilde tarayıcı cookie'si kazmadan test yapmanın en pratik yolu** —
+madde 3 ve sonrasındaki tüm `curl` komutları için `session_id`'yi burada
+alacaksın.
 
 - [ ] `http://localhost:8000/auth/discord/login?mobile=true` aç.
-- [ ] Onay sonrası tarayıcının `mobile_redirect_uri`'ye `?session_id=...&expires_at=...` query param'larıyla yönlendirildiğini doğrula (custom URL scheme kullanıyorsan tarayıcı "bu linki açacak uygulama yok" diyebilir — o zaman network sekmesinden redirect URL'ini oku).
+- [ ] Discord'da onayla → tarayıcı `http://localhost:8000/mobile-login-done?session_id=...&expires_at=...` adresine yönlenir. Bu path'te gerçek bir sayfa yok, **404 görmen normal** — önemli olan adres çubuğundaki `session_id` değerini kopyalaman.
 - [ ] O `session_id` değeriyle `curl -H "Authorization: Bearer <session_id>" http://localhost:8000/auth/discord/me` çağır → aynı kullanıcı bilgisinin döndüğünü doğrula (cookie olmadan, sadece header ile).
 - [ ] Aynı bearer token ile `logout` sonrası tekrar `/me` çağır → 401 döndüğünü doğrula.
+- [ ] Bu `session_id`'yi bir yere not et (ör. Termux'ta `export DWA_SESSION=<değer>`) — aşağıdaki tüm adımlarda tekrar kullanacaksın.
 
 ## 3. Komut Listeleme ve Enable/Disable (canlı, restart'sız)
 
-- [ ] Botta en az 2-3 farklı komut tanımlı olsun (biri slash/hybrid, biri prefix — örnek dosyada zaten var).
-- [ ] `GET /api/guilds/{guild_id}/commands` çağır → tüm komutların (isim, açıklama, kategori, enabled, cooldown alanları, `invocation_count`) listelendiğini doğrula.
+**Önemli**: `GET`'i tarayıcı adres çubuğuna yapıştırabilirsin, ama `PATCH`
+adres çubuğundan **yapılamaz** — tarayıcı adres çubuğu her zaman GET
+isteği yapar, bu yüzden bir PATCH endpoint'ini tarayıcıdan açmaya
+çalışırsan "Method Not Allowed" (405) alırsın; bu bir hata değil, yanlış
+araç kullanmak. PATCH için `curl` kullan (Termux'ta hazır gelir). Madde
+2'de aldığın `session_id`'yi burada `Authorization: Bearer` header'ı
+olarak kullanıyoruz — cookie'yle uğraşmana gerek yok.
+
+- [ ] Botta en az 2-3 farklı komut tanımlı olsun (biri slash/hybrid, biri prefix — `full_featured_bot`'ta zaten var: `ping`, `say`, `ban`, `kick`, `timeout`, `warn`).
+- [ ] `GET /api/guilds/{guild_id}/commands` çağır (tarayıcıdan doğrudan açabilirsin, ama login cookie'si göndermesi için aynı tarayıcıda login olmuş olman lazım — yoksa `curl` kullan):
+  ```
+  curl -H "Authorization: Bearer $DWA_SESSION" \
+      http://localhost:8000/api/guilds/<guild_id>/commands
+  ```
+  → tüm komutların (isim, açıklama, kategori, enabled, cooldown alanları, `invocation_count`) listelendiğini doğrula.
 - [ ] Discord'da botun bir komutunu çalıştır (ör. `/kick` veya `!kick`) → başarıyla çalıştığını doğrula.
-- [ ] `PATCH /api/guilds/{guild_id}/commands/{command_name}` ile `{"enabled": false}` gönder.
+- [ ] Komutu kapat:
+  ```
+  curl -X PATCH -H "Authorization: Bearer $DWA_SESSION" \
+      -H "Content-Type: application/json" \
+      -d '{"enabled": false}' \
+      http://localhost:8000/api/guilds/<guild_id>/commands/ping
+  ```
 - [ ] **Botu yeniden başlatmadan** Discord'da aynı komutu tekrar çalıştırmayı dene → komutun artık çalışmadığını (sessizce reddedildiğini) doğrula. Hem slash hem prefix/hybrid komutlarda ayrı ayrı dene.
-- [ ] `{"enabled": true}` ile geri aç → komutun tekrar çalıştığını doğrula.
+- [ ] Aynı curl komutunu `{"enabled": true}` ile tekrar çalıştır → komutun tekrar çalıştığını doğrula.
 
 ## 4. Cooldown
 

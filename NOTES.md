@@ -92,6 +92,25 @@ ilkiyle başlamayı seçti — **hepsini istiyor, sırayla ekleyeceğiz**.
   testleri, `test_consent_api.py`'de banner+API'nin aynı versiyonu
   paylaştığını doğrulayan uçtan uca test. 158 test yeşil, ruff+mypy temiz.
 
+## Termux fiziksel test sürecinde çıkan iki gerçek sorun (çözüldü)
+
+1. **Kullanıcı projeyi Android paylaşılan depolamada (`/storage/emulated/0/...`)
+   çalıştırıyordu** — bu Android FUSE katmanı symlink desteklemiyor, `python -m
+   venv` bu yüzden `Permission denied: 'lib' -> '.venv/lib64'` hatası verdi, ve
+   git clone bazı dosyaları (ör. `.env.example`) düzgün yazamadı. **Kod
+   tarafında bir bug değildi** — çözüm: projeyi Termux'un kendi ev dizininde
+   (`~`, yani `/data/data/com.termux/files/home/...`) çalıştırmak.
+2. **`quickstart()`'ta `mobile_redirect_uri` parametresi yoktu** — kullanıcı
+   `PATCH` gerektiren bir endpoint'i tarayıcı adres çubuğuna yazıp "Not
+   Allowed" (405) aldı; asıl sorun mobilde PATCH+auth header göndermenin
+   pratik bir yolu olmamasıydı (cookie mobil tarayıcıda kolay okunamıyor).
+   **Fix**: `DiscordWebAPI.quickstart(mobile_redirect_uri=...)` eklendi,
+   `examples/full_featured_bot/main.py`'de varsayılan olarak açıldı
+   (`{base_url}/mobile-login-done` — gerçek bir sayfa yok, sadece
+   `session_id`'yi URL'den okumak için). `TESTING.md` madde 2 ve 3 artık bu
+   akışı ve somut `curl -X PATCH -H "Authorization: Bearer ..."` komutlarını
+   içeriyor.
+
 ## Bir sonraki oturumda muhtemel işler (kullanıcı üçünü de istiyor, sırada)
 
 1. **Multi-bot/shard routing** — birden fazla bot instance/shard'ın aynı
