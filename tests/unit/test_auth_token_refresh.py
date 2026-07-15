@@ -59,6 +59,10 @@ async def test_refresh_updates_session_when_discord_token_expired() -> None:
     stored = await auth.session_store.get(session.session_id)
     assert stored is not None
     assert auth._decrypt(stored.encrypted_access_token) == "new-access"
+    # The per-session refresh lock must be evicted once done -- otherwise
+    # this dict grows by one entry per session that ever refreshed and
+    # never shrinks for the life of the process.
+    assert session.session_id not in auth._refresh_locks
 
 
 @respx.mock

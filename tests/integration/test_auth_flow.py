@@ -7,13 +7,16 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from discord_webapi.auth import DiscordAuth
+from discord_webapi.ratelimit import TokenBucketLimiter
 
 TOKEN_URL = "https://discord.com/api/v10/oauth2/token"
 ME_URL = "https://discord.com/api/v10/users/@me"
 GUILDS_URL = "https://discord.com/api/v10/users/@me/guilds"
 
 
-def _make_app() -> tuple[FastAPI, DiscordAuth]:
+def _make_app(
+    *, session_management_rate_limiter: TokenBucketLimiter | None = None
+) -> tuple[FastAPI, DiscordAuth]:
     app = FastAPI()
     auth = DiscordAuth(
         client_id="test-client-id",
@@ -22,6 +25,7 @@ def _make_app() -> tuple[FastAPI, DiscordAuth]:
         encryption_keys=Fernet.generate_key(),
         cookie_secure=False,
         login_success_redirect="/dashboard",
+        session_management_rate_limiter=session_management_rate_limiter,
     )
     auth.install(app)
     return app, auth
@@ -186,3 +190,18 @@ def test_revoke_someone_elses_session_returns_404() -> None:
     # sanity: the caller's own session is unaffected
     me_resp = client.get("/auth/discord/me")
     assert me_resp.status_code == 200
+
+
+@respx.mock
+def test_list_sessions_rate_limit_returns_429_when_exceeded() -> None:
+    app, _auth = _make_app(session_management_rate_limiter=TokenBucketLimiter(1, 60.0))
+    client = TestClient(app)
+    state = _login_and_get_state(client)
+    _mock_discord_endpoints(respx.mock)
+    client.get(f"/auth/discord/callback?code=some-code&state={state}", follow_redirects=False)
+
+    first = client.get("/auth/discord/sessions")
+    second = client.get("/auth/discord/sessions")
+
+    assert first.status_code == 200
+    assert second.status_code == 429

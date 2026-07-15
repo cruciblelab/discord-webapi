@@ -13,10 +13,12 @@ from starlette.requests import HTTPConnection
 
 from discord_webapi.auth.models import DiscordUser, SessionSummary
 from discord_webapi.exceptions import InvalidStateError, SessionExpiredError
+from discord_webapi.ratelimit import TokenBucketLimiter
 from discord_webapi.storage.base import Session, SessionStore
 from discord_webapi.storage.memory import MemorySessionStore
 
 _STATE_COOKIE_MAX_AGE_SECONDS = 300
+_DEFAULT_SESSION_MANAGEMENT_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
 _TOKEN_REFRESH_SKEW = timedelta(seconds=60)
 _MOBILE_STATE_SUFFIX = ".mobile"
 
@@ -77,6 +79,7 @@ class DiscordAuth:
         mobile_redirect_uri: str | None = None,
         api_base_url: str = "https://discord.com/api/v10",
         http_client: httpx.AsyncClient | None = None,
+        session_management_rate_limiter: TokenBucketLimiter | None = None,
     ) -> None:
         self.client_id = client_id
         self.client_secret = client_secret
@@ -96,6 +99,14 @@ class DiscordAuth:
         self._fernet = MultiFernet([Fernet(key) for key in keys])
         self._external_http_client = http_client
         self._refresh_locks: dict[str, asyncio.Lock] = {}
+        # Protects /logout, /sessions, and /sessions/{id} (all reachable
+        # with just a session cookie/bearer token, no permission check
+        # beyond authentication) from being hammered by a compromised
+        # low-trust session -- same threat model as the commands/app-roles
+        # PATCH/PUT/DELETE endpoints' rate limiting.
+        self._session_management_limiter = (
+            session_management_rate_limiter or _DEFAULT_SESSION_MANAGEMENT_LIMITER
+        )
 
     def install(self, app: FastAPI) -> None:
         app.state.discord_webapi_auth = self
@@ -174,6 +185,7 @@ class DiscordAuth:
                 request
             )
             if session_id:
+                self._session_management_limiter.check(session_id)
                 await self.session_store.delete(session_id)
             response = Response(status_code=status.HTTP_204_NO_CONTENT)
             response.delete_cookie(self.session_cookie_name, domain=self.cookie_domain)
@@ -186,6 +198,7 @@ class DiscordAuth:
         @router.get("/sessions")
         async def list_sessions(request: Request) -> list[SessionSummary]:
             user = await self.get_current_user(request)
+            self._session_management_limiter.check(str(user.id))
             current_session_id = request.cookies.get(
                 self.session_cookie_name
             ) or _extract_bearer_token(request)
@@ -203,6 +216,7 @@ class DiscordAuth:
         @router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
         async def revoke_session(session_id: str, request: Request) -> Response:
             user = await self.get_current_user(request)
+            self._session_management_limiter.check(str(user.id))
             session = await self.session_store.get(session_id)
             if session is None or session.user_id != user.id:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found")
@@ -330,24 +344,35 @@ class DiscordAuth:
             return session
 
         lock = self._refresh_locks.setdefault(session.session_id, asyncio.Lock())
-        async with lock:
-            # Re-read: a concurrent request may have already refreshed while we waited.
-            current = await self.session_store.get(session.session_id)
-            if current is None:
-                raise SessionExpiredError(f"Session {session.session_id} no longer exists")
-            if current.discord_token_expires_at - _TOKEN_REFRESH_SKEW > _now():
-                return current
+        try:
+            async with lock:
+                # Re-read: a concurrent request may have already refreshed while we waited.
+                current = await self.session_store.get(session.session_id)
+                if current is None:
+                    raise SessionExpiredError(f"Session {session.session_id} no longer exists")
+                if current.discord_token_expires_at - _TOKEN_REFRESH_SKEW > _now():
+                    return current
 
-            refresh_token = self._decrypt(current.encrypted_refresh_token)
-            token_data = await self._exchange("refresh_token", refresh_token=refresh_token)
+                refresh_token = self._decrypt(current.encrypted_refresh_token)
+                token_data = await self._exchange("refresh_token", refresh_token=refresh_token)
 
-            new_expiry = _now() + timedelta(seconds=token_data["expires_in"])
-            updated = current.model_copy(
-                update={
-                    "encrypted_access_token": self._encrypt(token_data["access_token"]),
-                    "encrypted_refresh_token": self._encrypt(token_data["refresh_token"]),
-                    "discord_token_expires_at": new_expiry,
-                }
-            )
-            await self.session_store.update(updated)
-            return updated
+                new_expiry = _now() + timedelta(seconds=token_data["expires_in"])
+                updated = current.model_copy(
+                    update={
+                        "encrypted_access_token": self._encrypt(token_data["access_token"]),
+                        "encrypted_refresh_token": self._encrypt(token_data["refresh_token"]),
+                        "discord_token_expires_at": new_expiry,
+                    }
+                )
+                await self.session_store.update(updated)
+                return updated
+        finally:
+            # Evict once we're done with it -- otherwise this dict grows by
+            # one entry per session that ever needed a refresh and never
+            # shrinks, for the lifetime of the process. Safe to drop here:
+            # any task still waiting on `lock` already holds its own
+            # reference to this same Lock object (grabbed via `setdefault`
+            # before we could remove it), so removing the dict entry only
+            # affects the *next* session to need a lock -- it gets a fresh
+            # one, and immediately re-reads current state above regardless.
+            self._refresh_locks.pop(session.session_id, None)

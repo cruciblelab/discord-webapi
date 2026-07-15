@@ -1,6 +1,35 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## v0.5 — genişleme: `GET /api/guilds`, oturum yönetimi (bu oturumda tamamlandı)
+## Kapsamlı güvenlik denetimi (v0.5 sonrası, bu oturumda tamamlandı)
+
+Genişleme bittikten sonra planlanmış olan tam kapsamlı güvenlik denetimi
+bir subagent ile yapıldı (diff değil, tüm paket okunarak). Sonuç: mimari
+zaten sağlam çıktı (OAuth2 state/CSRF `secrets.compare_digest` ile doğru,
+session cookie flag'leri doğru, SQL tamamen ORM üzerinden/injection riski
+yok, authz guild/channel'a fail-closed, `GET /api/guilds` client input'una
+güvenmiyor, token'lar hiçbir yerde loglanmıyor). İki gerçek bug bulundu ve
+düzeltildi:
+
+1. Session-management endpoint'lerinde (`logout`, `sessions` GET/DELETE)
+   rate limit yoktu — eklendi (`DiscordAuth(session_management_rate_limiter=...)`).
+   Bunu yaparken `TokenBucketLimiter` sınıfı `discord_webapi/ratelimit.py`'ye
+   (bağımsız, auth'a hiç import etmeyen bir modül) taşındı çünkü
+   `commands.ratelimit`'i doğrudan auth/oauth.py'den import etmek circular
+   import'a yol açıyordu (`auth.oauth → commands.ratelimit →
+   auth.dependencies → auth.oauth`). `commands/ratelimit.py` artık sadece
+   re-export + `rate_limit_dependency` (FastAPI `Depends` sarmalayıcısı,
+   hâlâ auth'a bağımlı, ama artık `TokenBucketLimiter`'ın kendisi değil).
+2. `DiscordAuth._refresh_locks` dict'i asla küçülmüyordu — token refresh
+   gereken her session için kalıcı bir lock birikirdi. `finally` bloğunda
+   evict edilecek şekilde düzeltildi.
+
+Düşük öncelikli, düzeltilmeyen bulgular: `commands/ratelimit.py`'nin
+`_buckets` dict'i de aynı şekilde sınırsız büyüyor (sadece bellek, auth
+bypass değil) — ileride bakılabilir. RedisTransport'un pub/sub kanalları
+imzasız (Redis'in kendisi güvenilir altyapı olmalı varsayımı, docstring'de
+zaten belirtiliyor ama daha net bir uyarı eklenebilir).
+
+## v0.5 — genişleme: `GET /api/guilds`, oturum yönetimi (tamamlandı)
 
 Hardening turu bittikten sonra kullanıcının "ikisini de yap" dediği iki
 genişleme özelliği:

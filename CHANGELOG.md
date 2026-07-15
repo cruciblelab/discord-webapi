@@ -2,6 +2,23 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Kapsamlı güvenlik denetimi (genişleme sonrası)
+
+Genişleme (v0.5) bittikten sonra planlanan kapsamlı güvenlik denetimi
+yapıldı. Auth (OAuth2 state/CSRF, session cookie flag'leri, Fernet
+şifreleme, token refresh race), authz (guild/channel-scoped fail-closed
+kontroller), yeni `guilds`/oturum yönetimi endpoint'leri, transport
+(Redis pub/sub güven sınırı), SQL storage (injection, secret loglama) ve
+rate limiting kapsamı incelendi. Çoğu alan zaten sağlamdı; iki gerçek bug
+bulunup düzeltildi:
+
+- **`/auth/discord/logout`, `/auth/discord/sessions`, `/auth/discord/sessions/{id}` hiç rate-limit'li değildi** — commands/app-roles PATCH/PUT/DELETE endpoint'lerinin aksine. Çalınmış bir düşük-güvenli oturum (ör. sızmış mobil bearer token) bu endpoint'leri brute-force/abuse için kullanabilirdi. **Fix**: aynı `TokenBucketLimiter` deseni (`DiscordAuth(session_management_rate_limiter=...)` ile özelleştirilebilir). `TokenBucketLimiter` sınıfı, `auth`↔`commands` arasında circular import'a yol açmadan paylaşılabilmesi için bağımsız bir `discord_webapi/ratelimit.py` modülüne taşındı (`commands.ratelimit` hâlâ geriye dönük uyumlu şekilde re-export ediyor).
+- **`DiscordAuth._refresh_locks` sınırsız büyüyordu** — token refresh gereken her session için bir `asyncio.Lock` oluşturuluyordu ama asla silinmiyordu, process'in ömrü boyunca. **Fix**: refresh tamamlandıktan sonra `finally` bloğunda lock dict'ten siliniyor (aynı anda bekleyen başka bir task'ın kendi referansı zaten elinde olduğu için güvenli).
+
+Diğer bulgular: `commands/ratelimit.py`'deki `_buckets` dict'i de aynı desende sınırsız büyüyor (düşük öncelik, bellek-only, auth bypass değil) — şimdilik düzeltilmedi. RedisTransport'un pub/sub kanallarında imzalama/auth yok — bilinçli güven sınırı olarak dokümante edilmiş durumda (Redis'in kendisi güvenilir altyapı olmalı). SQL storage tamamen ORM üzerinden, raw string interpolation yok; token'lar sadece şifreli (Fernet) tutuluyor, hiçbir yerde loglanmıyor.
+
+178 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — Genişleme: sunucu listesi, oturum yönetimi
 
 ### Eklenenler
