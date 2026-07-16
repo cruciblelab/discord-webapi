@@ -31,6 +31,30 @@ Sadece dokümantasyon prose'u değil, iddia edilen her senaryonun gerçekten
 
 376 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
 
+### 5 senaryo daha eklendi (toplam 10)
+
+Kullanıcının isteğiyle "derinlemesine örnekler" 5'ten 10'a çıkarıldı,
+yine her biri gerçek testle kanıtlanmış:
+6. Prefix ve slash komutun tek bir handler'ı paylaşması (kod tekrarını
+   önleme), varsayılan olarak aynı rate-limit bucket'ını paylaştıklarını
+   gösteren test dahil.
+7. Dıştaki bir izin kontrolünün (ör. `commands.has_permissions`), altındaki
+   rate-limit decorator'ı hiç çalıştırmadan reddetmesi — ve admin'i rate
+   limit'in KENDİSİNDEN muaf tutmak isterseniz bunun decorator
+   istiflemesi değil, handler içinde manuel bir kontrol gerektirdiğinin
+   iki ayrı testle netleştirilmesi.
+8. Birden fazla komutun aynı `rate_limit_key`'i paylaşarak ortak bir
+   günlük kota oluşturması.
+9. `rate_limited_message`'ın özelleştirilmesi/lokalize edilmesi.
+10. `MemoryRateLimitStore` yerine `SQLRateLimitStore` ile birebir aynı
+    kodun çalışması, kuralın gerçekten kalıcı olduğunun (yeni bir
+    `GuildRateLimiter` örneğinin aynı store'dan kuralı görmesiyle)
+    kanıtlanması.
+
+5 yeni test (`tests/integration/test_skeletons_deep_dive.py`, toplam 10
+test o dosyada), 381 test yeşil (1 ortam-bağımlı Postgres testi hariç),
+ruff+mypy temiz.
+
 ## [Unreleased] — v0.6: `discord_webapi.escalation` — genel, tamamen kullanıcı-tanımlı eskalasyon motoru
 
 ### Eklenenler

@@ -240,6 +240,159 @@ different guild can leave both at your library-wide defaults, or turn the
 ladder just counts, does nothing — see `discord_webapi.escalation`'s own
 docs for why that's the default, not a `none` rule you'd have to write).
 
+### 6. One handler shared between the prefix and slash version — no duplicated logic
+
+The decorator works on plain `async def` functions, so nothing stops you
+from writing the actual logic once and registering it twice:
+
+```python
+async def _ping_body(reply) -> None:
+    await reply("pong")
+
+@bot.command(name="ping")
+@ping(rate_limiter=api.rate_limiter)
+async def ping_cmd(ctx):
+    await _ping_body(ctx.reply)
+
+@bot.tree.command(name="ping")
+@ping(rate_limiter=api.rate_limiter)
+async def ping_slash(interaction: discord.Interaction):
+    await _ping_body(lambda msg: interaction.response.send_message(msg))
+```
+
+Both get their own independent rate-limit bucket by default
+(`rate_limit_key="ping"` for both, since it's the same skeleton call) —
+pass a different `rate_limit_key` to one of them if you want the prefix
+and slash versions to count separately instead of sharing one bucket.
+
+### 7. Restricting a command to admins, with our rate limit still underneath
+
+The skeleton doesn't know anything about roles or permissions — that
+check is exactly the kind of thing you write yourself, stacked around
+ours. Decorators apply bottom-up, so whichever one you put *outermost*
+runs *first* and can reject the call before anything below it (including
+our rate-limit check) ever executes:
+
+```python
+@bot.command(name="announce")
+@dpy_commands.has_permissions(administrator=True)  # outermost -- runs first
+@rate_limited("announce", rate_limiter=api.rate_limiter)
+async def announce_cmd(ctx, *, message: str):
+    await ctx.send(message)
+```
+
+A non-admin is rejected by `has_permissions` before our decorator ever
+sees the call. An admin passes the permission gate and is *still* subject
+to the `"announce"` rate limit underneath — stacking order restricts
+*who can call the command at all*, it doesn't exempt anyone from a check
+that runs further in.
+
+If you actually want admins **exempt from the rate limit itself** (not
+just allowed to call the command), that's a conditional inside your own
+handler rather than decorator stacking — skip the decorator and call
+`GuildRateLimiter.check(...)` yourself:
+
+```python
+@bot.command(name="announce")
+async def announce_cmd(ctx, *, message: str):
+    is_admin = ctx.author.guild_permissions.administrator
+    if not is_admin:
+        allowed = await api.rate_limiter.check(
+            ctx.guild.id, "announce", sub_key=str(ctx.author.id)
+        )
+        if not allowed:
+            await ctx.reply("Slow down!", ephemeral=True)
+            return
+    await ctx.send(message)
+```
+
+### 8. Several different commands sharing one daily quota
+
+`rate_limit_key` doesn't have to match the command name — pass the same
+key to several different skeleton-wrapped commands and they all draw
+from one shared bucket, e.g. a combined "AI-backed commands" daily quota
+instead of a separate limit per command:
+
+```python
+@bot.command(name="summarize")
+@rate_limited("ai-quota", rate_limiter=api.rate_limiter)
+async def summarize_cmd(ctx, *, text: str):
+    await ctx.reply(call_llm(f"Summarize: {text}"))
+
+@bot.command(name="translate")
+@rate_limited("ai-quota", rate_limiter=api.rate_limiter)
+async def translate_cmd(ctx, *, text: str):
+    await ctx.reply(call_llm(f"Translate: {text}"))
+```
+
+Configure the shared quota once:
+`PUT /api/guilds/{id}/ratelimits/ai-quota {"max_calls": 20, "per_seconds": 86400}`
+— 20 calls per day total across *both* commands, per user, per guild.
+
+### 9. Customizing (or localizing) the rate-limited reply
+
+`rate_limited_message` is just a string you pass in — nothing stops you
+from picking it per-guild, per-locale, or generating it dynamically by
+wrapping the decorator call in your own small helper:
+
+```python
+GUILD_LOCALES = {123456789: "tr", 987654321: "en"}
+
+MESSAGES = {
+    "tr": "Yavaş ol! Biraz sonra tekrar dene.",
+    "en": "Slow down! Try again in a moment.",
+}
+
+def localized_ping(guild_id: int):
+    locale = GUILD_LOCALES.get(guild_id, "en")
+    return ping(rate_limiter=api.rate_limiter, rate_limited_message=MESSAGES[locale])
+
+# picking the decorator per-guild means registering per-guild commands,
+# which is unusual for a single global bot -- the more common shape is a
+# single rate_limited_message that itself looks the locale up:
+
+async def _localized_message(ctx) -> str:
+    return MESSAGES.get(GUILD_LOCALES.get(ctx.guild.id), MESSAGES["en"])
+```
+
+In practice, if you need real per-invocation dynamic messages (not just a
+static string), it's simplest to skip the decorator's built-in reply and
+call `GuildRateLimiter.check(...)` yourself inside the handler — see
+`examples/full_featured_bot/main.py`'s hand-written `/ping` for exactly
+that shape.
+
+### 10. Backed by Postgres/MySQL instead of memory — the same code, in production
+
+Every example above works identically whether `api.rate_limiter` is
+backed by `MemoryRateLimitStore` (what `DiscordWebAPI()` uses if you
+don't pass a store) or `SQLRateLimitStore` (what `DiscordWebAPI.quickstart()`
+wires up automatically) — the skeleton, the decorator, your handler, none
+of it changes:
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine
+from discord_webapi import DiscordWebAPI
+from discord_webapi.storage.sql import SQLRateLimitStore
+
+engine = create_async_engine("postgresql+asyncpg://user:pass@host/db")
+api = DiscordWebAPI(
+    bot=bot,
+    transport=transport,
+    auth=auth,
+    rate_limit_store=SQLRateLimitStore(engine),  # only line that changed
+)
+
+@bot.command(name="ping")
+@ping(rate_limiter=api.rate_limiter)  # identical to every example above
+async def ping_cmd(ctx):
+    await ctx.reply("pong")
+```
+
+Every `PUT /api/guilds/{id}/ratelimits/{key}` from scenario 1 now
+persists to Postgres and survives a restart, instead of resetting with
+an in-memory store — nothing about the command or the decorator needed
+to know that.
+
 ## What's here so far
 
 - `_shared.py::rate_limited(key, *, rate_limiter=None, ...)` — the
