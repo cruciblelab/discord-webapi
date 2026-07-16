@@ -64,29 +64,28 @@ Aşağıda önceliklendirildi.
 ### P0 — Kritik bug/eksik
 _Şu an boş._ Bilinen tüm gerçek bug'lar bu oturumda kapatıldı.
 
-### P1 — DX + eksikler (bir sonraki tur)
+### P1 — DX + eksikler
 
-**P1.1 — `extras` ergonomik export'ları.**
-Şu an `from discord_webapi.extras.ban import setup as setup_ban` gerekiyor.
-`extras/__init__.py`'ye kontrollü, yan-etkisiz export ekle: `from
-discord_webapi.extras import ban, automod, warn` (modül referansı, `setup`
-çağrısını yine kullanıcı yapar — "import registers nothing" ilkesi
-korunur). Tek dosyaya bağımlılık eklemeden, sadece isim erişimi.
+**P1.1 — `extras` ergonomik export'ları.** ✅ **TAMAMLANDI.**
+`extras/__init__.py`'ye lazy `__getattr__` + `__all__` + `__dir__` eklendi:
+`from discord_webapi.extras import ban, warn` (zaten çalışıyordu) VE
+`discord_webapi.extras.ban` (yeni, attribute erişimi) + tab-completion,
+submodülleri eager import etmeden ("import registers nothing" korundu —
+her submodül ancak ilk dokunuşta import ediliyor).
 
-**P1.2 — Daha net hata rehberliği.**
-`enable_jobs=True` ama `job_queue=None` gibi durumlarda hata mesajı "ne
-yapmalıyım"ı söylesin (şu an `RuntimeError("job_queue")` — genişletilecek).
-Aynısı: `required_app_role` ayarlı ama `app_role_cache` yok (şu an sessiz
-fail-closed — bir uyarı log'u eklenebilir).
+**P1.2 — Daha net hata rehberliği.** ✅ **TAMAMLANDI.**
+`enable_jobs=True`/`job_queue=None` mesajı zaten net'ti (dokunulmadı).
+Asıl sessiz-hata boşluğu kapatıldı: `required_app_role` ayarlı ama
+`app_role_cache` yoksa artık fail-closed'a ek olarak bir `WARNING` log'u
+atıyor ("neden komutum hep reddediliyor?" sessiz bug'ı yerine).
 
-**P1.3 — İki eksik örnek.**
+**P1.3 — İki eksik örnek.** ✅ **TAMAMLANDI.**
 - `examples/skeleton_custom_command/`: `skeletons.rate_limited` ile kendi
-  `rate_limit_key`'ini kullanarak sıfırdan komut yazma (README'deki
-  senaryoların çalışan tek-dosya hâli).
+  `rate_limit_key`'ini kullanarak sıfırdan komut yazma.
 - `examples/hybrid_moderation/`: `automod` (`on_violation`) → `warn` +
-  `EscalationEngine` üçlüsünü bir arada kullanan tam hibrit moderasyon
-  örneği. (`full_featured_bot` bunu içeriyor ama odaklı bir örnek daha
-  öğretici.)
+  `EscalationEngine` üçlüsü — her biri kendi şeridinde, punishment ladder'ı
+  %100 dashboard'dan yapılandırılabilir. İkisi de fake env ile uçtan uca
+  build doğrulandı (app + komutlar + listener'lar kuruluyor).
 
 **P1.4 — Audit log kapsamını genişlet (opt-in).**
 Şu an sadece `command.set_override`/`app_role.set`/`app_role.delete`

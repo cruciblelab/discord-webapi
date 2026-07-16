@@ -37,4 +37,57 @@ shows it applying just as well to a Gateway event listener
 (`on_member_join`), and `warn.py` shows it applying to a builtin with its
 own persistent state (a `WarnStore` Protocol, following the exact same
 Memory/SQL shape as `AuditStore`/`ConsentStore`).
+
+Ergonomics: the submodules are reachable both as `from discord_webapi.extras
+import ban, warn` (plain submodule import) and as attributes,
+`discord_webapi.extras.ban`, via the lazy `__getattr__` below. The lazy
+import matters -- it keeps `import discord_webapi.extras` itself
+side-effect-free and cheap (it does NOT eagerly import every command
+module, so importing the package still "registers nothing" and doesn't pay
+for modules you won't use). Each submodule is imported only the first time
+you actually touch it.
 """
+
+from importlib import import_module
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from discord_webapi.extras import (
+        automod,
+        ban,
+        kick,
+        role_assign,
+        skeletons,
+        timeout,
+        warn,
+        welcome,
+    )
+
+# The public submodules, exposed for attribute access + tab-completion
+# without eagerly importing them. `_shared` is intentionally omitted from
+# this convenience list (it's the shared-helpers module, still importable
+# directly) to keep the surface pointed at "things you setup()".
+_SUBMODULES = frozenset(
+    {"ban", "kick", "timeout", "warn", "welcome", "role_assign", "automod", "skeletons"}
+)
+
+__all__ = [
+    "automod",
+    "ban",
+    "kick",
+    "role_assign",
+    "skeletons",
+    "timeout",
+    "warn",
+    "welcome",
+]
+
+
+def __getattr__(name: str) -> Any:
+    if name in _SUBMODULES:
+        return import_module(f"{__name__}.{name}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(__all__)

@@ -1,5 +1,23 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## P1 DX turu tamamlandı (extras export, hata rehberliği, 2 örnek)
+
+ROADMAP P1.1-P1.3 yapıldı:
+- **P1.1**: `extras/__init__.py`'ye lazy `__getattr__`/`__all__`/`__dir__` —
+  `discord_webapi.extras.ban` attribute erişimi + tab-completion, eager
+  import olmadan (`_SUBMODULES` frozenset'i, `_shared` bilerek dışında).
+- **P1.2**: `CommandRegistry._check_app_role` fail-closed dalına `WARNING`
+  log'u eklendi (`logging.getLogger("discord_webapi.commands")`). Grok'un
+  değindiği `enable_jobs`/`job_queue` mesajı zaten yeterince net'ti,
+  dokunulmadı.
+- **P1.3**: `examples/skeleton_custom_command/` (skeleton + custom rate
+  limit key) ve `examples/hybrid_moderation/` (automod on_violation → warn
+  + escalation, paylaşılan WarnStore). İkisi de fake env ile import edilip
+  app/komut/listener kuruluşu doğrulandı. Not: skeleton örneği komutu
+  app kurulduktan SONRA imperatif kaydediyor (`bot.hybrid_command(...)(
+  rate_limited(...)(fn))`) çünkü quickstart limiter'ı app kurulunca
+  yaratıyor; composable API kullansan decorator'ı inline stack'lerdin.
+
 ## v0.7: `discord_webapi.extensions` — üçüncü-taraf paket ekosistemi (bu oturumda tamamlandı)
 
 Kullanıcının vizyonu: insanlar bizim `extras`'ta yaptığımız gibi tam

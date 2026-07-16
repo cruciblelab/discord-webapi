@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import discord
+import pytest
 from discord.ext import commands as dpy_commands
 
 from discord_webapi.authz.app_roles import AppRoleCache
@@ -67,13 +68,20 @@ async def test_no_required_app_role_always_allows() -> None:
     assert await registry.global_check(_fake_ctx(user_id=1, role_ids=[])) is True
 
 
-async def test_required_app_role_denies_without_an_app_role_cache() -> None:
+async def test_required_app_role_denies_without_an_app_role_cache(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Fails closed: a required_app_role configured but no AppRoleCache
-    wired into the registry is a misconfiguration, not a free pass."""
+    wired into the registry is a misconfiguration, not a free pass -- and
+    it's logged as a warning so it doesn't look like a silent "why is my
+    command always rejected?" bug."""
     registry = await _build_registry(app_role_cache=None)
     _set_required_app_role(registry, "moderator")
 
-    assert await registry.global_check(_fake_ctx(user_id=1, role_ids=[])) is False
+    with caplog.at_level("WARNING", logger="discord_webapi.commands"):
+        assert await registry.global_check(_fake_ctx(user_id=1, role_ids=[])) is False
+
+    assert any("app_role_cache" in r.message for r in caplog.records)
 
 
 async def test_user_with_matching_discord_role_is_allowed() -> None:

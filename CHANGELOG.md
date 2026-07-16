@@ -2,6 +2,31 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — P1: DX iyileştirmeleri (extras export ergonomisi, hata rehberliği, 2 örnek)
+
+### Eklenenler / İyileştirildi
+
+- **`extras` ergonomik erişim**: `discord_webapi.extras.ban` gibi attribute
+  erişimi ve tab-completion artık çalışıyor (lazy `__getattr__` + `__all__`
+  + `__dir__`), submodülleri eager import etmeden — `import
+  discord_webapi.extras` hâlâ yan-etkisiz, her submodül ancak ilk
+  dokunuşta import ediliyor.
+- **`required_app_role` sessiz-hata düzeltmesi**: bir komutun
+  `required_app_role`'ü ayarlı ama `CommandRegistry` `app_role_cache`
+  olmadan kurulmuşsa (elle kurulum hatası; `DiscordWebAPI` bunu otomatik
+  bağlar), artık fail-closed'a ek olarak açıklayıcı bir `WARNING` log'u
+  atılıyor — "neden komutum hep reddediliyor?" sessiz durumu yerine.
+- **`examples/skeleton_custom_command/`**: `skeletons.rate_limited` ile
+  sıfırdan, kendi `rate_limit_key`'inle komut yazmanın odaklı örneği.
+- **`examples/hybrid_moderation/`**: `automod` (`on_violation`) → `warn` +
+  `EscalationEngine` üçlüsünün bir arada kullanımı — her sistem kendi
+  şeridinde, ceza-merdiveni %100 dashboard'dan yapılandırılabilir, hiçbir
+  şey hardcoded değil.
+
+1 yeni test (log warning), 419 test yeşil (1 ortam-bağımlı Postgres testi
+hariç), ruff+mypy temiz. Her iki örnek de sahte env ile uçtan uca build
+doğrulandı.
+
 ## [Unreleased] — v0.7: `discord_webapi.extensions` — üçüncü-taraf paket ekosistemi (plugin VM DEĞİL)
 
 ### Eklenenler

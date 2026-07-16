@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,6 +16,8 @@ from discord_webapi.storage.base import CommandConfigStore
 from discord_webapi.transport.base import Event, Transport
 
 _CooldownEntry = tuple[float, int, Cooldown, "CooldownMapping[Any]"]
+
+_log = logging.getLogger("discord_webapi.commands")
 
 
 def _per_user_bucket_key(ctx_or_interaction: Any) -> int:
@@ -194,6 +197,21 @@ class CommandRegistry:
         if override is None or override.required_app_role is None:
             return True
         if self.app_role_cache is None:
+            # Fail closed, but make the misconfiguration loud rather than a
+            # silent "why is my command always rejected?" -- a required_app_role
+            # is set for this command yet the registry has no AppRoleCache to
+            # check membership against. In the full DiscordWebAPI facade this
+            # never happens (it wires its own cache); it only bites someone
+            # constructing CommandRegistry by hand without one.
+            _log.warning(
+                "command %r in guild %s requires app-role %r but this CommandRegistry "
+                "was built without an app_role_cache; denying the call. Pass "
+                "app_role_cache=... to CommandRegistry(...) (DiscordWebAPI does this "
+                "for you) to actually enforce required_app_role.",
+                command_name,
+                guild_id,
+                override.required_app_role,
+            )
             return False
         return await self.app_role_cache.user_has_role(
             guild_id,
