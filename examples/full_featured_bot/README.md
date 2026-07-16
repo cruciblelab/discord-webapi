@@ -16,10 +16,12 @@ checklist.
   cookie-consent banner with custom message text.
 - Every builtin from `discord_webapi.builtins`: `ban`, `kick`, `timeout`,
   `warn` (with `auto_timeout_after=3` -- three warnings auto-mutes),
-  `role_assign` (`/role-add`/`/role-remove`), `automod` (banned-word +
-  spam filter, `banned_words=[]` by default -- add real words to see it
-  trigger), `welcome` (needs a real `channel_id` from your server -- see
-  the comment in `main.py`).
+  `role_assign` (`/role-add`/`/role-remove`), `automod` (a whole
+  subpackage of independent checks -- banned words, spam, mention-spam,
+  invite links, link domains, caps, emoji; `banned_words_list=[]` by
+  default -- add real words to see it trigger, invite-blocking is on),
+  `welcome` (needs a real `channel_id` from your server -- see the
+  comment in `main.py`).
 
 Everything else (`AppRole`, per-command cooldowns, multi-DB) isn't
 something you turn on in code -- it's configured live through the

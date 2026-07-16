@@ -1,6 +1,47 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## İki yeni builtin: rol atama, otomatik moderasyon (bu oturumda tamamlandı)
+## Automod'u tek dosyadan modüler alt pakete genişletme (bu oturumda tamamlandı)
+
+Kullanıcı ilk automod.py'yi (tek dosya, yasaklı kelime + basit spam) "çok
+basit" buldu, açıkça istedi: "automod ekleyeceksek automod klasörü
+içinde herşey ayrı klasör... o kadar kapsamlı olsun ki insanlar ya ping
+komutu 5-6 satırlık kod nasıl bu kadar kapsamlı yapabilirsiniz desin."
+
+Eski `discord_webapi/builtins/automod.py` silinip yerine
+`discord_webapi/builtins/automod/` alt paketi kondu:
+- `base.py` — `AutomodCheck` tipi (`Callable[[discord.Message], str | None]`).
+- `banned_words.py`, `spam.py`, `mention_spam.py`, `invite_filter.py`,
+  `link_filter.py`, `caps_spam.py`, `emoji_spam.py` — her biri
+  `make_check(**kwargs) -> AutomodCheck | None` şeklinde, `None` dönmesi
+  o kontrolün devre dışı olduğu anlamına geliyor (config'e göre otomatik
+  disable, ekstra `if enabled:` dallanması gerekmiyor `setup()`'ta).
+- `exemptions.py` — `is_exempt()`, moderatörleri (`manage_messages`) ve
+  yapılandırılmış rol/kanal muafiyetlerini kontrol ediyor, tüm
+  kontrollerden ÖNCE bir kere çalışıyor.
+- `__init__.py::setup()` — koordinatör: 7 kontrolü sırayla çalıştırıp ilk
+  ihlalde duruyor (`checks` listesi, `None` dönenler zaten filtrelenmiş),
+  sonra aksiyon: sil / kanal bildirimi / log-kanalı / `on_violation`
+  callback (async, mesaj+reason alıyor — `warn.py`'ye import bağımlılığı
+  olmadan consumer kendi entegrasyonunu yapabilsin diye).
+
+**Tasarım kararı — neden her check ayrı, saf, senkron bir fonksiyon**:
+Her kontrol hiç `await`/I/O içermiyor, sadece `discord.Message`'ın zaten
+Gateway cache'inde olan verisine bakıyor (aynı "ekstra fetch yok" ilkesi
+`authz/cache.py`/`commands/bridge.py`'de de var). Bu, her kontrolün düz
+bir sahte mesaj nesnesiyle (event loop bile gerekmeden) tek başına test
+edilebilmesini sağlıyor — `tests/unit/test_automod_*.py` altında 7 ayrı
+dosya, her biri kendi kontrolünü izole test ediyor, artı
+`test_automod_exemptions.py` ve koordinatörü uçtan uca test eden
+`test_automod_setup.py`.
+
+53 yeni automod testi (toplamda 294 test yeşil, 1 ortam-bağımlı Postgres
+testi hariç), ruff+mypy temiz. `examples/full_featured_bot/main.py`'a
+`setup_automod(bot, banned_words_list=[], block_invites=True)` olarak
+eklendi (parametre adı `banned_words` → `banned_words_list` oldu, tek
+dosyalık ilk sürümden farklı — `README.md`/`docs/OZELLIKLER.md` buna göre
+güncellendi).
+
+## İki yeni builtin: rol atama, otomatik moderasyon (bir önceki tur)
 
 Daha önce NOTES'ta "daha fazla builtin fikri: on_message otomatik
 moderasyon, rol-atama komutu — zamanı değil" diye not edilmişti; kullanıcı

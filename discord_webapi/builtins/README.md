@@ -65,13 +65,38 @@ registry.command_meta(category="moderation")(ban_command)
   hierarchy against the bot's own rank when a bot token makes the call,
   not the invoking human's, so this needs its own client-side guard for
   the same reason the member-targeting commands do.
-- `automod.py` — the second non-command builtin: a configurable
-  `on_message` listener with an independent banned-word filter and a
-  simple message-rate spam filter. Neither escalates to a ban/kick/timeout
-  or keeps a persistent strike count (that's `warn.py`'s job) -- this only
-  ever deletes a message and optionally posts a short in-channel notice.
-  Both checks are in-memory only, same "an evicted/reset counter is
-  harmless" reasoning as `commands.ratelimit.TokenBucketLimiter`.
+- `automod/` — the second non-command builtin, and the first that's a
+  whole subpackage rather than a single file: a coordinator
+  (`automod/__init__.py::setup()`) wiring together seven independent,
+  individually importable checks, each its own module:
+  - `banned_words.py` — case-insensitive, whole-word filter.
+  - `spam.py` — message-rate limiting (in-memory sliding window, same
+    "an evicted/reset counter is harmless" reasoning as
+    `commands.ratelimit.TokenBucketLimiter`).
+  - `mention_spam.py` — mass-mention/raid protection.
+  - `invite_filter.py` — blocks other servers' Discord invite links
+    (with an allowlist for specific codes).
+  - `link_filter.py` — generic URL domain allowlist/blocklist,
+    independent of the invite filter.
+  - `caps_spam.py` — excessive-caps ("SHOUTING") detection.
+  - `emoji_spam.py` — excessive custom/Unicode emoji detection.
+  - `exemptions.py` — who's skipped entirely (moderators with
+    `manage_messages` by default, plus configured role/channel
+    exemptions), applied once before any check runs.
+
+  Every check is a pure, synchronous, side-effect-free function of a
+  `discord.Message` (`Callable[[discord.Message], str | None]`, see
+  `automod/base.py`) -- no `await`, no I/O, trivially unit-testable with a
+  plain fake message object. `setup()` is the only thing that touches
+  Discord: it runs the enabled checks in order, stops at the first
+  violation, then deletes the message / posts a short in-channel notice /
+  posts a permanent log-channel entry / awaits your own `on_violation`
+  callback -- any combination, all independently toggleable. Like
+  `automod`'s single-file predecessor, this never escalates to a ban/
+  kick/timeout or keeps a persistent strike count itself (that's
+  `warn.py`'s job) -- wire `on_violation=` to bump a `WarnStore` if you
+  want the two working together, without `automod` needing to import
+  `warn.py` at all.
 
 Every database/cache/permission concern above stays a separate,
 composable piece — use one function from `_shared.py`, one whole builtin,

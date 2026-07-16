@@ -55,10 +55,12 @@ setup_kick(bot)
 setup_timeout(bot)
 setup_warn(bot, auto_timeout_after=3, auto_timeout_minutes=10)
 setup_role_assign(bot)
-# banned_words=[] means the word filter does nothing yet -- add real
-# words to see it in action. The spam filter is on by default (5
-# messages/10s).
-setup_automod(bot, banned_words=[])
+# banned_words_list=[] means the word filter does nothing yet -- add real
+# words to see it in action. Spam and mention-spam filters are on by
+# default (5 messages/10s, 5 mentions); invite/link/caps/emoji filters
+# are off by default -- see discord_webapi/builtins/README.md for all of
+# them.
+setup_automod(bot, banned_words_list=[], block_invites=True)
 # channel_id=None means this does nothing yet (see welcome.py's docstring)
 # -- it never guesses a channel. Set it to a real channel ID from your
 # test server to actually see the welcome message on a new member join.
