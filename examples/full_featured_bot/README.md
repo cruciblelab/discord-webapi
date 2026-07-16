@@ -23,6 +23,13 @@ checklist.
   `welcome` (needs a real `channel_id` from your server -- see the
   comment in `main.py`).
 
+- `enable_ratelimits_api=True` -- `PUT/DELETE /api/guilds/{id}/ratelimits/{key}`
+  dashboard endpoints. `main.py`'s hand-written `/ping` command
+  demonstrates the "hybrid" use case: it's not a `discord_webapi.builtins`
+  command and doesn't use `CommandRegistry`'s own per-command cooldown --
+  it calls `GuildRateLimiter` directly (`app.state.discord_webapi_ratelimiter`),
+  keyed as `"ping"`, per-server-configurable from the dashboard.
+
 Everything else (`AppRole`, per-command cooldowns, multi-DB) isn't
 something you turn on in code -- it's configured live through the
 dashboard API once the bot is running. `../../TESTING.md` walks through

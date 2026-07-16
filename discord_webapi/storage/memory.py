@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from discord_webapi.authz.models import AppRole
     from discord_webapi.commands.models import CommandOverride
     from discord_webapi.consent.models import ConsentRecord
+    from discord_webapi.ratelimits.models import RateLimitRule
 
 
 class MemorySessionStore:
@@ -99,3 +100,25 @@ class MemoryConsentStore:
 
     async def set(self, record: ConsentRecord) -> None:
         self._records[record.user_id] = copy.deepcopy(record)
+
+
+class MemoryRateLimitStore:
+    """Dict-backed RateLimitStore. Zero infrastructure — the default for dev/tests."""
+
+    def __init__(self) -> None:
+        self._rules: dict[tuple[int, str], RateLimitRule] = {}
+
+    async def get_rule(self, guild_id: int, key: str) -> RateLimitRule | None:
+        rule = self._rules.get((guild_id, key))
+        return copy.deepcopy(rule) if rule is not None else None
+
+    async def get_all_rules(self, guild_id: int) -> list[RateLimitRule]:
+        return [
+            copy.deepcopy(rule) for (g_id, _key), rule in self._rules.items() if g_id == guild_id
+        ]
+
+    async def set_rule(self, rule: RateLimitRule) -> None:
+        self._rules[(rule.guild_id, rule.key)] = copy.deepcopy(rule)
+
+    async def delete_rule(self, guild_id: int, key: str) -> None:
+        self._rules.pop((guild_id, key), None)

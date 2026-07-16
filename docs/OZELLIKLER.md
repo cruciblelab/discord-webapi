@@ -161,6 +161,41 @@ api.install(app, enable_websocket=True)
 `GET /api/guilds/{guild_id}/commands/stream` — komut config değişikliklerini
 polling olmadan anlık push eder.
 
+## Sunucu bazlı rate limit sistemi (`discord_webapi.ratelimits`)
+
+`CommandRegistry`'nin cooldown'ı sadece bir discord.py komutuna bağlı —
+`GuildRateLimiter` aynı deseni (sunucu bazlı, dashboard'dan
+ayarlanabilir, restart'sız canlı güncelleme) keyfi bir string `key`'e
+bağlıyor. Bir komuta bağlı olmak zorunda değil — bir automod kontrolüne,
+bir webhook handler'ına, ya da `CommandRegistry`'den hiç geçmeyen
+elle yazılmış bir komuta bağlanabilir:
+
+```python
+# Elle yazılmış bir komut, kendi rate limit'ini bizim altyapımızla kuruyor:
+@bot.hybrid_command(name="ping")
+async def ping(ctx):
+    allowed = await app.state.discord_webapi_ratelimiter.check(
+        ctx.guild.id, "ping", sub_key=str(ctx.author.id)
+    )
+    if not allowed:
+        await ctx.reply("Yavaş ol.", ephemeral=True)
+        return
+    await ctx.reply("pong")
+```
+
+Dashboard'dan sunucu bazlı ayarlamak için:
+
+```
+PUT /api/guilds/{guild_id}/ratelimits/ping
+{"max_calls": 1, "per_seconds": 3}
+```
+
+`DiscordWebAPI` her zaman bir `rate_limiter` (`GuildRateLimiter`)
+nesnesi kuruyor — `enable_ratelimits_api=True` sadece dashboard'dan
+düzenleme endpoint'ini açıyor, nesnenin kendisi (`api.rate_limiter` /
+`request.app.state.discord_webapi_ratelimiter`) her zaman kod içinden
+kullanılabilir, dashboard API'si kapalıyken bile.
+
 ## Kuyruk sistemi (`discord_webapi.jobs`, opt-in)
 
 Uzun süren işler (toplu moderasyon, export) için — request/response

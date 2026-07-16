@@ -30,6 +30,7 @@ from discord_webapi.audit.models import AuditLogEntry
 from discord_webapi.authz.models import AppRole
 from discord_webapi.commands.models import CommandOverride
 from discord_webapi.consent.models import ConsentRecord
+from discord_webapi.ratelimits.models import RateLimitRule
 from discord_webapi.storage.base import Session
 
 # MySQL/MariaDB's DATETIME defaults to 0 fractional-second precision --
@@ -100,6 +101,17 @@ class ConsentRecordRow(Base):
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     consent_version: Mapped[str] = mapped_column(String(64))
     given_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
+
+
+class RateLimitRuleRow(Base):
+    __tablename__ = "dwa_ratelimit_rules"
+
+    guild_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    max_calls: Mapped[int] = mapped_column(Integer)
+    per_seconds: Mapped[float] = mapped_column(Float)
+    updated_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
+    updated_by_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
 
 async def create_all(engine: AsyncEngine) -> None:
@@ -173,6 +185,17 @@ def _row_to_consent_record(row: ConsentRecordRow) -> ConsentRecord:
         user_id=row.user_id,
         consent_version=row.consent_version,
         given_at=_as_utc(row.given_at),
+    )
+
+
+def _row_to_ratelimit_rule(row: RateLimitRuleRow) -> RateLimitRule:
+    return RateLimitRule(
+        guild_id=row.guild_id,
+        key=row.key,
+        max_calls=row.max_calls,
+        per_seconds=row.per_seconds,
+        updated_at=_as_utc(row.updated_at),
+        updated_by_user_id=row.updated_by_user_id,
     )
 
 
@@ -435,3 +458,56 @@ class SQLConsentStore:
                 get_existing=lambda: db.get(ConsentRecordRow, record.user_id),
                 apply_fields=_apply,
             )
+
+
+class SQLRateLimitStore:
+    """RateLimitStore backed by SQLAlchemy 2.0 async. Call `create_all()`
+    once at startup to create its table (or manage it via Alembic)."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+        self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_all(self) -> None:
+        await create_all(self._engine)
+
+    async def get_rule(self, guild_id: int, key: str) -> RateLimitRule | None:
+        async with self._sessionmaker() as db:
+            row = await db.get(RateLimitRuleRow, (guild_id, key))
+            return _row_to_ratelimit_rule(row) if row is not None else None
+
+    async def get_all_rules(self, guild_id: int) -> list[RateLimitRule]:
+        async with self._sessionmaker() as db:
+            result = await db.execute(
+                select(RateLimitRuleRow).where(RateLimitRuleRow.guild_id == guild_id)
+            )
+            return [_row_to_ratelimit_rule(row) for row in result.scalars()]
+
+    async def set_rule(self, rule: RateLimitRule) -> None:
+        def _apply(row: RateLimitRuleRow) -> None:
+            row.max_calls = rule.max_calls
+            row.per_seconds = rule.per_seconds
+            row.updated_at = rule.updated_at
+            row.updated_by_user_id = rule.updated_by_user_id
+
+        key = (rule.guild_id, rule.key)
+        async with self._sessionmaker() as db:
+            row = await db.get(RateLimitRuleRow, key)
+            is_new = row is None
+            if row is None:
+                row = RateLimitRuleRow(guild_id=rule.guild_id, key=rule.key)
+                db.add(row)
+            _apply(row)
+            await _commit_upsert(
+                db,
+                is_new=is_new,
+                get_existing=lambda: db.get(RateLimitRuleRow, key),
+                apply_fields=_apply,
+            )
+
+    async def delete_rule(self, guild_id: int, key: str) -> None:
+        async with self._sessionmaker() as db:
+            row = await db.get(RateLimitRuleRow, (guild_id, key))
+            if row is not None:
+                await db.delete(row)
+                await db.commit()

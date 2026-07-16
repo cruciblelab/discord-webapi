@@ -39,6 +39,22 @@ bot = commands.Bot(command_prefix="!", intents=default_intents(), help_command=N
 
 @bot.hybrid_command(name="ping", description="Replies with pong")
 async def ping(ctx: commands.Context) -> None:
+    # Demonstrates the "hybrid" use case: a hand-written command (not a
+    # discord_webapi.builtins command, not CommandRegistry's own cooldown
+    # system) using our GuildRateLimiter infrastructure directly, keyed
+    # independently ("ping", not tied to CommandRegistry at all) and
+    # configurable per-server from the dashboard:
+    #   PUT /api/guilds/{guild_id}/ratelimits/ping {"max_calls": 1, "per_seconds": 3}
+    # `app` is defined further down in this file -- fine, Python resolves
+    # module globals at call time, and by the time a Discord user actually
+    # triggers this command the whole module (including `app =
+    # DiscordWebAPI.quickstart(...)`) has long since finished loading.
+    if ctx.guild is not None:
+        limiter = app.state.discord_webapi_ratelimiter
+        allowed = await limiter.check(ctx.guild.id, "ping", sub_key=str(ctx.author.id))
+        if not allowed:
+            await ctx.reply("Slow down! Try `/ping` again in a moment.", ephemeral=True)
+            return
     await ctx.reply("pong")
 
 
@@ -91,6 +107,7 @@ app = DiscordWebAPI.quickstart(
         "Continuing means you're OK with that."
     ),
     mobile_redirect_uri=f"{_base_url}/mobile-login-done",
+    enable_ratelimits_api=True,
 )
 
 

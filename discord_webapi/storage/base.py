@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from discord_webapi.authz.models import AppRole
     from discord_webapi.commands.models import CommandOverride
     from discord_webapi.consent.models import ConsentRecord
+    from discord_webapi.ratelimits.models import RateLimitRule
 
 
 class Session(BaseModel):
@@ -99,3 +100,22 @@ class ConsentStore(Protocol):
     async def get(self, user_id: int) -> ConsentRecord | None: ...
 
     async def set(self, record: ConsentRecord) -> None: ...
+
+
+class RateLimitStore(Protocol):
+    """Storage for per-guild rate-limit rules, keyed by an arbitrary
+    string (not necessarily a discord.py command name -- see
+    `discord_webapi.ratelimits.GuildRateLimiter`, which is the hot-path
+    caller and keeps its own in-memory cache warm the same way
+    `CommandConfigStore`'s consumer, `CommandRegistry`, does). Only ever
+    hit on first use per (guild, key) and on writes, never per
+    `.check()` call.
+    """
+
+    async def get_rule(self, guild_id: int, key: str) -> RateLimitRule | None: ...
+
+    async def get_all_rules(self, guild_id: int) -> list[RateLimitRule]: ...
+
+    async def set_rule(self, rule: RateLimitRule) -> None: ...
+
+    async def delete_rule(self, guild_id: int, key: str) -> None: ...

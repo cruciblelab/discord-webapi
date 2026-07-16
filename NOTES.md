@@ -1,6 +1,70 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Automod'u tek dosyadan modüler alt pakete genişletme (bu oturumda tamamlandı)
+## v0.6: `discord_webapi.ratelimits` — sunucu bazlı, koda bağımsız rate limit sistemi (bu oturumda tamamlandı)
+
+Kullanıcının netleştirdiği büyük vizyon (plan dosyasındaki "v0.6 Vizyonu"
+bölümüne bakın): discord.py komut yazmayı nasıl kolaylaştırıyorsa, biz de
+rate limit/permission/eşik/ceza gibi altyapıları SAĞLAYALIM — insanlar
+hem tek satırla (hazır) hem 50 satırla (kendi kodlarıyla config edip
+harmanlayarak) kullanabilsinler, rate limit sadece komuta değil başka
+yerlere de bağlanabilsin. Uzun vadeli ikinci hayal (şimdilik sadece
+vizyon, aktif plan değil): üçüncü-taraf paylaşım ekosistemi — insanlar
+kendi builtin-tarzı dosyalarını paylaşıp başkaları "discord-webapi uyumlu"
+şekilde kullanabilsin (plan dosyasının en başından beri ertelenen
+"üçüncü-taraf paket/manifest sistemi" fikrinin aynısı, hâlâ aktif
+inşa edilmiyor ama artık net bir hedef).
+
+**Bu oturumda yapılan somut ilk adım**: `discord_webapi/ratelimits/` —
+`CommandRegistry`'nin `cooldown_seconds`/`cooldown_uses`'ıyla BİREBİR
+AYNI mimari desende (`RateLimitStore` Protocol + Memory/SQL + Transport
+event ile restart'sız canlı güncelleme, in-memory token-bucket cache hot
+path'te asla DB'ye gitmiyor), ama **discord.py `Command` nesnesine hiç
+ihtiyaç duymadan**, keyfi bir string `key`'e bağlanabiliyor.
+
+Mimari:
+1. `discord_webapi/ratelimits/models.py`: `RateLimitRule`, `RateLimitRulePatch`.
+2. `discord_webapi/storage/base.py`/`memory.py`/`sql.py`: `RateLimitStore`
+   Protocol + `MemoryRateLimitStore` + `SQLRateLimitStore` — CommandConfigStore
+   ile aynı yerlerde, aynı desende (CORE bir özellik, builtins'in kendi
+   izole tablosu değil, çünkü `CommandOverride` da core'da).
+3. `discord_webapi/ratelimits/events.py`: `EVENT_TYPE_RATELIMIT_CONFIG_CHANGED`.
+4. `discord_webapi/ratelimits/limiter.py::GuildRateLimiter`:
+   `check(guild_id, key, sub_key="_")` — `sub_key`, TEK bir dashboard'dan
+   ayarlanabilir eşiği (`(guild_id, key)`) paylaşırken her alt-anahtara
+   (ör. `str(user_id)`) kendi bağımsız bucket'ını veriyor — "5 mesaj/10sn,
+   kullanıcı başına" tam olarak bunu istiyor: bir dashboard-düzenlenebilir
+   kural, çok sayıda bucket.
+5. `discord_webapi/ratelimits/api.py::build_ratelimits_router()`:
+   `GET/PUT/DELETE /api/guilds/{id}/ratelimits/{key}`.
+6. `DiscordWebAPI.__init__`'te `self.rate_limiter` HER ZAMAN kuruluyor
+   (job_queue/registry'nin aksine, opt-in gate yok) — çünkü bu, bot
+   sürecindeki elle yazılmış koddan (ör. bir automod check'i) da
+   kullanılabilmesi gereken bir sistem, sadece dashboard'daki
+   `enable_ratelimits_api=True` bayrağı düzenleme endpoint'ini açıyor.
+   `app.state.discord_webapi_ratelimiter` da her zaman set ediliyor
+   (aynı gerekçe) — `enable_ratelimits_api` sadece router'ı mount ediyor.
+
+**Somut hibrit kullanım kanıtı**: `examples/full_featured_bot/main.py`'daki
+elle yazılmış `/ping` komutu artık `app.state.discord_webapi_ratelimiter.check(...)`
+çağırıyor — ne bir `builtins` komutu ne `CommandRegistry`'nin cooldown'ı,
+kullanıcının tarif ettiği "ping komutunun dondurulmasını bizim
+altyapımızla, sunucu bazlı ayarlanabilir şekilde" senaryosunun birebir
+karşılığı.
+
+Testler: `tests/unit/test_ratelimit_store.py` (Memory+SQL, 13 test),
+`tests/unit/test_guild_ratelimiter.py` (limiter davranışı, canlı güncelleme
+dahil, 11 test), `tests/integration/test_ratelimits_api.py` (dashboard API,
+6 test), `tests/integration/test_facade.py`'ye eklenen 2 test.
+
+351 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
+**Sırada (v0.6 devamı, kullanıcı isterse)**: ceza-eşikleme/escalation
+motorunun genelleştirilmesi (`warn.py`'nin `auto_timeout_after`'ının
+genel bir "ihlal sayısı → aksiyon" sistemine dönüştürülmesi, `automod`'un
+da kullanabileceği şekilde), builtin'lerin kendi istatistik/veri toplama
+katmanı (`invocation_count`'un genelleştirilmiş hali).
+
+## Automod'u tek dosyadan modüler alt pakete genişletme (bir önceki tur)
 
 Kullanıcı ilk automod.py'yi (tek dosya, yasaklı kelime + basit spam) "çok
 basit" buldu, açıkça istedi: "automod ekleyeceksek automod klasörü

@@ -2,6 +2,19 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — v0.6: `discord_webapi.ratelimits` — sunucu bazlı, kod'a bağımsız rate limit sistemi
+
+### Eklenenler
+
+- **`discord_webapi.ratelimits`**: `CommandRegistry`'nin cooldown'ıyla aynı mimari desende (Store Protocol + Memory/SQL + Transport event ile restart'sız canlı güncelleme), ama keyfi bir string `key`'e bağlanan, discord.py `Command` nesnesine ihtiyaç duymayan bir rate-limit sistemi. `GuildRateLimiter.check(guild_id, key, sub_key=...)` — bir automod kontrolüne, bir webhook handler'ına, ya da `CommandRegistry`'den hiç geçmeyen elle yazılmış bir komuta bağlanabilir. `sub_key`, tek bir dashboard'dan-ayarlanabilir eşiği (`(guild_id, key)`) paylaşırken her alt-anahtara (ör. kullanıcı id'si) kendi bağımsız bucket'ını veriyor.
+- Dashboard API: `GET/PUT/DELETE /api/guilds/{guild_id}/ratelimits/{key}` (opt-in, `enable_ratelimits_api=True`).
+- `DiscordWebAPI` her zaman bir `rate_limiter` kuruyor (opt-in olan sadece dashboard endpoint'i) — bot-tarafı kod (ör. bir automod check'i) dashboard API'si hiç açılmasa bile `api.rate_limiter`/`request.app.state.discord_webapi_ratelimiter` üzerinden doğrudan kullanabiliyor.
+- `examples/full_featured_bot/main.py`'daki elle yazılmış `/ping` komutu artık bu sistemi doğrudan kullanıyor — "hibrit kullanım"ın somut kanıtı: ne bir `builtins` komutu ne `CommandRegistry`'nin cooldown'ı, kendi rate limit'ini bizim altyapımızla, sunucu bazlı ayarlanabilir şekilde kuruyor.
+
+Bu, kullanıcının netleştirdiği v0.6 vizyonunun ("rate limit/eşik/ceza gibi altyapıları, komuta bağımlı olmadan, hem tek satırla hem kendi kodlarıyla harmanlayarak kullanabilsinler") ilk somut adımı. Detaylar için `NOTES.md`'ye ve plan dosyasındaki "v0.6 Vizyonu" bölümüne bakın.
+
+351 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — İki yeni builtin: rol atama, modüler otomatik moderasyon paketi
 
 ### Eklenenler

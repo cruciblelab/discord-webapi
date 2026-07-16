@@ -51,6 +51,7 @@ from discord_webapi.jobs import (
     run_worker,
 )
 from discord_webapi.members import MemberInfo, build_members_router, install_member_listing
+from discord_webapi.ratelimits import GuildRateLimiter, RateLimitRule, build_ratelimits_router
 from discord_webapi.storage import (
     AuditStore,
     AuthzStore,
@@ -60,6 +61,8 @@ from discord_webapi.storage import (
     MemoryAuthzStore,
     MemoryCommandConfigStore,
     MemoryConsentStore,
+    MemoryRateLimitStore,
+    RateLimitStore,
 )
 from discord_webapi.transport import Event, InProcessTransport, Transport
 from discord_webapi.web import (
@@ -76,6 +79,7 @@ if TYPE_CHECKING:
         SQLAuthzStore,
         SQLCommandConfigStore,
         SQLConsentStore,
+        SQLRateLimitStore,
         SQLSessionStore,
     )
     from discord_webapi.transport.redis import RedisTransport
@@ -102,6 +106,7 @@ __all__ = [
     "Event",
     "GuildContext",
     "GuildMemberCache",
+    "GuildRateLimiter",
     "InProcessJobQueue",
     "InProcessTransport",
     "JobQueue",
@@ -112,12 +117,16 @@ __all__ = [
     "MemoryAuthzStore",
     "MemoryCommandConfigStore",
     "MemoryConsentStore",
+    "MemoryRateLimitStore",
+    "RateLimitRule",
+    "RateLimitStore",
     "RedisJobQueue",
     "RedisTransport",
     "SQLAuditStore",
     "SQLAuthzStore",
     "SQLCommandConfigStore",
     "SQLConsentStore",
+    "SQLRateLimitStore",
     "SQLSessionStore",
     "SessionSummary",
     "Transport",
@@ -128,6 +137,7 @@ __all__ = [
     "build_guilds_router",
     "build_jobs_router",
     "build_members_router",
+    "build_ratelimits_router",
     "get_current_user",
     "require_app_role",
     "require_channel_permission",
@@ -152,6 +162,7 @@ def __getattr__(name: str) -> object:
         "SQLAuthzStore",
         "SQLAuditStore",
         "SQLConsentStore",
+        "SQLRateLimitStore",
     ):
         from discord_webapi.storage import sql
 
@@ -221,9 +232,12 @@ class DiscordWebAPI:
         authz_store: AuthzStore | None = None,
         audit_store: AuditStore | None = None,
         consent_store: ConsentStore | None = None,
+        rate_limit_store: RateLimitStore | None = None,
         job_queue: JobQueue | None = None,
         member_cache_ttl_seconds: float = 45.0,
         channel_permission_cache_ttl_seconds: float = 30.0,
+        default_rate_limit_max_calls: int = 5,
+        default_rate_limit_per_seconds: float = 10.0,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
     ) -> None:
@@ -238,11 +252,23 @@ class DiscordWebAPI:
         self.authz_store = authz_store or MemoryAuthzStore()
         self.audit_store = audit_store or MemoryAuditStore()
         self.consent_store = consent_store or MemoryConsentStore()
+        self.rate_limit_store = rate_limit_store or MemoryRateLimitStore()
         self.member_cache = GuildMemberCache(transport, ttl_seconds=member_cache_ttl_seconds)
         self.channel_permission_cache = ChannelPermissionCache(
             transport, ttl_seconds=channel_permission_cache_ttl_seconds
         )
         self.app_role_cache = AppRoleCache(self.authz_store)
+        # Usable in any process (bot-side, e.g. from an automod check;
+        # web-side, e.g. protecting a dashboard endpoint) -- unlike the
+        # CommandRegistry's RPC handlers, subscribing to a Transport event
+        # has no "exactly one process" constraint, so this is always
+        # constructed, never gated on `bot is not None`.
+        self.rate_limiter = GuildRateLimiter(
+            transport,
+            self.rate_limit_store,
+            default_max_calls=default_rate_limit_max_calls,
+            default_per_seconds=default_rate_limit_per_seconds,
+        )
 
         self.registry: CommandRegistry | None = None
         if bot is not None:
@@ -268,6 +294,7 @@ class DiscordWebAPI:
         bot: commands.Bot,
         transport: Transport,
         command_store: CommandConfigStore | None = None,
+        rate_limit_store: RateLimitStore | None = None,
         job_queue: JobQueue | None = None,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
@@ -291,6 +318,7 @@ class DiscordWebAPI:
             transport=transport,
             bot=bot,
             command_store=command_store,
+            rate_limit_store=rate_limit_store,
             job_queue=job_queue,
             sync_commands=sync_commands,
             sync_guild_id=sync_guild_id,
@@ -305,6 +333,7 @@ class DiscordWebAPI:
         authz_store: AuthzStore | None = None,
         audit_store: AuditStore | None = None,
         consent_store: ConsentStore | None = None,
+        rate_limit_store: RateLimitStore | None = None,
         job_queue: JobQueue | None = None,
         member_cache_ttl_seconds: float = 45.0,
         channel_permission_cache_ttl_seconds: float = 30.0,
@@ -323,6 +352,7 @@ class DiscordWebAPI:
             authz_store=authz_store,
             audit_store=audit_store,
             consent_store=consent_store,
+            rate_limit_store=rate_limit_store,
             job_queue=job_queue,
             member_cache_ttl_seconds=member_cache_ttl_seconds,
             channel_permission_cache_ttl_seconds=channel_permission_cache_ttl_seconds,
@@ -356,6 +386,7 @@ class DiscordWebAPI:
         cookie_consent_message: str = DEFAULT_COOKIE_CONSENT_MESSAGE,
         cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
         enable_jobs: bool = False,
+        enable_ratelimits_api: bool = False,
     ) -> None:
         if self.auth is None:
             raise RuntimeError(
@@ -367,6 +398,12 @@ class DiscordWebAPI:
         app.state.discord_webapi_channel_permission_cache = self.channel_permission_cache
         app.state.discord_webapi_transport = self.transport
         app.state.discord_webapi_app_role_cache = self.app_role_cache
+        # Always set, unlike the dashboard endpoints below it (opt-in via
+        # enable_ratelimits_api) -- GuildRateLimiter is meant to be usable
+        # directly from your own routes/commands (request.app.state...,
+        # or the DiscordWebAPI instance's own `.rate_limiter` attribute)
+        # even if you never expose the dashboard API for editing it.
+        app.state.discord_webapi_ratelimiter = self.rate_limiter
         app.include_router(build_commands_router())
         app.include_router(build_members_router())
         app.include_router(build_app_roles_router())
@@ -397,6 +434,8 @@ class DiscordWebAPI:
                 )
             app.state.discord_webapi_job_queue = self.job_queue
             app.include_router(build_jobs_router())
+        if enable_ratelimits_api:
+            app.include_router(build_ratelimits_router())
 
     def lifespan(self, token: str) -> AbstractAsyncContextManager[None]:
         if self.bot is None:
@@ -437,6 +476,7 @@ class DiscordWebAPI:
         enable_cookie_consent: bool = False,
         cookie_consent_message: str = DEFAULT_COOKIE_CONSENT_MESSAGE,
         cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
+        enable_ratelimits_api: bool = False,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
     ) -> FastAPI:
@@ -485,6 +525,7 @@ class DiscordWebAPI:
             SQLAuthzStore,
             SQLCommandConfigStore,
             SQLConsentStore,
+            SQLRateLimitStore,
             SQLSessionStore,
         )
         from discord_webapi.storage.sql import (
@@ -522,6 +563,7 @@ class DiscordWebAPI:
             authz_store=SQLAuthzStore(engine),
             audit_store=SQLAuditStore(engine),
             consent_store=SQLConsentStore(engine),
+            rate_limit_store=SQLRateLimitStore(engine),
             sync_commands=sync_commands,
             sync_guild_id=sync_guild_id,
         )
@@ -541,5 +583,6 @@ class DiscordWebAPI:
             enable_cookie_consent=enable_cookie_consent,
             cookie_consent_message=cookie_consent_message,
             cookie_consent_version=cookie_consent_version,
+            enable_ratelimits_api=enable_ratelimits_api,
         )
         return app

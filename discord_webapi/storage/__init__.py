@@ -5,6 +5,7 @@ from discord_webapi.storage.base import (
     AuthzStore,
     CommandConfigStore,
     ConsentStore,
+    RateLimitStore,
     Session,
     SessionStore,
 )
@@ -13,6 +14,7 @@ from discord_webapi.storage.memory import (
     MemoryAuthzStore,
     MemoryCommandConfigStore,
     MemoryConsentStore,
+    MemoryRateLimitStore,
     MemorySessionStore,
 )
 
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
         SQLAuthzStore,
         SQLCommandConfigStore,
         SQLConsentStore,
+        SQLRateLimitStore,
         SQLSessionStore,
     )
 
@@ -34,11 +37,14 @@ __all__ = [
     "MemoryAuthzStore",
     "MemoryCommandConfigStore",
     "MemoryConsentStore",
+    "MemoryRateLimitStore",
     "MemorySessionStore",
+    "RateLimitStore",
     "SQLAuditStore",
     "SQLAuthzStore",
     "SQLCommandConfigStore",
     "SQLConsentStore",
+    "SQLRateLimitStore",
     "SQLSessionStore",
     "Session",
     "SessionStore",
@@ -54,6 +60,7 @@ def __getattr__(name: str) -> object:
         "SQLAuthzStore",
         "SQLAuditStore",
         "SQLConsentStore",
+        "SQLRateLimitStore",
     ):
         from discord_webapi.storage import sql
 
