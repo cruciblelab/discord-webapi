@@ -2,6 +2,35 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `examples/test_console`: tıklanabilir fiziksel test aracı
+
+### Eklenenler
+
+- **`examples/test_console/`**: fiziksel testler için özel bir bot +
+  `/console`'da tek sayfalık, self-contained (CDN'siz, build adımsız)
+  bir test arayüzü — curl komutlarıyla uğraşmadan butonlarla test etmek
+  için.
+  - Bot: `/ping` (rate-limited, key `"ping"`), `/warn @member sebep`
+    (`extras.warn`, audit'li), `/warnings @member` (uyarı geçmişi),
+    automod (`badword1`/`badword2`/`badword3` filtreli + davet linki
+    engelleme, `on_violation` ile hem `WarnStore`'a hem
+    `EscalationEngine`'e (`key="automod"`) besleniyor).
+  - Konsol: komut listele/aç-kapat/cooldown/`required_app_role` düzenle,
+    rate limit get/set/sil, escalation merdiveni tanımla/listele/sil,
+    kullanıcı uyarılarını görüntüle, audit log'u görüntüle, ham
+    yanıt/hata paneli. Giriş tek tıkla (`mobile_redirect_uri` doğrudan
+    `/console`'a yönlendiriyor, sayfa `session_id`'yi URL'den okuyup
+    kaydediyor — token elle kopyalanmıyor).
+  - Uçtan uca doğrulandı (bu oturumda): `/console` gerçekten sunuluyor,
+    kimliksiz istekler 401 dönüyor, `/warn` çağrısı gerçekten SQL audit
+    tablosuna yazıyor, bir escalation kuralı gerçekten `guild.kick()`
+    çağırıyor ve bunu da audit'liyor.
+- `TESTING.md`: yeni 22. bölüm (`test_console` kontrol listesi) +
+  giriş metni güncellendi (önerilen ana test aracı olarak işaretlendi).
+
+Kod tarafında değişiklik yok (sadece yeni örnek + doküman); 427 test
+yeşil, ruff+mypy temiz.
+
 ## [Unreleased] — P1.4: audit log bot-tarafı moderasyon aksiyonlarını da kapsıyor (opt-in)
 
 ### Eklenenler

@@ -11,15 +11,23 @@ senaryoları doğrulamak.
 **Bölümler**: 1-13 çekirdek + v0.2-v0.4 özellikleri. 14-21 daha yeni
 özellikler (rate limit sistemi, escalation, yeni builtin'ler, bot-tarafı
 audit, required_app_role, jobs, üçüncü-taraf extension'lar, yeni örnekler).
-İkisini de tek turda yapmak zorunda değilsin — takıldığın adımı ve tam
-hata/log çıktısını paylaş.
+22, `test_console` — **önerilen ana test aracı**: curl yerine tıklanabilir
+bir arayüzden 1-21'in çoğunu tekrarlayabileceğin hazır bir bot + web
+konsolu. Hepsini tek turda yapmak zorunda değilsin — takıldığın adımı ve
+tam hata/log çıktısını paylaş.
 
-**Hazır test botu**: Her adımı elle kurmak yerine `examples/full_featured_bot/`
-kullan — WebSocket relay, audit log, cookie-consent banner ve her builtin
-(`ban`/`kick`/`timeout`/`warn`/`welcome`) açık şekilde tek bir bot içinde
-hazır (bkz. o klasördeki `README.md`). WebSocket'in gerçek canlı yayın
-testini yapmak için aynı klasördeki `ws_test_client.py` scripti var —
-madde 8'de bu script kullanılıyor.
+**Hazır test botları**:
+- **`examples/test_console/`** (yeni, önerilen): `ping`/`warn`/`warnings`/
+  automod (senin istediğin `badword1`/`badword2`/`badword3` filtresiyle)
+  hazır bir bot + `/console`'da tek sayfalık, butonlu bir test arayüzü —
+  komut enable/disable, cooldown, rate limit, escalation merdiveni, uyarı
+  listeleme, audit log, hepsi tıklayarak. Terminale hiç dönmeden 1-21'in
+  çoğunu buradan yapabilirsin. Kurulum: `examples/test_console/README.md`.
+- `examples/full_featured_bot/`: WebSocket relay, cookie-consent banner ve
+  her builtin (`ban`/`kick`/`timeout`/`warn`/`welcome`/`role_assign`/
+  `automod`) açık şekilde tek bir bot içinde (bkz. o klasördeki `README.md`).
+  WebSocket'in gerçek canlı yayın testini yapmak için aynı klasördeki
+  `ws_test_client.py` scripti var — madde 8'de bu script kullanılıyor.
 
 ## 0. Ön Hazırlık
 
@@ -304,6 +312,29 @@ paketler. Kod çalıştıran bir plugin VM değil — sıradan bir pip paketi.
 
 - [ ] `examples/skeleton_custom_command/` çalıştır → `/weather Istanbul` kendi yanıtını versin; madde 14'teki gibi `ratelimits/weather` ile limiti canlı ayarla, `/weather`'ın rate-limit'lendiğini doğrula.
 - [ ] `examples/hybrid_moderation/` çalıştır → `main.py`'de `BANNED_WORDS`'e bir kelime ekle; o kelimeyi gönderince (a) mesaj silinsin, (b) `/warns` sayısı artsın (paylaşılan WarnStore), (c) madde 15'teki gibi bir escalation merdiveni tanımlıysa eşiğe ulaşınca aksiyon alınsın — üç sistemin birlikte, her biri kendi şeridinde çalıştığını gözlemle.
+
+## 22. `test_console` — tıklanabilir test konsolu (önerilen ana test aracı)
+
+Yukarıdaki tüm curl komutlarını elle yazmak yerine `examples/test_console/`
+kullan: gerçek bir bot (`ping`/`warn`/`warnings`/automod hazır, sana özel
+`badword1`/`badword2`/`badword3` filtreli) + `/console`'da tek sayfalık,
+butonlu bir test arayüzü. `examples/test_console/README.md`'de kurulum var;
+burada sadece **konsolun kendisini** doğrulayan adımlar var — üstteki
+maddelerin (1-21) çoğunu bu konsoldan curl'süz tekrarlayabilirsin.
+
+- [ ] `uvicorn main:app --reload --app-dir examples/test_console`, tarayıcıda `http://localhost:8000/console` aç.
+- [ ] **Tek tıkla giriş**: "Discord ile giriş yap"a tıkla → Discord'da onayla → `/console`'a `session_id` dolu şekilde geri döndüğünü, üstteki noktanın yeşile döndüğünü ("oturum var") doğrula — hiçbir yere elle bir token yapıştırmadan.
+- [ ] Guild ID kutusuna test sunucunun ID'sini yaz (sayfa yenilense bile localStorage'da kalıcı olduğunu doğrula).
+- [ ] **Komutlar** kartını aç → "Komutları Getir" → `ping`/`warn`/`warnings` listelensin. Bir komutun "Kapat" butonuna tıkla → Discord'da o komutu çalıştırmayı dene → reddedildiğini doğrula (madde 3'ün UI'dan tekrarı). "Aç"a tıkla → tekrar çalıştığını doğrula.
+- [ ] Aynı kartta bir komuta cooldown (saniye+kullanım) gir, "Kaydet" → Discord'da hemen art arda çalıştır → ikinci çağrının cooldown'a takıldığını doğrula.
+- [ ] **Rate Limit** kartı → key="ping", max_calls=1, per_seconds=30, "Kaydet" → Discord'da `/ping`'i art arda çağır → ilk çağrı geçsin, ikincisi (rate-limited mesaj) reddedilsin.
+- [ ] **Escalation** kartı → key="automod", threshold=2, action="timeout", action_minutes=5, "Kuralı Kaydet" → Discord'da test sunucusunda arka arkaya iki `badword1` içeren mesaj gönder → automod ikisini de silsin, ikincide gerçekten bir timeout uygulandığını (Discord'un kendi UI'ında üyenin "Timed Out" rozetini) doğrula.
+- [ ] Aynı kartta "Tüm kuralları getir" → tabloda kuralın göründüğünü, "Sil" butonunun çalıştığını doğrula.
+- [ ] **Uyarılar** kartı → yukarıdaki badword denemesinden sonra o kullanıcının ID'sini gir, "Uyarıları Getir" → automod'un otomatik eklediği uyarı(lar)ın listelendiğini doğrula. Discord'da `/warnings @o-kullanıcı` çalıştır → aynı sayının orada da göründüğünü doğrula (paylaşılan `WarnStore`).
+- [ ] **Audit Log** kartı → "Audit Log Getir" → hem yukarıdaki dashboard yazmalarının (`command.set_override`, `ratelimit`/`escalation-rules` PUT'ları audit'lenmiyor ama komut PATCH'i audit'leniyorsa görünsün) hem de otomatik aksiyonların (`warn`, `automod.violation`, `escalation.timeout`) **aynı listede**, en yeni en üstte göründüğünü doğrula.
+- [ ] **Son yanıt** kartını aç → herhangi bir işlemden sonra ham JSON'un (status kodu dahil) burada göründüğünü, bir şey ters giderse bunun hata ayıklamak için yeterli olduğunu doğrula.
+- [ ] "Çıkış" butonuna tıkla → oturum durumunun kırmızıya döndüğünü, bir sonraki API çağrısının 401 döndüğünü doğrula.
+- [ ] (7 sunucun varsa) Guild ID kutusunu değiştirip aynı konsolu farklı bir sunucuya karşı kullan — restart gerekmediğini, her sunucunun kendi komut/rate-limit/escalation ayarlarının bağımsız olduğunu doğrula.
 
 ---
 

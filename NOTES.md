@@ -1,5 +1,70 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## `examples/test_console`: tıklanabilir fiziksel test aracı (bu oturumda)
+
+Kullanıcı 7 sunucuda gerçek botunu çalıştıracak, 2-3'ünü kendi test
+sunucusunda deneyecek. curl yerine "butonlara tıklayarak" test etmek
+istedi; şu komutları istedi: uyarı (warn), ping, automod/küfür engelleme
+(`badword1`/`badword2`/`badword3` örneği), uyarı listeleme, etiketlenen
+kullanıcı üzerinde işlem.
+
+Karar: kütüphanenin kendisine UI EKLEMEDİM (backend-odak kararı hâlâ
+geçerli) — bunun yerine `examples/test_console/` adında ayrı bir örnek
+proje: gerçek bir bot (`main.py`) + tek sayfalık, self-contained (CDN'siz)
+bir test arayüzü (`console.html`, `GET /console`'da `FileResponse` ile
+sunuluyor). Bu, "biz UI sağlamıyoruz" ilkesini bozmuyor çünkü örnek/test
+aracı, kütüphanenin şevkle sunduğu bir ürün parçası değil.
+
+**Bot** (`main.py`): `/ping` (skeleton `rate_limited`, key `"ping"`,
+quickstart sonrası imperatif kayıt — `weather` örneğindeki desenin aynısı,
+çünkü gerçek limiter ancak `quickstart()` dönünce var oluyor), `/warn`
+(`extras.warn`, `audit_logger=` ile audit'li), `/warnings @member` (yeni,
+kütüphanede yok — `warn_store.list_for_user` kullanan basit bir komut,
+kasıtlı olarak örnek koduna yazıldı çünkü `extras.warn` sadece store+komut
+sağlıyor, dashboard API'si sağlamıyor), automod (`banned_words_list=[
+"badword1","badword2","badword3"]`, `block_invites=True`,
+`on_violation`→hem `warn_store.add` hem `escalation.record_violation(...,
+"automod", ...)`, `audit_logger=` ile audit'li). `warn_store` tek bir
+`MemoryWarnStore` — hem `/warn` hem automod hem `/warnings` hem konsolun
+kendi `/api/guilds/{id}/warnings/{user_id}` endpoint'i (yeni, örneğe özel
+custom endpoint, `require_guild_permission("manage_guild")` ile korunuyor)
+AYNI sayıyı görüyor.
+
+**Konsol** (`console.html`): vanilla JS, framework/CDN yok, tek dosya.
+Bölümler: Ayarlar (guild id + session token, localStorage'da kalıcı),
+Komutlar (listele/aç-kapat/cooldown/`required_app_role` — hepsi tek
+tablodan), Rate Limit (get/set/sil), Escalation (kural kaydet/listele/sil),
+Uyarılar (kullanıcı ID'siyle sorgula), Audit Log (hepsi tek feed'de), Son
+Yanıt (debug — her `api()` çağrısının ham JSON'u). Tema `prefers-color-
+scheme` ile otomatik light/dark.
+
+**Tek-tıkla giriş**: `mobile_redirect_uri=f"{_base_url}/console"` —
+Discord login sonrası doğrudan `/console?session_id=...&expires_at=...`'a
+dönüyor, sayfa kendi JS'i ile bunu URL'den okuyup localStorage'a kaydediyor
+ve `history.replaceState` ile URL'i temizliyor. Elle token kopyalama yok
+(full_featured_bot'un `/mobile-login-done`'ından farkı: o sadece gösteriyor,
+bu otomatik kaydediyor VE konsolun kendisi olduğu için hemen kullanılabilir
+hale geliyor).
+
+**Uçtan uca doğrulandı** (sandbox'ta, gerçek Discord token'ı olmadan):
+- `TestClient` ile `GET /console` → 200, HTML içeriği doğru.
+- Kimliksiz `GET /api/guilds/1/warnings/2` → 401 (auth zorunlu çalışıyor).
+- `create_all_tables()` + `escalation.rule_store.create_all()` çağrılıp
+  (gerçek lifespan bir Discord token'ı gerektirdiği için tam lifespan
+  yerine tabloları elle kurduk) `/warn` komutu gerçekten çağrıldı → SQL
+  audit tablosuna `action="warn"` kaydı gerçekten yazıldığını doğrudan SQL
+  sorgusuyla doğruladık.
+- Bir escalation kuralı (`kick` @ threshold 1) tanımlanıp
+  `record_violation()` çağrıldı → **gerçekten `guild.kick()` çağrıldığını**
+  (`AsyncMock.assert_awaited_once()`) VE bunun audit tablosuna
+  `action="escalation.kick"` olarak yazıldığını doğrudan doğruladık.
+
+`TESTING.md`'ye 22. bölüm eklendi (test_console'un kendi kontrol listesi)
++ giriş metni güncellendi ("önerilen ana test aracı" olarak işaretlendi).
+
+Kod tarafında (kütüphanenin kendisinde) hiçbir değişiklik yok — sadece yeni
+örnek + doküman. 427 test yeşil, ruff+mypy temiz.
+
 ## P1.4: audit log bot-tarafı moderasyonu kapsıyor (opt-in)
 
 Audit şimdiye dek sadece web-tarafı (dashboard PATCH/PUT/DELETE)

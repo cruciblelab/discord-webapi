@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>discord-webapi test konsolu</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f6f8; --fg: #1a1d21; --card: #ffffff; --border: #dfe2e6;
+    --accent: #5865f2; --accent-fg: #ffffff; --muted: #6b7280;
+    --danger: #d64545; --ok: #1a8754; --input-bg: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181c; --fg: #e7e9ea; --card: #1e2126; --border: #33373d;
+      --accent: #8188ff; --accent-fg: #10121a; --muted: #9aa1ab;
+      --danger: #ff6b6b; --ok: #3ddc84; --input-bg: #14161a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 0 0 4rem;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10;
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: .75rem 1rem; display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center;
+  }
+  header h1 { font-size: 1rem; margin: 0; white-space: nowrap; }
+  main { max-width: 720px; margin: 0 auto; padding: 1rem; display: grid; gap: 1rem; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 1rem;
+  }
+  .card > summary { cursor: pointer; font-weight: 600; list-style: none; }
+  .card > summary::-webkit-details-marker { display: none; }
+  .card > summary::before { content: "▸ "; color: var(--accent); }
+  details[open] > summary::before { content: "▾ "; }
+  .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .5rem 0; }
+  label { font-size: .8rem; color: var(--muted); }
+  input, select {
+    background: var(--input-bg); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: .5rem .6rem; font-size: .95rem; min-width: 0;
+  }
+  input[type=text], input[type=number] { width: 8rem; }
+  input.wide { width: 100%; }
+  button {
+    background: var(--accent); color: var(--accent-fg); border: none;
+    border-radius: 6px; padding: .55rem 1rem; font-size: .9rem; font-weight: 600;
+    cursor: pointer; touch-action: manipulation;
+  }
+  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
+  button.danger { background: var(--danger); color: #fff; }
+  button:active { transform: translateY(1px); }
+  table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .85rem; }
+  th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; }
+  .pill { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .75rem; font-weight: 700; }
+  .pill.on { background: rgba(61,220,132,.15); color: var(--ok); }
+  .pill.off { background: rgba(255,107,107,.15); color: var(--danger); }
+  .muted { color: var(--muted); font-size: .8rem; }
+  pre {
+    background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: .75rem; overflow-x: auto; font-size: .8rem; max-height: 40vh;
+  }
+  .status-dot { width: .6rem; height: .6rem; border-radius: 50%; display: inline-block; }
+  .status-dot.on { background: var(--ok); }
+  .status-dot.off { background: var(--danger); }
+  a.linklike { color: var(--accent); text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>discord-webapi test konsolu</h1>
+  <span id="sessionStatus" class="row"><span class="status-dot off" id="statusDot"></span> <span id="statusText">giriş yapılmadı</span></span>
+  <a class="linklike" id="loginLink" href="/auth/discord/login?mobile=true">Discord ile giriş yap</a>
+  <button class="secondary" id="logoutBtn">Çıkış</button>
+</header>
+
+<main>
+
+  <details class="card" open>
+    <summary>Ayarlar</summary>
+    <div class="row">
+      <div>
+        <label>Guild ID</label><br>
+        <input class="wide" type="text" id="guildId" placeholder="123456789012345678">
+      </div>
+    </div>
+    <div class="row">
+      <div style="flex:1">
+        <label>Session token (Bearer) -- girişten sonra otomatik dolar, elle de yapıştırabilirsin</label><br>
+        <input class="wide" type="text" id="sessionToken" placeholder="session_id">
+      </div>
+    </div>
+    <p class="muted">Akış: "Discord ile giriş yap"a tıkla → Discord'da onayla → bu sayfaya
+      <code>session_id</code> ile geri dönersin, otomatik kaydedilir. Guild ID'yi test
+      sunucunun ID'siyle doldur (Discord'da Developer Mode açıp sunucuya sağ tık → Copy Server ID).</p>
+  </details>
+
+  <details class="card">
+    <summary>Komutlar (enable/disable, cooldown, required_app_role)</summary>
+    <div class="row">
+      <button onclick="loadCommands()">Komutları Getir</button>
+    </div>
+    <div id="commandsTable"></div>
+  </details>
+
+  <details class="card">
+    <summary>Rate Limit (ör. "ping")</summary>
+    <div class="row">
+      <div><label>Key</label><br><input type="text" id="rlKey" value="ping"></div>
+      <div><label>max_calls</label><br><input type="number" id="rlMaxCalls" value="1"></div>
+      <div><label>per_seconds</label><br><input type="number" id="rlPerSeconds" value="10"></div>
+    </div>
+    <div class="row">
+      <button onclick="rlGet()">Getir</button>
+      <button onclick="rlSet()">Kaydet</button>
+      <button class="danger" onclick="rlDelete()">Sil</button>
+    </div>
+    <pre id="rlResult">-</pre>
+  </details>
+
+  <details class="card">
+    <summary>Escalation ladder (ör. "automod")</summary>
+    <div class="row">
+      <div><label>Key</label><br><input type="text" id="escKey" value="automod"></div>
+      <div><label>threshold</label><br><input type="number" id="escThreshold" value="3"></div>
+      <div><label>action</label><br>
+        <select id="escAction">
+          <option value="none">none</option>
+          <option value="timeout" selected>timeout</option>
+          <option value="kick">kick</option>
+          <option value="ban">ban</option>
+        </select>
+      </div>
+      <div><label>action_minutes</label><br><input type="number" id="escMinutes" value="10"></div>
+    </div>
+    <div class="row">
+      <div style="flex:1"><label>reason (opsiyonel)</label><br><input class="wide" type="text" id="escReason"></div>
+    </div>
+    <div class="row">
+      <button onclick="escSet()">Kuralı Kaydet</button>
+      <button onclick="escListKey()">Bu key'in kurallarını getir</button>
+      <button onclick="escListAll()">Tüm kuralları getir</button>
+    </div>
+    <div id="escTable"></div>
+  </details>
+
+  <details class="card">
+    <summary>Uyarılar (warn)</summary>
+    <div class="row">
+      <div><label>Kullanıcı ID (etiketlenen üye)</label><br><input class="wide" type="text" id="warnUserId"></div>
+    </div>
+    <div class="row">
+      <button onclick="loadWarnings()">Uyarıları Getir</button>
+    </div>
+    <div id="warningsTable"></div>
+  </details>
+
+  <details class="card">
+    <summary>Audit Log</summary>
+    <div class="row">
+      <button onclick="loadAuditLog()">Audit Log Getir</button>
+    </div>
+    <div id="auditTable"></div>
+  </details>
+
+  <details class="card">
+    <summary>Son yanıt (debug)</summary>
+    <pre id="rawResponse">-</pre>
+  </details>
+
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function loadState() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('session_id')) {
+    localStorage.setItem('dwa_session', params.get('session_id'));
+    history.replaceState({}, '', location.pathname);
+  }
+  $('guildId').value = localStorage.getItem('dwa_guild') || '';
+  $('sessionToken').value = localStorage.getItem('dwa_session') || '';
+  updateStatus();
+}
+function updateStatus() {
+  const has = !!$('sessionToken').value;
+  $('statusDot').className = 'status-dot ' + (has ? 'on' : 'off');
+  $('statusText').textContent = has ? 'oturum var' : 'giriş yapılmadı';
+}
+$('guildId').addEventListener('input', (e) => localStorage.setItem('dwa_guild', e.target.value));
+$('sessionToken').addEventListener('input', (e) => { localStorage.setItem('dwa_session', e.target.value); updateStatus(); });
+$('logoutBtn').addEventListener('click', async () => {
+  await api('POST', '/auth/discord/logout');
+  localStorage.removeItem('dwa_session');
+  $('sessionToken').value = '';
+  updateStatus();
+});
+
+function guildId() { return $('guildId').value.trim(); }
+function token() { return $('sessionToken').value.trim(); }
+
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (token()) opts.headers['Authorization'] = 'Bearer ' + token();
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const resp = await fetch(path, opts);
+  let data = null;
+  const text = await resp.text();
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  $('rawResponse').textContent = `${method} ${path}\n\nstatus: ${resp.status}\n\n` + JSON.stringify(data, null, 2);
+  if (!resp.ok) throw new Error(`${resp.status}: ${JSON.stringify(data)}`);
+  return data;
+}
+
+// -- commands --
+async function loadCommands() {
+  const cmds = await api('GET', `/api/guilds/${guildId()}/commands`);
+  const rows = cmds.map(c => `
+    <tr>
+      <td><b>${c.name}</b><br><span class="muted">${c.category || ''}</span></td>
+      <td><span class="pill ${c.enabled ? 'on' : 'off'}">${c.enabled ? 'AÇIK' : 'KAPALI'}</span></td>
+      <td><input type="number" style="width:5rem" id="cd_s_${c.name}" value="${c.cooldown_seconds ?? ''}" placeholder="saniye"></td>
+      <td><input type="number" style="width:4rem" id="cd_u_${c.name}" value="${c.cooldown_uses ?? ''}" placeholder="kullanım"></td>
+      <td><input type="text" style="width:6rem" id="role_${c.name}" value="${c.required_app_role ?? ''}" placeholder="app role"></td>
+      <td>${c.invocation_count}</td>
+      <td>
+        <button class="secondary" onclick="toggleCommand('${c.name}', ${!c.enabled})">${c.enabled ? 'Kapat' : 'Aç'}</button>
+        <button onclick="saveCommand('${c.name}')">Kaydet</button>
+      </td>
+    </tr>`).join('');
+  $('commandsTable').innerHTML = `
+    <table><thead><tr><th>Komut</th><th>Durum</th><th>Cooldown (s)</th><th>Uses</th><th>App Role</th><th>Çağrı</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+async function toggleCommand(name, enabled) {
+  await api('PATCH', `/api/guilds/${guildId()}/commands/${name}`, { enabled });
+  loadCommands();
+}
+async function saveCommand(name) {
+  const s = $(`cd_s_${name}`).value, u = $(`cd_u_${name}`).value, role = $(`role_${name}`).value;
+  const body = { enabled: true, required_app_role: role || null };
+  if (s && u) { body.cooldown_seconds = Number(s); body.cooldown_uses = Number(u); }
+  await api('PATCH', `/api/guilds/${guildId()}/commands/${name}`, body);
+  loadCommands();
+}
+
+// -- rate limits --
+async function rlGet() {
+  const r = await api('GET', `/api/guilds/${guildId()}/ratelimits/${$('rlKey').value}`);
+  $('rlResult').textContent = JSON.stringify(r, null, 2);
+}
+async function rlSet() {
+  const r = await api('PUT', `/api/guilds/${guildId()}/ratelimits/${$('rlKey').value}`, {
+    max_calls: Number($('rlMaxCalls').value), per_seconds: Number($('rlPerSeconds').value),
+  });
+  $('rlResult').textContent = JSON.stringify(r, null, 2);
+}
+async function rlDelete() {
+  await api('DELETE', `/api/guilds/${guildId()}/ratelimits/${$('rlKey').value}`);
+  $('rlResult').textContent = 'silindi -- varsayılana döndü';
+}
+
+// -- escalation --
+async function escSet() {
+  const key = $('escKey').value, threshold = $('escThreshold').value;
+  await api('PUT', `/api/guilds/${guildId()}/escalation-rules/${key}/${threshold}`, {
+    action: $('escAction').value,
+    action_minutes: Number($('escMinutes').value) || null,
+    reason: $('escReason').value || null,
+  });
+  escListKey();
+}
+function renderEscRules(rules) {
+  const rows = rules.map(r => `
+    <tr><td>${r.key}</td><td>${r.threshold}</td><td>${r.action}</td><td>${r.action_minutes ?? '-'}</td>
+    <td><button class="danger secondary" onclick="escDelete('${r.key}', ${r.threshold})">Sil</button></td></tr>`).join('');
+  $('escTable').innerHTML = `<table><thead><tr><th>Key</th><th>Eşik</th><th>Aksiyon</th><th>Dakika</th><th></th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function escListKey() { renderEscRules(await api('GET', `/api/guilds/${guildId()}/escalation-rules/${$('escKey').value}`)); }
+async function escListAll() { renderEscRules(await api('GET', `/api/guilds/${guildId()}/escalation-rules`)); }
+async function escDelete(key, threshold) {
+  await api('DELETE', `/api/guilds/${guildId()}/escalation-rules/${key}/${threshold}`);
+  escListAll();
+}
+
+// -- warnings --
+async function loadWarnings() {
+  const uid = $('warnUserId').value.trim();
+  const records = await api('GET', `/api/guilds/${guildId()}/warnings/${uid}`);
+  if (!records.length) { $('warningsTable').innerHTML = '<p class="muted">Uyarı yok.</p>'; return; }
+  const rows = records.map(r => `
+    <tr><td>${r.created_at}</td><td>${r.reason}</td><td>${r.moderator_id}</td></tr>`).join('');
+  $('warningsTable').innerHTML = `<table><thead><tr><th>Tarih</th><th>Sebep</th><th>Moderatör</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+// -- audit log --
+async function loadAuditLog() {
+  const entries = await api('GET', `/api/guilds/${guildId()}/audit-log`);
+  const rows = entries.map(e => `
+    <tr><td>${e.created_at}</td><td>${e.action}</td><td>${e.actor_user_id}</td><td>${e.target}</td>
+    <td><pre style="margin:0;max-height:6rem">${JSON.stringify(e.detail)}</pre></td></tr>`).join('');
+  $('auditTable').innerHTML = `<table><thead><tr><th>Zaman</th><th>Aksiyon</th><th>Actor</th><th>Hedef</th><th>Detay</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+loadState();
+</script>
+</body>
+</html>
