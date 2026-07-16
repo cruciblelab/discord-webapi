@@ -1,5 +1,39 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## Strateji netleşmesi: `discord_webapi.skeletons` — "demir/rebar", tam komut değil (bu oturumda eklendi)
+
+Kullanıcının yönlendirdiği strateji: bundan sonra öncelik, Discord'da
+kullanılan sistemlere/algoritmalara (rate limit, eskalasyon, permission,
+...) daha kapsamlı odaklanmak — `builtins`'in yaptığı gibi her komutu
+uçtan uca "tam ürün" olarak çoğaltmak yerine. Somut istek: bir komut
+ismimiz varsa (`ping` gibi), kullanıcı onu import edip sadece "demiri"
+(komut kaydı + dashboard'dan ayarlanabilir rate-limit kontrolü) alsın,
+gövdeyi (ne cevap vereceğini) kendisi yazsın — "ping binasının demirini
+koyarız, çeliği/iç mekanı siz yaparsınız" benzetmesi. Tamamen opsiyonel;
+hiç kullanmadan da düz discord.py yazılabilir.
+
+`discord_webapi/skeletons/` bu yüzden `builtins`'ten AYRI bir paket
+olarak açıldı (farklı bir sözleşme: `setup(bot, **kwargs)` yerine
+"handler'ı sen yazarsın, biz ona bir context/hook sağlarız"):
+
+1. `skeletons/_shared.py::rate_limited_command_skeleton(bot, handler, *,
+   command_name, description, rate_limiter=None, rate_limit_key=None,
+   rate_limited_message=...)`: genel "demir" fabrikası — hybrid komutu
+   kaydeder, `rate_limiter` verilmişse (`GuildRateLimiter`) her kullanıcı
+   için `sub_key=str(ctx.author.id)` ile kontrol eder, DM'lerde (guild
+   yok) kontrolü tamamen atlar, `rate_limiter=None` ise hiç kontrol
+   yapmadan direkt `handler(ctx)`'i çağırır.
+2. `skeletons/ping.py::ping_skeleton`: ilk somut iskelet, yukarıdaki
+   fabrikanın ping'e özel varsayılanlarla (`command_name="ping"`,
+   `rate_limit_key="ping"`) ince bir sarmalayıcısı.
+
+Gelecekteki her yeni iskelet aynı şekli takip edecek: paylaşılan bir
+"rebar" fabrikasının ince, isimli bir sarmalayıcısı, asla tam bir komut.
+Testler: `tests/unit/test_skeletons_ping.py` (7 test — handler çağrımı,
+rate-limit engelleme, kullanıcı bazlı bağımsız bucket, DM'de atlanma,
+varsayılan/özel `rate_limit_key`). 368 test yeşil (1 ortam-bağımlı
+Postgres testi hariç), ruff+mypy temiz.
+
 ## v0.6: `discord_webapi.escalation` — genel, tamamen kullanıcı-tanımlı eskalasyon motoru (bu oturumda tamamlandı)
 
 Kullanıcının `ratelimits`'ten sonraki net talebi: "ban kick timeout vesaire

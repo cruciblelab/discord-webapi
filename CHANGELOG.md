@@ -2,6 +2,17 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `discord_webapi.skeletons` — "demir/rebar" komut altyapısı, tam komut değil
+
+### Eklenenler
+
+- **`discord_webapi.skeletons`**: `builtins`'ten ayrı, yeni bir paket — komut kaydı + dashboard'dan ayarlanabilir rate-limit kontrolünü ("demir") biz sağlarız, komutun ne yaptığını (gövdeyi/"çeliği") siz yazarsınız. `builtins.ban` gibi tam-uçtan-uca hazır bir komut değil; kullanmak zorunda değilsiniz, düz discord.py de yazabilirsiniz.
+- `skeletons/_shared.py::rate_limited_command_skeleton`: genel fabrika — hybrid komut kaydeder, verilirse `GuildRateLimiter`'ı kullanıcı bazlı kontrol eder (DM'lerde atlar, rate limiter verilmezse hiç kontrol yapmaz), izin varsa sizin handler'ınızı çağırır.
+- `skeletons/ping.py::ping_skeleton`: ilk somut örnek — ping'e özel varsayılanlarla ince bir sarmalayıcı.
+- Strateji notu: bundan sonraki öncelik Discord'da kullanılan sistemlere/algoritmalara (rate limit, eskalasyon, permission vb.) daha kapsamlı odaklanmak; yeni bir `builtins` komutu yerine yeni bir skeleton ya da yeni bir altyapı sistemi tercih ediliyor, altyapıda gerçek bir boşluk çıkmadıkça.
+
+7 yeni test (`tests/unit/test_skeletons_ping.py`), 368 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — v0.6: `discord_webapi.escalation` — genel, tamamen kullanıcı-tanımlı eskalasyon motoru
 
 ### Eklenenler
