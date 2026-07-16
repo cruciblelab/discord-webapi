@@ -1,10 +1,18 @@
 # Fiziksel Test Planı (Termux / gerçek Discord sunucusu)
 
-Bu doküman, `discord-webapi` v0.2'nin tüm özelliklerini gerçek bir Discord
-botu + gerçek bir sunucu (guild) üzerinde elle test etmek için adım adım bir
-kontrol listesidir. Otomatik test paketi (`pytest`) zaten yeşil — burada
-amaç, otomatik testlerin kapsamadığı ("gerçek tarayıcı", "gerçek Discord
-Gateway", "gerçek OAuth2 redirect") uçtan uca senaryoları doğrulamak.
+Bu doküman, `discord-webapi`'nin tüm özelliklerini (v0.2 çekirdeğinden
+v0.7 extension sistemine kadar) gerçek bir Discord botu + gerçek bir sunucu
+(guild) üzerinde elle test etmek için adım adım bir kontrol listesidir.
+Otomatik test paketi (`pytest`, 427 test yeşil) zaten geçiyor — burada amaç,
+otomatik testlerin kapsamadığı ("gerçek tarayıcı", "gerçek Discord Gateway",
+"gerçek OAuth2 redirect", "gerçek moderasyon aksiyonu") uçtan uca
+senaryoları doğrulamak.
+
+**Bölümler**: 1-13 çekirdek + v0.2-v0.4 özellikleri. 14-21 daha yeni
+özellikler (rate limit sistemi, escalation, yeni builtin'ler, bot-tarafı
+audit, required_app_role, jobs, üçüncü-taraf extension'lar, yeni örnekler).
+İkisini de tek turda yapmak zorunda değilsin — takıldığın adımı ve tam
+hata/log çıktısını paylaş.
 
 **Hazır test botu**: Her adımı elle kurmak yerine `examples/full_featured_bot/`
 kullan — WebSocket relay, audit log, cookie-consent banner ve her builtin
@@ -176,8 +184,130 @@ seni reddediyor. `full_featured_bot`'ta demo endpoint zaten hazır:
 - [ ] Override'ı kaldır (Deny'ı temizle) → TTL dolduktan sonra tekrar 200 döndüğünü doğrula.
 - [ ] Var olmayan bir `channel_id` ile çağır → 403 (bulunamadı) aldığını doğrula.
 
+## 14. Sunucu bazlı rate limit sistemi (`ratelimits`, v0.6)
+
+`CommandRegistry`'nin cooldown'undan farkı: bu bir komuta bağlı değil,
+keyfi bir string `key`'e bağlanıyor ve dashboard'dan sunucu bazlı canlı
+ayarlanabiliyor. `full_featured_bot`'ta `/ping` komutu bunu kullanıyor
+(`enable_ratelimits_api=True` açık) ve `examples/skeleton_custom_command`
+`/weather` ile aynısını gösteriyor.
+
+- [ ] Botta `/ping` komutunu (full_featured_bot) birkaç kez üst üste çalıştır → varsayılan limitte (5 çağrı / 10 sn) bir noktadan sonra "Slow down!" yanıtı aldığını doğrula.
+- [ ] Limiti bir sunucu için sıkılaştır (restart YOK):
+  ```
+  curl -X PUT -H "Authorization: Bearer $DWA_SESSION" -H "Content-Type: application/json" \
+      -d '{"max_calls": 1, "per_seconds": 30}' \
+      http://localhost:8000/api/guilds/<guild_id>/ratelimits/ping
+  ```
+- [ ] `/ping`'i iki kez çalıştır → ilki geçer, ikincisi "Slow down!" ile reddedilir (30 sn içinde).
+- [ ] **Farklı bir kullanıcıyla** aynı anda `/ping` dene → limitin kişi bazlı (`sub_key`) olduğunu, diğer kullanıcının etkilenmediğini doğrula.
+- [ ] `GET /api/guilds/<guild_id>/ratelimits/ping` → kuralın döndüğünü doğrula. `DELETE` ile sil → `/ping` tekrar varsayılan limite döner.
+- [ ] **İkinci bir sunucuda** (botun olduğu başka bir guild) `/ping`'in hâlâ varsayılan limitte olduğunu, ilk sunucudaki değişiklikten etkilenmediğini doğrula (per-guild izolasyon).
+
+## 15. Escalation motoru (ceza-eşikleme, `escalation`, v0.6)
+
+**Hiçbir varsayılan eşik/aksiyon YOK** — merdivenin her basamağını sen
+tanımlarsın. `full_featured_bot`'ta `automod`'un `on_violation`'ı
+`EscalationEngine`'i besliyor (`enable_escalation_api=True` açık).
+`examples/hybrid_moderation` bunu odaklı gösteriyor.
+
+- [ ] Merdiven tanımla (restart YOK): 3 automod ihlalinde timeout, 5'te kick:
+  ```
+  curl -X PUT -H "Authorization: Bearer $DWA_SESSION" -H "Content-Type: application/json" \
+      -d '{"action": "timeout", "action_minutes": 10}' \
+      http://localhost:8000/api/guilds/<guild_id>/escalation-rules/automod/3
+  curl -X PUT -H "Authorization: Bearer $DWA_SESSION" -H "Content-Type: application/json" \
+      -d '{"action": "kick"}' \
+      http://localhost:8000/api/guilds/<guild_id>/escalation-rules/automod/5
+  ```
+- [ ] `GET /api/guilds/<guild_id>/escalation-rules` → iki kuralın da listelendiğini doğrula.
+- [ ] Bir test hesabıyla, automod'un yakalayacağı bir mesajı (madde 16'daki yasaklı kelime) **tam 3 kez** gönder → 3. ihlalde o hesabın gerçekten timeout aldığını Discord'da doğrula.
+- [ ] Aynı hesapla 5. ihlale ulaş → gerçekten kick edildiğini doğrula. (Not: kick sonrası tekrar sunucuya davet et.)
+- [ ] **Hiç kural tanımlanmamış** bir `key` için ihlaller olsun → sadece sayıldığını, hiçbir aksiyon alınmadığını doğrula ("biz dayatmayalım" ilkesi).
+- [ ] `DELETE .../escalation-rules/automod/3` ile bir basamağı sil → o eşikte artık aksiyon alınmadığını doğrula.
+
+## 16. Yeni builtin'ler: `role_assign` + `automod` (v0.5-v0.6)
+
+**role_assign** (`/role-add`, `/role-remove`):
+- [ ] `/role-add @member @role` çalıştır → rolün gerçekten atandığını doğrula.
+- [ ] Botun kendi en yüksek rolünden **daha yüksek** bir rolü atamayı dene → reddedildiğini doğrula (rol-hiyerarşisi koruması; bu, hedef üyenin değil, verilen ROLÜN sırasını kontrol ediyor).
+- [ ] `/role-remove @member @role` → rolün alındığını doğrula.
+
+**automod** (7 bağımsız kontrol) — `full_featured_bot`'ta `banned_words_list=[]`
+(boş) + `block_invites=True` ile açık. Test için `main.py`'de
+`banned_words_list=["yasakkelime"]` yap ve yeniden başlat:
+- [ ] Yasaklı kelime içeren mesaj gönder → mesajın silindiğini + kısa uyarı yanıtının (10sn sonra otomatik silinen) çıktığını doğrula.
+- [ ] Başka bir sunucunun davet linkini (`discord.gg/...`) gönder → silindiğini doğrula (invite filter).
+- [ ] Kısa sürede çok sayıda (varsayılan 5/10sn) mesaj gönder → spam olarak yakalandığını doğrula.
+- [ ] Çok sayıda mention (varsayılan >5) içeren mesaj → mention-spam yakalandığını doğrula.
+- [ ] `manage_messages` izni olan bir moderatör hesabıyla aynı yasaklı mesajı gönder → **muaf** tutulduğunu (silinmediğini) doğrula (`exemptions`).
+- [ ] (Opsiyonel) `caps_ratio`, `max_emoji`, `allowed_domains`/`blocked_domains` parametrelerini `setup_automod`'a ekleyip caps/emoji/link filtrelerini de dene.
+
+## 17. Bot-tarafı audit (warn / escalation / automod, v0.7)
+
+Audit log artık sadece dashboard yazmalarını değil, bot-tarafı moderasyon
+aksiyonlarını da (opt-in) kaydediyor. `full_featured_bot` `enable_audit_log=True`
+ile açık. **Not**: warn/automod audit'i için `setup_warn`/`setup_automod`'a
+`audit_logger=app.state.discord_webapi_audit_logger` geçilmeli (quickstart
+sonrası; escalation audit'i `enable_audit_log` ile otomatik).
+
+- [ ] Madde 15'teki gibi automod ihlalleriyle bir escalation tetikle (timeout/kick).
+- [ ] `GET /api/guilds/<guild_id>/audit-log` çağır → `escalation.timeout`/`escalation.kick` kaydının `actor_user_id: 0` (otomatik aksiyon), `target` (üye id), ve `detail` (key/threshold/count) ile göründüğünü doğrula.
+- [ ] `full_featured_bot`'a `setup_warn(bot, audit_logger=...)` ekleyip `/warn @member sebep` çalıştır → audit-log'da `action: "warn"`, `actor_user_id` = moderatörün id'si olan bir kayıt gördüğünü doğrula.
+- [ ] `setup_automod(bot, ..., audit_logger=...)` ile bir ihlal tetikle → `automod.violation` kaydını (actor 0) doğrula.
+- [ ] Bu bot-tarafı kayıtların, madde 11'deki dashboard kayıtlarıyla **aynı** audit-log'da (aynı store) birlikte listelendiğini doğrula.
+
+## 18. Komut için `required_app_role` (v0.7)
+
+Bir komutu belirli bir AppRole'e sahip olanlarla sınırla — Discord izninden
+bağımsız, dashboard'dan canlı ayarlanır.
+- [ ] Madde 5'teki gibi bir `moderator` AppRole oluştur, kendi user id'ni ekle.
+- [ ] Bir komuta bu rolü şart koş:
+  ```
+  curl -X PATCH -H "Authorization: Bearer $DWA_SESSION" -H "Content-Type: application/json" \
+      -d '{"enabled": true, "required_app_role": "moderator"}' \
+      http://localhost:8000/api/guilds/<guild_id>/commands/ping
+  ```
+- [ ] `moderator` AppRole'ünde olan hesabınla `/ping` çalıştır → çalıştığını doğrula.
+- [ ] AppRole'de **olmayan** ikinci bir hesapla `/ping` dene → reddedildiğini doğrula (Discord izni ne olursa olsun).
+- [ ] `GET .../commands` ile komutun `required_app_role: "moderator"` gösterdiğini doğrula. `{"enabled": true, "required_app_role": null}` ile kaldır → herkes tekrar çalıştırabilsin.
+
+## 19. İş kuyruğu (`jobs`, opt-in)
+
+Varsayılan kapalı; `enable_jobs=True` + bir `job_queue` (worker'ları
+`register_worker` ile kayıtlı) gerektirir — bu senaryo composable API
+gerektiriyor (quickstart job_queue kurmuyor).
+- [ ] `InProcessJobQueue()` kur, bir `job_type` için `register_worker` ile handler kaydet, `DiscordWebAPI(..., job_queue=...)` + `install(app, enable_jobs=True)`.
+- [ ] `POST /api/guilds/<guild_id>/jobs` ile bir iş kuyruğa at → `job_id` döndüğünü doğrula.
+- [ ] `GET /api/guilds/<guild_id>/jobs/<job_id>` ile durumun `pending`→`running`→`succeeded` (ya da `failed`) olarak ilerlediğini doğrula.
+- [ ] (Redis varsa) `RedisJobQueue` ile **iki ayrı worker süreci** başlat, çok sayıda iş at → her işin sadece BİR worker tarafından işlendiğini (competing-consumer) doğrula.
+
+## 20. Üçüncü-taraf extension (`extensions` + scaffold, v0.7)
+
+`discord-webapi`'nin kendi `extras`'ı gibi, başkalarının yazıp paylaşabileceği
+paketler. Kod çalıştıran bir plugin VM değil — sıradan bir pip paketi.
+- [ ] Bir iskelet extension üret: `discord-webapi-scaffold new funbot` (ya da `python -m discord_webapi.extensions.scaffold new funbot`).
+- [ ] Üretilen klasöre gir, `pip install -e ".[dev]"` → `python -m pytest` (üretilen örnek test geçmeli).
+- [ ] Ana bot projenden keşfet:
+  ```python
+  from discord_webapi.extensions import ExtensionRegistry
+  reg = ExtensionRegistry.discover()
+  print(reg.names)                      # ['funbot'] görmeli
+  d = reg.get("funbot")
+  print(d.compatible, d.compat_reason)  # True, None
+  ```
+- [ ] `d.extension.setup(bot, rate_limiter=app.state.discord_webapi_ratelimiter)` çağır → üretilen `/roll` komutunun botta çalıştığını Discord'da doğrula.
+- [ ] `funbot/__init__.py`'de manifest'in `discord_webapi_requires`'ını uyumsuz bir aralığa (`">=99.0"`) değiştir, tekrar keşfet → `d.compatible == False` ve `compat_reason`'ın anlamlı bir mesaj döndüğünü doğrula.
+- [ ] İki farklı extension'ı aynı `name` ile kurup keşfet → `reg.errors`'da "duplicate" hatası olduğunu, birinin yine de çalıştığını doğrula.
+
+## 21. Yeni odaklı örnekler (v0.7)
+
+- [ ] `examples/skeleton_custom_command/` çalıştır → `/weather Istanbul` kendi yanıtını versin; madde 14'teki gibi `ratelimits/weather` ile limiti canlı ayarla, `/weather`'ın rate-limit'lendiğini doğrula.
+- [ ] `examples/hybrid_moderation/` çalıştır → `main.py`'de `BANNED_WORDS`'e bir kelime ekle; o kelimeyi gönderince (a) mesaj silinsin, (b) `/warns` sayısı artsın (paylaşılan WarnStore), (c) madde 15'teki gibi bir escalation merdiveni tanımlıysa eşiğe ulaşınca aksiyon alınsın — üç sistemin birlikte, her biri kendi şeridinde çalıştığını gözlemle.
+
 ---
 
-Bir adım beklenmedik davranış gösterirse (özellikle WebSocket round-trip veya
-multi-DB kalıcılık), hangi adımda takıldığını ve tam hata/log çıktısını
-paylaş — birlikte kök nedene inelim.
+Bir adım beklenmedik davranış gösterirse (özellikle WebSocket round-trip,
+multi-DB kalıcılık, escalation tetikleme, ya da extension keşfi), hangi
+adımda takıldığını ve tam hata/log çıktısını paylaş — birlikte kök nedene
+inelim.
