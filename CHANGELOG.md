@@ -13,6 +13,24 @@ Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
 10 yeni test (`tests/unit/test_skeletons_ping.py`), 371 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
 
+### `skeletons/README.md`'ye "derinlemesine örnekler" bölümü + kanıtlayıcı testler
+
+Sadece dokümantasyon prose'u değil, iddia edilen her senaryonun gerçekten
+çalıştığını kanıtlayan çalıştırılabilir testler eklendi
+(`tests/integration/test_skeletons_deep_dive.py`, 5 test):
+1. Dashboard'dan (`GuildRateLimiter.set_rule`/`delete_rule`, `PUT/DELETE
+   /api/guilds/{id}/ratelimits/{key}`'in altında çalışan aynı mekanizma)
+   canlı kural değişikliği — komut kodu HİÇ değişmeden.
+2. Skeleton'ın rate-limit kontrolü ile tamamen ayrı, kendi
+   `aiosqlite` tablonuza yazma (hibrit kullanım).
+3. `rate_limiter=None` ile tamamen opt-out.
+4. Aynı komutta hem `rate_limited(...)` hem `EscalationEngine.record_violation(...)`
+   — iki bağımsız sistemin bir arada kullanımı.
+5. Aynı komut kodu, iki farklı guild'de tamamen bağımsız limitlerle
+   (guild bazlı branching kodu olmadan).
+
+376 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — v0.6: `discord_webapi.escalation` — genel, tamamen kullanıcı-tanımlı eskalasyon motoru
 
 ### Eklenenler
