@@ -42,7 +42,12 @@ redis = ["redis>=5.0"]
 # the extension system still works -- the compatibility check just reports
 # "not checked" instead of blocking an incompatible extension.
 extensions = ["packaging>=23.0"]
-all = ["discord-webapi[sql,redis,extensions]"]
+# Only needed for the self-hosted captcha providers (MathCaptchaProvider/
+# TextCaptchaProvider) to render a distorted PNG. The third-party captcha
+# providers (ReCaptchaProvider/HCaptchaProvider) need only httpx, already
+# a core dependency -- no extra required for those.
+captcha = ["Pillow>=10.1"]
+all = ["discord-webapi[sql,redis,extensions,captcha]"]
 dev = [
   "discord-webapi[all]",
   "pytest>=8.0",

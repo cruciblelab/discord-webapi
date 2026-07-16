@@ -235,6 +235,72 @@ açıyor, nesnenin kendisi (`api.escalation_engine` /
 `request.app.state.discord_webapi_escalation_engine`) her zaman kod
 içinden kullanılabilir, dashboard API'si kapalıyken bile.
 
+## Captcha / robot doğrulama (`discord_webapi.captcha`, opt-in)
+
+Sıfırdan yazılmış iki kendi captcha sağlayıcısı -- `MathCaptchaProvider`
+(basit bir matematik sorusu) ve `TextCaptchaProvider` (klasik, bozuk
+yazıyı okuma) -- her render'da farklı renk/döndürme/gürültüyle gerçek bir
+PNG üretiyor (SVG değil: SVG'deki metin dosyanın içinde düz metin olarak
+durur, herhangi biri -- ya da bir yapay zeka -- doğrudan okuyabilir,
+captcha'yı anlamsız kılar). Ayrıca üçüncü-taraf servisleri saran iki
+sağlayıcı daha (`ReCaptchaProvider`, `HCaptchaProvider`) -- kendi
+site_key/secret_key'inizi geçip kullanırsınız. Kendi captcha
+kütüphanenizi/servisinizi de `CaptchaProvider` Protocol'ünü (`issue()` +
+`verify()`) uygulayarak bağlayabilirsiniz -- miras almaya gerek yok,
+kütüphanedeki her Store'la aynı "kendi implementasyonunu getir" deseni.
+
+Rate limiter/escalation'ın aksine `DiscordWebAPI` hiçbir captcha
+sağlayıcısını otomatik kurmaz (hangi sağlayıcı, hangi reCAPTCHA
+anahtarları -- sağlıklı bir varsayılan yok) -- kendiniz oluşturup
+`app.state`'e koyup router'ı bağlarsınız. İki kullanım şekli:
+
+**1. Sitede direkt kullanım** (Discord'la ilgisi olmayan bir form vb.):
+
+```python
+provider = MathCaptchaProvider(MemoryCaptchaStore())
+app.state.discord_webapi_captcha_providers = {"math": provider}
+app.include_router(build_captcha_router())
+```
+
+`GET /api/captcha/challenge?kind=math` bir görsel + `challenge_id`
+döndürür, `POST /api/captcha/verify` (`{"kind", "challenge_id",
+"response"}`) doğrular.
+
+**2. Bot komutu için eşik/gate** (`CaptchaGate`) -- örnek senaryo: bir
+çekiliş botunun `/join` komutu kullanıcıya bir doğrulama linki yolluyor
+(DM, ephemeral yanıt -- botun kendi tercihi, `CaptchaGate` karışmıyor),
+kullanıcı linke gidip captcha'yı çözünce bot `Transport` event'i
+üzerinden anında haberdar oluyor -- polling yok, bot ve web ayrı process
+olsa bile çalışıyor:
+
+```python
+gate = CaptchaGate(transport, MemoryVerificationStore(), provider)
+app.state.discord_webapi_captcha_gate = gate
+app.include_router(build_captcha_router())
+
+async def handle_verified(event):
+    user = await bot.fetch_user(event.user_id)
+    await user.send(f"Doğrulandı! {event.metadata['giveaway_id']} çekilişine katıldın.")
+
+gate.on_verified(handle_verified)
+
+@bot.hybrid_command(name="join")
+async def join(ctx):
+    request = await gate.create_verification(
+        user_id=ctx.author.id, guild_id=ctx.guild.id,
+        purpose="giveaway_entry", metadata={"giveaway_id": "spring-giveaway"},
+    )
+    url = f"https://yoursite.com/verify/{request.token}"
+    await ctx.author.send(f"Doğrulamak için: {url}")
+    await ctx.reply("Sana DM attım, linkten doğrula.", ephemeral=True)
+```
+
+Kaba kuvvet koruması: her self-hosted challenge sınırlı sayıda yanlış
+denemeden sonra geçersiz oluyor (`max_attempts`, varsayılan 5), tek
+kullanımlık (doğru cevap bile ikinci kez kabul edilmiyor), ve süresi
+doluyor (`ttl`, varsayılan 10-15 dakika). Dashboard endpoint'leri de
+(kimliksiz, herkese açık olduğu için IP bazlı) rate limit'li.
+
 ## Kuyruk sistemi (`discord_webapi.jobs`, opt-in)
 
 Uzun süren işler (toplu moderasyon, export) için — request/response

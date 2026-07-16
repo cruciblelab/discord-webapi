@@ -2,6 +2,59 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `discord_webapi.captcha`: sıfırdan captcha altyapısı
+
+### Eklenenler
+
+- **`discord_webapi.captcha`** (opt-in, `DiscordWebAPI` tarafından
+  otomatik kurulmuyor -- hangi sağlayıcı/anahtarlar sizin seçiminiz):
+  pluggable bir captcha sistemi, iki bağımsız kullanım şekli için:
+  - **Sitede direkt kullanım** (`build_captcha_router()`'ın
+    `GET /api/captcha/challenge`/`POST /api/captcha/verify`'ı): Discord'la
+    ilgisi olmayan herhangi bir noktayı (bir kayıt formu, vb.) korumak
+    için.
+  - **Bot komutu için eşik/gate** (`CaptchaGate`): bir doğrulama linkini
+    (DM, ephemeral yanıt -- botun kendi tercihi) bir Discord kullanıcısına
+    bağlar; kullanıcı linkte captcha'yı çözünce `captcha_verified`
+    Transport event'i yayınlanır -- bot `gate.on_verified(...)` ile anında
+    haberdar olur, polling yok, bot ve web ayrı process olsa bile çalışır.
+    Örnek senaryo: bir çekiliş botunun `/join` komutu.
+- **İki kendi sağlayıcımız** (`MathCaptchaProvider`, `TextCaptchaProvider`,
+  `discord-webapi[captcha]` -- Pillow -- gerektiriyor): her ikisi de
+  gerçek bir raster PNG üretiyor, SVG DEĞİL -- SVG'deki metin dosyanın
+  içinde düz metin olarak durur, herhangi biri (ya da bir OCR/yapay zeka)
+  doğrudan okuyabilir, bu da captcha'yı anlamsız kılardı. Her render'da
+  farklı arka plan/harf rengi, harf başına döndürme ve hafif gürültü --
+  aynı metin için her seferinde aynı görünen bir görsel üretmek bir
+  scraper'ın görsel->cevap eşleşmelerini ezberlemesine izin verirdi.
+- **İki üçüncü-taraf sağlayıcı sarmalayıcısı** (`ReCaptchaProvider`,
+  `HCaptchaProvider` -- sadece zaten çekirdek bağımlılık olan `httpx`
+  gerektiriyor, ek kurulum yok): kendi site_key/secret_key'inizi geçip
+  Google reCAPTCHA v2 / hCaptcha'yı kullanın. Kendi captcha
+  kütüphanenizi/servisinizi de `CaptchaProvider` Protocol'ünü (`issue()` +
+  `verify()`) uygulayarak bağlayabilirsiniz.
+- Kaba kuvvet koruması: her self-hosted challenge sınırlı sayıda yanlış
+  denemeden sonra geçersiz oluyor (varsayılan 5), tek kullanımlık (doğru
+  cevap bile ikinci kez kabul edilmiyor), süresi doluyor (varsayılan
+  10-15 dakika). Dashboard endpoint'leri IP bazlı rate limit'li (kimliksiz,
+  herkese açık endpoint'ler oldukları için diğer dashboard yazma
+  endpoint'lerinin kullandığı kullanıcı-bazlı rate limit deseni burada
+  uygulanamıyor).
+- `MemoryCaptchaStore`/`MemoryVerificationStore` (varsayılan, sıfır
+  altyapı) + `SQLCaptchaStore`/`SQLVerificationStore` (`discord-webapi[sql]`,
+  kendi bağımsız tabloları -- `escalation`/`extras.warn`'la aynı ilke).
+
+Gerçek Pillow render'ı elle görsel olarak doğrulandı (birkaç iterasyon --
+ilk deneme sabit genişlik yüzünden uzun metinlerde harfler üst üste
+biniyordu, gürültü çizgileri de metnin üstünden geçip okunaklılığı
+bozuyordu; genişlik metne göre otomatik ayarlanacak, gürültü kısa yerel
+çizgilere indirilecek şekilde düzeltildi). 55 yeni test (store CRUD,
+render'ın gerçek PNG üretmesi, sağlayıcıların issue/verify akışı, üçüncü-
+taraf sağlayıcıların `respx` ile mock'lanmış `siteverify` çağrıları,
+`CaptchaGate`'in Transport event'i dahil tam çekiliş-senaryosu akışı,
+dashboard API'sinin uçtan uca `TestClient` testleri). 583 test yeşil (1
+ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — Kapsamlı güvenlik/sağlamlık taraması (4 paralel denetim ajanı)
 
 Kullanıcının "sağlam bir tarama yap, bugları fixle, sunduğumuz şeylerde

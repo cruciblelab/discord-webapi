@@ -1,0 +1,71 @@
+"""Self-hosted arithmetic captcha -- renders "7 + 4 = ?" as a distorted
+PNG (see `discord_webapi.captcha.rendering`) and checks the typed numeric
+answer against what's stored server-side. Needs the
+`discord-webapi[captcha]` extra (Pillow).
+"""
+
+from __future__ import annotations
+
+import random
+import secrets
+from datetime import UTC, datetime, timedelta
+
+from discord_webapi.captcha._shared import verify_pending_challenge
+from discord_webapi.captcha.base import CaptchaStore
+from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha
+from discord_webapi.captcha.rendering import render_captcha_image
+
+_OPERATORS = ("+", "-", "*")
+
+
+class MathCaptchaProvider:
+    """`CaptchaProvider` that asks the user to solve a small arithmetic
+    problem shown in a distorted image. Numbers are kept small (1-20,
+    subtraction never goes negative) so the problem is trivial for a
+    human and the rendered text stays short."""
+
+    kind = "math"
+
+    def __init__(
+        self,
+        store: CaptchaStore,
+        *,
+        ttl: timedelta = timedelta(minutes=10),
+        max_attempts: int = 5,
+    ) -> None:
+        self.store = store
+        self.ttl = ttl
+        self.max_attempts = max_attempts
+
+    async def issue(self) -> CaptchaChallenge:
+        a = random.randint(1, 20)
+        b = random.randint(1, 20)
+        operator = random.choice(_OPERATORS)
+        if operator == "-" and b > a:
+            a, b = b, a  # keep subtraction non-negative -- less confusing
+        answer = {"+": a + b, "-": a - b, "*": a * b}[operator]
+        prompt_text = f"{a} {operator} {b} = ?"
+
+        challenge_id = secrets.token_urlsafe(16)
+        now = datetime.now(UTC)
+        await self.store.create(
+            PendingCaptcha(
+                challenge_id=challenge_id,
+                kind=self.kind,
+                answer=str(answer),
+                created_at=now,
+                expires_at=now + self.ttl,
+            )
+        )
+        return CaptchaChallenge(
+            challenge_id=challenge_id,
+            kind=self.kind,
+            prompt="Solve the problem shown in the image.",
+            image_data_uri=render_captcha_image(prompt_text),
+            expires_at=now + self.ttl,
+        )
+
+    async def verify(self, challenge_id: str, response: str) -> bool:
+        return await verify_pending_challenge(
+            self.store, challenge_id, response, max_attempts=self.max_attempts
+        )

@@ -1,5 +1,91 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## `discord_webapi.captcha`: sıfırdan captcha sistemi (bu oturumda)
+
+Kullanıcının isteği (Türkçe, yorumlanmış): web tabanlı robot doğrulama
+(captcha) -- kendi sistemimizden 1-2 farklı tür (biri matematiksel,
+"yapay zeka tanıyamasın diye farklı renkler kullanarak", biri görsel
+bazlı), reCAPTCHA/hCaptcha gibi üçüncü-taraf servisleri de (ya da başka
+captcha kütüphanelerini) bağlayabilme, ve iki kullanım şekli: sitede
+direkt (istedikleri noktalarda) ve bot komutu için bir "eşik" olarak.
+Somut örnek senaryo (kullanıcının kendi tabiriyle "sadece senaryoydu, 1
+tane basit senaryo"): bir çekiliş botunun butonuna tıklanınca bot
+kullanıcıya (DM mi, sadece ona görünen bir mesaj mı -- botun kendi
+tercihi) bir link yolluyor, kullanıcı linke gidip captcha'yı doğrulayınca
+bot "çekilişe katılman başarılı" diyor.
+
+**Kritik erken tasarım kararı -- SVG değil, gerçek PNG**: ilk aklıma
+gelen "SVG üret, Pillow'a gerek kalmasın" fikri temelden güvensiz --
+SVG'deki metin dosyanın içinde gerçek bir `<text>` node'u olarak durur,
+yani biri (ya da bir script/yapay zeka) sadece XML'i parse edip cevabı
+doğrudan okuyabilir, captcha'yı tamamen anlamsız kılar. Bunun yerine
+gerçek raster PNG (Pillow, yeni opsiyonel `discord-webapi[captcha]`
+extra'sı) -- metin sadece piksel verisi olarak var, hiçbir yapılandırılmış
+metin düğümü yok. Pillow'un kendi gömülü fontu kullanıldı
+(`ImageFont.load_default(size=...)`, Pillow>=10.1) -- sisteme kurulu bir
+TTF font dosyasına (ör. DejaVuSans) bel bağlamak taşınabilir değil (minimal
+Docker image'larında font olmayabilir), Pillow'un kendi içine gömdüğü font
+her platformda çalışıyor.
+
+**Render kalitesi elle görsel olarak doğrulandı, ilk denemede iki gerçek
+bug bulundu**: (1) sabit 220px genişlik uzun matematik ifadelerinde
+("20 * 15 = ?", 11 karakter) harfleri üst üste bindiriyordu -- genişlik
+artık metne göre otomatik hesaplanıyor (`len(text) * _CHAR_ADVANCE + 20`).
+(2) gürültü çizgileri köşeden köşeye çiziliyordu, bazı harflerin (özellikle
+"=") üstünden tam geçip okunmaz hale getiriyordu -- artık kısa yerel
+"çiziklere" (başlangıç noktasından ±40px/±20px) indirildi. Düzeltmeden
+önce/sonra render'lar gerçekten PNG'ye decode edilip görsel olarak
+incelendi (Read tool ile), sadece kod okuyarak değil.
+
+**Mimari** (kütüphanenin geri kalanıyla aynı desen -- Protocol + Memory/SQL
++ Transport event):
+- `CaptchaProvider` Protocol (`issue()` + `verify()`) hem kendi
+  sağlayıcılarımızı hem üçüncü-taraf sarmalayıcıları hem de kullanıcının
+  yazacağı herhangi bir şeyi aynı arayüzde topluyor -- kendi sağlayıcılar
+  `CaptchaStore`'da (challenge_id -> doğru cevap) durum tutuyor, üçüncü-
+  taraf sağlayıcılar (reCAPTCHA/hCaptcha) hiç yerel durum tutmuyor, tüm
+  durum Google/hCaptcha'da.
+- `CaptchaGate`: bot-tarafı eşikleme katmanı. `create_verification()` bir
+  challenge üretip tek kullanımlık bir token'a sarıyor,
+  `get_challenge(token)`/`verify(token, response)` web tarafının
+  kullandığı API, `verify()` başarılı olunca `captcha_verified` Transport
+  event'i yayınlıyor (`GuildRateLimiter`/`EscalationEngine`/`AppRoleCache`
+  ile aynı cross-process canlı bildirim deseni), `on_verified(handler)`
+  bot tarafının `transport.subscribe`'ı elle çağırmasına gerek kalmadan
+  abone olmasını sağlıyor.
+- Kaba kuvvet koruması `captcha/_shared.py`'de tek bir
+  `verify_pending_challenge()` helper'ında toplandı (Math/Text
+  provider'ların `verify()`'ı birer satıra iniyor) -- süre doldu mu, deneme
+  hakkı bitti mi, cevap doğru mu kontrolü ve her durumda tek-kullanımlık
+  silme mantığı iki yerde ayrı ayrı yazılıp birbirinden sapma riski
+  taşımasın diye.
+- Dashboard API'si (`build_captcha_router()`) iki bağımsız endpoint grubu
+  sunuyor: düz `/api/captcha/challenge`+`/verify` (guild/kullanıcı kavramı
+  yok, herkese açık bir form vb. korumak için) ve `/api/captcha/gate/
+  {token}` (+ `/verify`) -- `CaptchaGate`'in web yarısı. `DiscordWebAPI`'ye
+  otomatik bağlanmıyor (ratelimiter/escalation'ın aksine) -- hangi
+  sağlayıcıyı/anahtarları kullanacağının sağlıklı bir varsayılanı yok, bu
+  yüzden `app.state.discord_webapi_captcha_providers`/`_captcha_gate`
+  elle set edilip router elle `include_router` edilecek şekilde tasarlandı.
+
+**Test kapsamı**: store CRUD (Memory+SQL), render'ın gerçekten PNG
+üretmesi + metin uzunluğuna göre boyutlanması + her çağrıda piksel-farklı
+olması (aynı cevap için hep aynı görsel scraper'ın ezberlemesine izin
+verirdi), sağlayıcıların issue/verify akışı (doğru/yanlış cevap, tek-
+kullanımlık, deneme limiti, süre dolması), üçüncü-taraf sağlayıcıların
+`respx`-mock'lanmış gerçek HTTP çağrıları (auth akışlarındaki mevcut
+desenle aynı), `CaptchaGate`'in tam çekiliş-senaryosu akışı (Transport
+event'i dahil -- `InProcessTransport`'un fire-and-forget dispatch'i
+yüzünden `asyncio.sleep(0.05)` gerekti, bu oturumun daha önceki
+bölümlerinde `GuildRateLimiter`/`EscalationEngine` testlerinde görülen
+aynı zamanlama deseni), ve dashboard API'sinin uçtan uca `TestClient`
+testleri. 55 yeni test, 583 test yeşil (1 ortam-bağımlı Postgres testi
+hariç), ruff+mypy temiz.
+
+`pyproject.toml`'a `captcha = ["Pillow>=10.1"]` extra'sı eklendi (`all`
+extra'sına da dahil edildi). `docs/OZELLIKLER.md`'ye kod örnekli bir
+bölüm eklendi (hem düz web kullanımı hem çekiliş-botu senaryosu).
+
 ## Kapsamlı güvenlik/sağlamlık taraması: 4 paralel denetim ajanı (bu oturumda)
 
 Kullanıcının backup/healthcheck teslim edildikten sonraki isteği:
