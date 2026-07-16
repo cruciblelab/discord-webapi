@@ -30,6 +30,14 @@ checklist.
   it calls `GuildRateLimiter` directly (`app.state.discord_webapi_ratelimiter`),
   keyed as `"ping"`, per-server-configurable from the dashboard.
 
+- `enable_escalation_api=True` -- `PUT/DELETE
+  /api/guilds/{id}/escalation-rules/{key}[/{threshold}]` dashboard
+  endpoints. `automod`'s `on_violation` hook feeds
+  `app.state.discord_webapi_escalation_engine.record_violation(member,
+  "automod", ...)` -- no threshold/action is hardcoded anywhere in
+  `automod` itself; configure the ladder from the dashboard, e.g. `PUT
+  .../escalation-rules/automod/3 {"action": "timeout", "action_minutes": 10}`.
+
 Everything else (`AppRole`, per-command cooldowns, multi-DB) isn't
 something you turn on in code -- it's configured live through the
 dashboard API once the bot is running. `../../TESTING.md` walks through

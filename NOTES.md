@@ -1,6 +1,63 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## v0.6: `discord_webapi.ratelimits` — sunucu bazlı, koda bağımsız rate limit sistemi (bu oturumda tamamlandı)
+## v0.6: `discord_webapi.escalation` — genel, tamamen kullanıcı-tanımlı eskalasyon motoru (bu oturumda tamamlandı)
+
+Kullanıcının `ratelimits`'ten sonraki net talebi: "ban kick timeout vesaire
+tüm olaylarda kullanılabilir hazır bir eşik algoritması olsun, ama
+eşikleri/aksiyonları kendileri yazıp ayarlasınlar, biz dayatmayalım."
+Yani `warn.py`'nin kendi `auto_timeout_after`'ı gibi tek bir builtin'e
+gömülü değil, `ratelimits` gibi her yerden kullanılabilen, ama HİÇBİR
+varsayılan eşik/aksiyon içermeyen genel bir sistem.
+
+Mimari, `ratelimits` ile birebir aynı desende ama **kendi bağımsız SQL
+şeması** (`builtins.warn.SQLWarnStore` gibi — core `storage/sql.py`'nin
+paylaşılan `Base`'ine değil, çünkü `EscalationRule`/`ViolationRecord`
+`CommandOverride`/`RateLimitRule` gibi "core" bir kavram değil, opsiyonel
+bir builtin-üstü katman):
+
+1. `discord_webapi/escalation/models.py`: `EscalationRule` (guild_id, key,
+   threshold, action: `none|timeout|kick|ban`, action_minutes, reason),
+   `ViolationRecord` (guild_id, user_id, key, source, reason, created_at),
+   `EscalationOutcome` (count, triggered_rule).
+2. `discord_webapi/escalation/base.py`+`memory.py`+`sql.py`:
+   `EscalationRuleStore`+`ViolationStore` Protocol'leri, Memory + SQL
+   implementasyonları (SQL'in kendi `create_all()`'ı, kendi `dwa_escalation_rules`/
+   `dwa_escalation_violations` tabloları).
+3. `discord_webapi/escalation/events.py`: `EVENT_TYPE_ESCALATION_RULES_CHANGED`.
+4. `discord_webapi/escalation/engine.py::EscalationEngine`:
+   `record_violation(member, key, source=, reason=)` — bir `ViolationRecord`
+   ekler, `(guild_id, user_id, key)` için sayar, sayı TAM OLARAK bir
+   `threshold`'a denk geliyorsa o kuralın aksiyonunu uygular
+   (`member.timeout()`/`guild.kick()`/`guild.ban()`). Rule cache,
+   `GuildRateLimiter`/`CommandRegistry` ile aynı Transport-event-invalidation
+   desenini kullanıyor.
+5. `discord_webapi/escalation/api.py::build_escalation_router()`:
+   `GET /api/guilds/{id}/escalation-rules` (tüm kurallar),
+   `GET/PUT/DELETE /api/guilds/{id}/escalation-rules/{key}[/{threshold}]`.
+6. `DiscordWebAPI.__init__`'te `self.escalation_engine` HER ZAMAN kuruluyor
+   (`rate_limiter` ile aynı gerekçe — opt-in olan sadece dashboard
+   endpoint'i, `enable_escalation_api=True`).
+
+**Kasıtlı olarak YOK**: hiçbir varsayılan eşik, hiçbir varsayılan aksiyon,
+`ban`/`kick`/`timeout`/`warn`/`automod` builtin'lerinin hiçbirine gömülü
+bir eskalasyon mantığı. Boş bir merdiven sadece sayar, hiçbir şey yapmaz.
+
+**Somut hibrit kullanım kanıtı**: `examples/full_featured_bot/main.py`'de
+`builtins.automod`'un `on_violation` callback'i artık
+`app.state.discord_webapi_escalation_engine.record_violation(member, "automod", ...)`
+çağırıyor — `automod`'un kendisi hâlâ hiçbir eskalasyon bilmiyor, sadece
+"bir ihlal oldu" diye haber veriyor; asıl "3 ihlalde timeout, 5 ihlalde
+kick" gibi merdiven tamamen dashboard'dan (`PUT
+/api/guilds/{id}/escalation-rules/automod/3`) yapılandırılıyor.
+
+Testler: `tests/unit/test_escalation_store.py` (Memory+SQL, 18 test),
+`tests/unit/test_escalation_engine.py` (engine davranışı, canlı güncelleme
+dahil, 11 test), `tests/integration/test_escalation_api.py` (dashboard
+API, 7 test), `tests/integration/test_facade.py`'ye eklenen 2 test.
+
+361 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
+## v0.6: `discord_webapi.ratelimits` — sunucu bazlı, koda bağımsız rate limit sistemi
 
 Kullanıcının netleştirdiği büyük vizyon (plan dosyasındaki "v0.6 Vizyonu"
 bölümüne bakın): discord.py komut yazmayı nasıl kolaylaştırıyorsa, biz de

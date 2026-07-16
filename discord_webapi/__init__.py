@@ -42,6 +42,15 @@ from discord_webapi.commands import (
     install_command_registry_bridge,
 )
 from discord_webapi.consent import ConsentRecord, build_consent_router
+from discord_webapi.escalation import (
+    EscalationEngine,
+    EscalationRule,
+    EscalationRuleStore,
+    MemoryEscalationRuleStore,
+    MemoryViolationStore,
+    ViolationStore,
+    build_escalation_router,
+)
 from discord_webapi.guilds import ManageableGuild, build_guilds_router
 from discord_webapi.jobs import (
     InProcessJobQueue,
@@ -73,6 +82,7 @@ from discord_webapi.web import (
 )
 
 if TYPE_CHECKING:
+    from discord_webapi.escalation.sql import SQLEscalationRuleStore, SQLViolationStore
     from discord_webapi.jobs.redis import RedisJobQueue
     from discord_webapi.storage.sql import (
         SQLAuditStore,
@@ -103,6 +113,9 @@ __all__ = [
     "DiscordAuth",
     "DiscordUser",
     "DiscordWebAPI",
+    "EscalationEngine",
+    "EscalationRule",
+    "EscalationRuleStore",
     "Event",
     "GuildContext",
     "GuildMemberCache",
@@ -117,7 +130,9 @@ __all__ = [
     "MemoryAuthzStore",
     "MemoryCommandConfigStore",
     "MemoryConsentStore",
+    "MemoryEscalationRuleStore",
     "MemoryRateLimitStore",
+    "MemoryViolationStore",
     "RateLimitRule",
     "RateLimitStore",
     "RedisJobQueue",
@@ -126,14 +141,18 @@ __all__ = [
     "SQLAuthzStore",
     "SQLCommandConfigStore",
     "SQLConsentStore",
+    "SQLEscalationRuleStore",
     "SQLRateLimitStore",
     "SQLSessionStore",
+    "SQLViolationStore",
     "SessionSummary",
     "Transport",
+    "ViolationStore",
     "build_app_roles_router",
     "build_audit_log_router",
     "build_commands_router",
     "build_consent_router",
+    "build_escalation_router",
     "build_guilds_router",
     "build_jobs_router",
     "build_members_router",
@@ -167,6 +186,10 @@ def __getattr__(name: str) -> object:
         from discord_webapi.storage import sql
 
         return getattr(sql, name)
+    if name in ("SQLEscalationRuleStore", "SQLViolationStore"):
+        from discord_webapi.escalation import sql as escalation_sql
+
+        return getattr(escalation_sql, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -233,6 +256,8 @@ class DiscordWebAPI:
         audit_store: AuditStore | None = None,
         consent_store: ConsentStore | None = None,
         rate_limit_store: RateLimitStore | None = None,
+        escalation_rule_store: EscalationRuleStore | None = None,
+        violation_store: ViolationStore | None = None,
         job_queue: JobQueue | None = None,
         member_cache_ttl_seconds: float = 45.0,
         channel_permission_cache_ttl_seconds: float = 30.0,
@@ -253,6 +278,8 @@ class DiscordWebAPI:
         self.audit_store = audit_store or MemoryAuditStore()
         self.consent_store = consent_store or MemoryConsentStore()
         self.rate_limit_store = rate_limit_store or MemoryRateLimitStore()
+        self.escalation_rule_store = escalation_rule_store or MemoryEscalationRuleStore()
+        self.violation_store = violation_store or MemoryViolationStore()
         self.member_cache = GuildMemberCache(transport, ttl_seconds=member_cache_ttl_seconds)
         self.channel_permission_cache = ChannelPermissionCache(
             transport, ttl_seconds=channel_permission_cache_ttl_seconds
@@ -268,6 +295,14 @@ class DiscordWebAPI:
             self.rate_limit_store,
             default_max_calls=default_rate_limit_max_calls,
             default_per_seconds=default_rate_limit_per_seconds,
+        )
+        # Same reasoning: escalation actions (timeout/kick/ban) are usually
+        # applied from bot-process code (builtins.warn, builtins.automod's
+        # on_violation hook, your own commands), so this is always
+        # constructed too -- enable_escalation_api only gates the
+        # dashboard CRUD endpoints, not the object itself.
+        self.escalation_engine = EscalationEngine(
+            transport, self.escalation_rule_store, self.violation_store
         )
 
         self.registry: CommandRegistry | None = None
@@ -295,6 +330,8 @@ class DiscordWebAPI:
         transport: Transport,
         command_store: CommandConfigStore | None = None,
         rate_limit_store: RateLimitStore | None = None,
+        escalation_rule_store: EscalationRuleStore | None = None,
+        violation_store: ViolationStore | None = None,
         job_queue: JobQueue | None = None,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
@@ -319,6 +356,8 @@ class DiscordWebAPI:
             bot=bot,
             command_store=command_store,
             rate_limit_store=rate_limit_store,
+            escalation_rule_store=escalation_rule_store,
+            violation_store=violation_store,
             job_queue=job_queue,
             sync_commands=sync_commands,
             sync_guild_id=sync_guild_id,
@@ -334,6 +373,8 @@ class DiscordWebAPI:
         audit_store: AuditStore | None = None,
         consent_store: ConsentStore | None = None,
         rate_limit_store: RateLimitStore | None = None,
+        escalation_rule_store: EscalationRuleStore | None = None,
+        violation_store: ViolationStore | None = None,
         job_queue: JobQueue | None = None,
         member_cache_ttl_seconds: float = 45.0,
         channel_permission_cache_ttl_seconds: float = 30.0,
@@ -353,6 +394,8 @@ class DiscordWebAPI:
             audit_store=audit_store,
             consent_store=consent_store,
             rate_limit_store=rate_limit_store,
+            escalation_rule_store=escalation_rule_store,
+            violation_store=violation_store,
             job_queue=job_queue,
             member_cache_ttl_seconds=member_cache_ttl_seconds,
             channel_permission_cache_ttl_seconds=channel_permission_cache_ttl_seconds,
@@ -387,6 +430,7 @@ class DiscordWebAPI:
         cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
         enable_jobs: bool = False,
         enable_ratelimits_api: bool = False,
+        enable_escalation_api: bool = False,
     ) -> None:
         if self.auth is None:
             raise RuntimeError(
@@ -404,6 +448,9 @@ class DiscordWebAPI:
         # or the DiscordWebAPI instance's own `.rate_limiter` attribute)
         # even if you never expose the dashboard API for editing it.
         app.state.discord_webapi_ratelimiter = self.rate_limiter
+        # Same reasoning as the rate limiter above -- always reachable
+        # from your own code, dashboard CRUD is the opt-in part.
+        app.state.discord_webapi_escalation_engine = self.escalation_engine
         app.include_router(build_commands_router())
         app.include_router(build_members_router())
         app.include_router(build_app_roles_router())
@@ -436,6 +483,8 @@ class DiscordWebAPI:
             app.include_router(build_jobs_router())
         if enable_ratelimits_api:
             app.include_router(build_ratelimits_router())
+        if enable_escalation_api:
+            app.include_router(build_escalation_router())
 
     def lifespan(self, token: str) -> AbstractAsyncContextManager[None]:
         if self.bot is None:
@@ -477,6 +526,7 @@ class DiscordWebAPI:
         cookie_consent_message: str = DEFAULT_COOKIE_CONSENT_MESSAGE,
         cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
         enable_ratelimits_api: bool = False,
+        enable_escalation_api: bool = False,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
     ) -> FastAPI:
@@ -520,6 +570,7 @@ class DiscordWebAPI:
         """
         from sqlalchemy.ext.asyncio import create_async_engine
 
+        from discord_webapi.escalation.sql import SQLEscalationRuleStore, SQLViolationStore
         from discord_webapi.storage.sql import (
             SQLAuditStore,
             SQLAuthzStore,
@@ -546,6 +597,8 @@ class DiscordWebAPI:
             sqlite_path = Path(db_path) if db_path else Path("dashboard.sqlite3")
             database_url = f"sqlite+aiosqlite:///{sqlite_path}"
         engine = create_async_engine(database_url)
+        escalation_rule_store = SQLEscalationRuleStore(engine)
+        violation_store = SQLViolationStore(engine)
         auth = DiscordAuth(
             client_id=client_id,
             client_secret=client_secret,
@@ -564,6 +617,8 @@ class DiscordWebAPI:
             audit_store=SQLAuditStore(engine),
             consent_store=SQLConsentStore(engine),
             rate_limit_store=SQLRateLimitStore(engine),
+            escalation_rule_store=escalation_rule_store,
+            violation_store=violation_store,
             sync_commands=sync_commands,
             sync_guild_id=sync_guild_id,
         )
@@ -571,6 +626,8 @@ class DiscordWebAPI:
         @asynccontextmanager
         async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await create_all_tables(engine)
+            await escalation_rule_store.create_all()
+            await violation_store.create_all()
             async with api.lifespan(bot_token):
                 yield
 
@@ -584,5 +641,6 @@ class DiscordWebAPI:
             cookie_consent_message=cookie_consent_message,
             cookie_consent_version=cookie_consent_version,
             enable_ratelimits_api=enable_ratelimits_api,
+            enable_escalation_api=enable_escalation_api,
         )
         return app

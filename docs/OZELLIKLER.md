@@ -196,6 +196,45 @@ düzenleme endpoint'ini açıyor, nesnenin kendisi (`api.rate_limiter` /
 `request.app.state.discord_webapi_ratelimiter`) her zaman kod içinden
 kullanılabilir, dashboard API'si kapalıyken bile.
 
+## Genel eskalasyon/ceza-eşikleme motoru (`discord_webapi.escalation`)
+
+`ban`/`kick`/`timeout`/`warn`/`automod` gibi her moderasyon aksiyonu için
+ortak, tek bir "N ihlalde şunu yap" merdiveni. **Hiçbir varsayılan eşik
+veya aksiyon yok** — her basamağı (kaç ihlalde, hangi aksiyon: `none`/
+`timeout`/`kick`/`ban`) siz dashboard'dan ya da kod içinden açıkça
+tanımlarsınız; boş bir merdiven sadece ihlalleri sayar, hiçbir şey yapmaz.
+
+```python
+# builtins.automod'un on_violation hook'u, kendi eskalasyon mantığını icat
+# etmeden bizim escalation motorumuzu besliyor:
+async def on_violation(message, reason):
+    await app.state.discord_webapi_escalation_engine.record_violation(
+        message.author, "automod", source="automod", reason=reason
+    )
+
+setup_automod(bot, on_violation=on_violation)
+```
+
+Dashboard'dan merdiveni yapılandırmak için:
+
+```
+PUT /api/guilds/{guild_id}/escalation-rules/automod/3
+{"action": "timeout", "action_minutes": 10}
+
+PUT /api/guilds/{guild_id}/escalation-rules/automod/5
+{"action": "kick"}
+```
+
+`key` (`"automod"` yukarıdaki örnekte) keyfi bir string — `ratelimits`
+gibi, `warn` komutunuz da, kendi yazdığınız bambaşka bir moderasyon
+mantığı da aynı ya da farklı bir `key` altında kendi merdivenini
+paylaşabilir/ayrı tutabilir. `DiscordWebAPI` her zaman bir
+`escalation_engine` (`EscalationEngine`) nesnesi kuruyor —
+`enable_escalation_api=True` sadece dashboard'dan düzenleme endpoint'ini
+açıyor, nesnenin kendisi (`api.escalation_engine` /
+`request.app.state.discord_webapi_escalation_engine`) her zaman kod
+içinden kullanılabilir, dashboard API'si kapalıyken bile.
+
 ## Kuyruk sistemi (`discord_webapi.jobs`, opt-in)
 
 Uzun süren işler (toplu moderasyon, export) için — request/response

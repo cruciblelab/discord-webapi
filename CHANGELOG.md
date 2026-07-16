@@ -2,6 +2,21 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — v0.6: `discord_webapi.escalation` — genel, tamamen kullanıcı-tanımlı eskalasyon motoru
+
+### Eklenenler
+
+- **`discord_webapi.escalation`**: `ratelimits` ile aynı mimari desende (Store Protocol + Memory/SQL + Transport event ile restart'sız canlı güncelleme), ama ban/kick/timeout/warn/automod gibi **her türlü moderasyon aksiyonu için ortak, tek bir "eşik merdiveni" sistemi**. `EscalationEngine.record_violation(member, key, source=..., reason=...)` bir ihlal kaydeder, sayar, sayı tam olarak bir eşiğe (`threshold`) denk geliyorsa o eşiğin aksiyonunu (`none`/`timeout`/`kick`/`ban`) uygular.
+- **Hiçbir varsayılan eşik/aksiyon yok** — kullanıcının açık talebiydi ("eşikleri felan kendileri yazıp ayarlasınlar biz dayatmayalım"). Boş bir merdiven (`(guild_id, key)` için hiç kural yok) sadece ihlalleri sayar, hiçbir şey yapmaz; her basamak dashboard API'sinden ya da `set_rule()` ile açıkça tanımlanmalı.
+- `key` keyfi bir string — `ratelimits` gibi tek bir discord.py komutuna bağlı değil; `warn`, `automod`, ya da kendi yazdığınız herhangi bir moderasyon mantığı aynı merdiveni paylaşabilir ya da her biri kendi ayrı `key`'iyle bağımsız sayılabilir.
+- Dashboard API: `GET /api/guilds/{guild_id}/escalation-rules` (tüm merdivenler), `GET/PUT/DELETE /api/guilds/{guild_id}/escalation-rules/{key}[/{threshold}]` (opt-in, `enable_escalation_api=True`).
+- `DiscordWebAPI` her zaman bir `escalation_engine` kuruyor (opt-in olan sadece dashboard endpoint'i) — `rate_limiter` ile aynı gerekçe: bot-tarafı kod dashboard API'si hiç açılmasa bile `api.escalation_engine`/`request.app.state.discord_webapi_escalation_engine` üzerinden doğrudan kullanabiliyor.
+- `examples/full_featured_bot/main.py`: `builtins.automod`'un `on_violation` hook'u artık `EscalationEngine.record_violation(member, "automod", ...)` çağırıyor — automod'un kendi hiçbir eskalasyon mantığı yok, tamamen ayrı, dashboard'dan yapılandırılabilir eskalasyon motoruna devrediyor. Somut "hibrit kullanım" örneği: hazır bir builtin (`automod`) + kendi kodunuzdan (bu callback) bizim başka bir altyapımızı (escalation) besleyerek.
+
+Kullanıcının netleştirdiği isteğin ("ban kick timeout vesaire... eşikleri felan kendileri yazıp ayarlasınlar biz dayatmayalım") birebir karşılığı. Detaylar için `NOTES.md`'ye bakın.
+
+361 test yeşil (1 ortam-bağımlı Postgres testi hariç, 38'i escalation paketine ait), ruff+mypy temiz.
+
 ## [Unreleased] — v0.6: `discord_webapi.ratelimits` — sunucu bazlı, kod'a bağımsız rate limit sistemi
 
 ### Eklenenler

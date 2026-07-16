@@ -316,3 +316,52 @@ async def test_install_enable_ratelimits_api_mounts_the_router() -> None:
 
     resp2 = client2.get("/api/guilds/123/ratelimits")
     assert resp2.status_code == 200
+
+
+async def test_facade_always_constructs_an_escalation_engine() -> None:
+    """Same reasoning as the rate limiter: EscalationEngine has no opt-in
+    gate -- usable from bot-process code (e.g. builtins.warn/automod's
+    on_violation hook) even when enable_escalation_api is never turned on."""
+    app, api = _build_app()
+
+    assert api.escalation_engine is not None
+    outcome = await api.escalation_engine.get_count(123, 456, "some.key")
+    assert outcome == 0
+
+
+async def test_install_enable_escalation_api_mounts_the_router() -> None:
+    app, api = _build_app()
+
+    client = TestClient(app)
+    _log_in(client)
+
+    resp = client.get("/api/guilds/123/escalation-rules")
+    assert resp.status_code == 404  # not mounted by default
+
+    transport2 = InProcessTransport()
+    api2 = DiscordWebAPI(
+        bot=_build_bot(),
+        transport=transport2,
+        auth=DiscordAuth(
+            client_id="cid",
+            client_secret="csecret",
+            redirect_uri="http://testserver/auth/discord/callback",
+            encryption_keys=Fernet.generate_key(),
+            cookie_secure=False,
+        ),
+        sync_commands=False,
+    )
+
+    async def handle_get_member(payload: dict) -> dict:
+        return {"found": True, "role_ids": [], "permissions": discord.Permissions.all().value}
+
+    transport2._handlers.pop("get_member", None)
+    transport2.register_handler("get_member", handle_get_member)
+
+    app2 = FastAPI()
+    api2.install(app2, enable_escalation_api=True)
+    client2 = TestClient(app2)
+    _log_in(client2)
+
+    resp2 = client2.get("/api/guilds/123/escalation-rules")
+    assert resp2.status_code == 200

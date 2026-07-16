@@ -19,6 +19,7 @@ Run:
 
 import os
 
+import discord
 from discord.ext import commands
 from fastapi import Depends
 from fastapi.responses import HTMLResponse
@@ -76,7 +77,23 @@ setup_role_assign(bot)
 # default (5 messages/10s, 5 mentions); invite/link/caps/emoji filters
 # are off by default -- see discord_webapi/builtins/README.md for all of
 # them.
-setup_automod(bot, banned_words_list=[], block_invites=True)
+async def _escalate_automod_violation(message: discord.Message, reason: str) -> None:
+    # Demonstrates the other hybrid use case: automod.setup()'s
+    # on_violation hook (a plain callback, no escalation logic built in)
+    # feeding EscalationEngine.record_violation -- the ladder itself
+    # (how many hits -> timeout/kick/ban) is 100% dashboard/API
+    # configured, nothing hardcoded here:
+    #   PUT /api/guilds/{guild_id}/escalation-rules/automod/3
+    #   {"action": "timeout", "action_minutes": 10}
+    if message.guild is not None and isinstance(message.author, discord.Member):
+        await app.state.discord_webapi_escalation_engine.record_violation(
+            message.author, "automod", source="automod", reason=reason
+        )
+
+
+setup_automod(
+    bot, banned_words_list=[], block_invites=True, on_violation=_escalate_automod_violation
+)
 # channel_id=None means this does nothing yet (see welcome.py's docstring)
 # -- it never guesses a channel. Set it to a real channel ID from your
 # test server to actually see the welcome message on a new member join.
@@ -108,6 +125,7 @@ app = DiscordWebAPI.quickstart(
     ),
     mobile_redirect_uri=f"{_base_url}/mobile-login-done",
     enable_ratelimits_api=True,
+    enable_escalation_api=True,
 )
 
 
