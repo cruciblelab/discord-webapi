@@ -111,6 +111,38 @@ def test_create_challenge_for_an_unregistered_kind_is_404() -> None:
         assert resp.status_code == 404
 
 
+def test_proof_of_work_challenge_round_trips_params_over_http() -> None:
+    """The invisible layer through the real API: the PoW parameters reach
+    the client in the challenge JSON's `params`, a real solve is posted
+    back, and the server verifies it. Proves the parameterized-provider
+    path works end to end over HTTP, not just in-process."""
+    import hashlib
+
+    from discord_webapi.captcha import MemoryCaptchaStore, ProofOfWorkProvider
+    from discord_webapi.captcha.providers.proof_of_work import _leading_zero_bits
+
+    app = FastAPI()
+    provider = ProofOfWorkProvider(MemoryCaptchaStore(), difficulty=8)
+    app.state.discord_webapi_captcha_providers = {"pow": provider}
+    app.include_router(build_captcha_router())
+
+    with TestClient(app) as client:
+        challenge = client.get("/api/captcha/challenge", params={"kind": "pow"}).json()
+        assert challenge["image_data_uri"] is None
+        prefix = challenge["params"]["prefix"]
+        difficulty = challenge["params"]["difficulty"]
+
+        nonce = 0
+        while _leading_zero_bits(hashlib.sha256(f"{prefix}{nonce}".encode()).digest()) < difficulty:
+            nonce += 1
+
+        verify = client.post(
+            "/api/captcha/verify",
+            json={"kind": "pow", "challenge_id": challenge["challenge_id"], "response": str(nonce)},
+        )
+        assert verify.json() == {"verified": True}
+
+
 def test_verify_challenge_round_trip() -> None:
     app, gate = _build_app()
     with TestClient(app) as client:

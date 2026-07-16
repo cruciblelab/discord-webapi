@@ -1,5 +1,59 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: yeni modeller -- PoW + etkileşimli (bu oturumda)
+
+Kullanıcı Cloudflare-Turnstile tarzı görünmez katman (arka planda PoW +
+tarayıcı instrumentation, kullanıcı hiçbir şey hissetmez, düşük maliyet;
+sıkıntı olursa görünür captcha'ya düş) + görsel captcha'ların "AI kolay
+çözüyor" zayıflığına karşı daha zor etkileşimli modeller (ekranda çizgi
+çıkar mouse/parmakla takip; karanlık ekranda yanıp sönen noktalara tıkla)
+istedi.
+
+**Dürüstlük duruşu (önemli)**: bu istekte overclaim tuzağı büyük. Ne
+yaptım:
+- **PoW** gerçek ve tam backend-doğrulanabilir -- hashcash: istemci nonce
+  arar (2^difficulty hash), sunucu tek hash'le sha256 leading-zero-bits
+  kontrol eder. "Minimum sunucu maliyeti" isteğini birebir karşılıyor
+  (maliyet asimetriktir, sunucu tarafı sabit 1 hash). Bunu headline yaptım.
+- **Instrumentation** özünde client-side; backend sadece client'ın
+  gönderdiği sinyali şeffaf kuralla değerlendirir. Sahte bir "bot
+  dedektörü" YAZMADIM -- `signals.py`'de şeffaf, kolay-atlatılır
+  `PredicateCheck` yardımcıları verdim ve docstring'lerde açıkça "bu bir
+  hız engeli, dedektör değil, kimse client sinyalden güvenilir insan/bot
+  ayrımı yapamaz" dedim.
+- **Etkileşimli captcha'lar (path-trace, flash-tap)**: üretim + doğrulama
+  gerçekten backend'de ve test edilebilir (gerçek geometri). AMA dürüst
+  sınır: challenge verisi (çizgi noktaları / nokta düzeni) çizilebilmek
+  için istemciye gidiyor, yani kararlı bir script onu okuyup mükemmel
+  cevap üretebilir -- bu yüzden bunları "AI çözemez" diye SUNMADIM,
+  OCR'dan daha zor *sürtünme* katmanı olarak sundum, asıl sertliğin PoW +
+  hesap-bağlamadan geldiğini vurguladım. Kullanıcının "AI'yı en çok
+  zorlayacak" beklentisini karşılamaya çalışırken yalan söylemektense bu
+  gerçek sınırı net yazdım.
+
+**Mimari**: hepsi mevcut `CaptchaProvider` Protocol'üne oturuyor (issue/
+verify) -- bu yüzden API/gate/checks hiç değişmeden çalışıyor, sadece yeni
+`kind`'ler. `CaptchaChallenge`'a `params: dict` eklendi (image_data_uri/
+site_key gibi ama parametreli sağlayıcılar için: PoW prefix/difficulty,
+path noktaları, flash düzeni; kendi provider'ın için de genişletme
+noktası). Ortak verify lifecycle'ı (expiry/attempts/one-time-use)
+`_shared.check_pending_challenge(store, id, *, max_attempts, verifier)`'a
+çıkarıldı -- provider'a özel karşılaştırma verifier callable'ında (PoW hash,
+geometri, sekans eşleşmesi), string-eşitliği `verify_pending_challenge`
+bunun üstünde ince bir sarmalayıcı olarak duruyor (math/text testleri hiç
+değişmedi). SQL `answer` sütunu `String(256)` → `Text` (path/flash JSON
+cevapları daha büyük).
+
+**Bağımlılık**: yeni sağlayıcıların hiçbiri Pillow gerektirmiyor (sadece
+stdlib hashlib/math/json) -- görsel captcha'ların aksine
+`discord-webapi[captcha]` olmadan çalışıyorlar.
+
+**Doğrulama**: her provider'ı önce elle gerçek mantığa karşı test ettim
+(PoW için gerçek nonce araması; path-trace için mükemmel/yanlış/yarım/
+bozuk trace; flash-tap için doğru sıra/yanlış sıra/yakın-jitter/uzak/
+yanlış-sayı), sonra kalıcı testlere döktüm. 40 yeni test, 619 yeşil (1
+ortam-bağımlı Postgres hariç), ruff+mypy temiz.
+
 ## captcha genişletme: hesap-bağlama + kompoz edilebilir doğrulama katmanları (bu oturumda)
 
 Kullanıcı captcha teslim edildikten sonra önemli bir eksiği işaret etti

@@ -2,6 +2,59 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: yeni modeller (proof-of-work, çizgi-takip, yanıp-sönen nokta)
+
+Kullanıcı Cloudflare-Turnstile tarzı görünmez bir katman + görsel
+captcha'ların "yapay zeka kolay çözüyor" zayıflığına karşı daha zor
+etkileşimli modeller istedi. Backend'in dürüstçe sağlayabildiği kadarını
+kurdum (aşırı iddiadan kaçınarak).
+
+### Eklenenler
+
+- **`ProofOfWorkProvider`** (`kind="pow"`): görünmez, düşük-maliyet
+  katmanı. İstemci arka planda hashcash araması yapıyor (~2^difficulty
+  hash), sunucu **tek hash'le** doğruluyor -- görsel render/IP-itibarı/
+  üçüncü-taraf çağrısı yok, sunucu maliyeti her zaman minimum. `difficulty`
+  tek maliyet düğmesi (istemci maliyeti; sunucu maliyeti sabit). Sadece
+  stdlib `hashlib` -- ek bağımlılık yok. Gerçek bir hashcash çözümüyle
+  uçtan uca doğrulandı (HTTP üstünden de).
+- **`PathTraceProvider`** (`kind="path-trace"`): ekranda kalın bir çizgi;
+  kullanıcı fare/parmakla takip ediyor. Sunucu izin çizgiye tolerans içinde
+  kalıp (kaçış yok) tüm vertex'leri kapsayıp kapsamadığını **gerçek
+  geometriyle** doğruluyor (nokta-poliçizgi mesafesi). Sadece stdlib.
+- **`FlashTapProvider`** (`kind="flash-tap"`): karanlık ekranda noktalar
+  yanıp sönüyor; kullanıcı yandıkları sırada dokunuyor. Sunucu tıklanan
+  konumların yanıp sönen noktalarla sırayla ve `hit_radius` içinde
+  eşleşmesini doğruluyor. Sadece stdlib.
+- **`discord_webapi.captcha.signals`**: instrumentation için üç şeffaf
+  `PredicateCheck` yardımcısı (`reject_webdriver`, `require_signal_flag`,
+  `require_min_interaction_ms`) -- görünmez katmanın "gerçek tarayıcı mı"
+  yarısı. Dürüstçe: bunlar kolay atlatılabilen hız engelleri, bot dedektörü
+  değil (client-submitted sinyal, backend güvenilir insan/bot ayrımı
+  yapamaz).
+- `CaptchaChallenge`'a `params: dict` alanı: parametreli sağlayıcıların
+  (PoW/path-trace/flash-tap) frontend'e yapılandırılmış challenge verisi
+  geçmesi için -- kendi sağlayıcınız için de genişletme noktası. Bu
+  sağlayıcıların hiçbiri Pillow gerektirmiyor (görsel captcha'ların
+  aksine), yani `discord-webapi[captcha]` olmadan çalışıyorlar.
+
+**Dürüstlük notu (dokümante edildi)**: mevcut görsel captcha'lar modern
+OCR/vision modellerince kolay çözülüyor ("basit" katman olarak kalıyorlar).
+Etkileşimli modeller (path-trace/flash-tap) statik OCR'dan daha zor
+*sürtünme* katmanları ama kriptografik garanti değil -- challenge verisi
+çizilebilmek için istemciye gittiğinden kararlı bir script okuyup eşleşen
+cevap üretebilir. "Bot/AI çözemez" DEMİYORUZ; asıl sertlik PoW (maliyet) +
+hesap-bağlama (kimlik) katmanlarından geliyor, doğru kullanım bunları
+birlikte katmanlamak.
+
+Ortak verify lifecycle'ı (expiry/deneme-limiti/tek-kullanımlık) provider'a
+özel karşılaştırıcıyla yeniden kullanılabilecek şekilde
+`_shared.check_pending_challenge`'a çıkarıldı (string-eşitliği
+`verify_pending_challenge` bunun üzerinde). 40 yeni test (gerçek hashcash
+çözümü, gerçek geometri, sinyal edge case'leri, PoW'un HTTP üstünden
+uçtan uca akışı). 619 test yeşil (1 ortam-bağımlı Postgres testi hariç),
+ruff+mypy temiz.
+
 ## [Unreleased] — captcha: hesap-bağlama + kompoz edilebilir doğrulama katmanları
 
 Kullanıcının geri bildirimi: bir captcha "insan mı" der ama "hangi hesap"

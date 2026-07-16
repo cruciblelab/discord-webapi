@@ -8,10 +8,17 @@ from pydantic import BaseModel
 
 class CaptchaChallenge(BaseModel):
     """What a `CaptchaProvider.issue()` hands back for the frontend to
-    render. Self-hosted providers (Math/Text) set `image_data_uri` (a
-    `data:image/png;base64,...` URI, ready for an `<img src="...">`).
-    Third-party widget providers (reCAPTCHA/hCaptcha) set `site_key`
-    instead -- their own JS embed does the rendering, not us.
+    render. Different provider families use different fields:
+
+    - **Image providers** (Math/Text) set `image_data_uri` (a
+      `data:image/png;base64,...` URI, ready for an `<img src="...">`).
+    - **Third-party widgets** (reCAPTCHA/hCaptcha) set `site_key` -- their
+      own JS embed does the rendering.
+    - **Parameterized providers** (proof-of-work, path-trace, flash-tap)
+      set `params` -- a structured, provider-defined bag the frontend
+      reads to run the challenge itself (the PoW prefix/difficulty, the
+      line to trace, the dot layout, ...). This is also the extension
+      point for your own provider: put whatever your JS needs in `params`.
     """
 
     challenge_id: str
@@ -19,6 +26,7 @@ class CaptchaChallenge(BaseModel):
     prompt: str
     image_data_uri: str | None = None
     site_key: str | None = None
+    params: dict[str, Any] = {}
     expires_at: datetime | None = None
 
 

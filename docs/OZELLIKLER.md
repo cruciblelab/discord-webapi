@@ -237,17 +237,50 @@ içinden kullanılabilir, dashboard API'si kapalıyken bile.
 
 ## Captcha / robot doğrulama (`discord_webapi.captcha`, opt-in)
 
-Sıfırdan yazılmış iki kendi captcha sağlayıcısı -- `MathCaptchaProvider`
-(basit bir matematik sorusu) ve `TextCaptchaProvider` (klasik, bozuk
-yazıyı okuma) -- her render'da farklı renk/döndürme/gürültüyle gerçek bir
-PNG üretiyor (SVG değil: SVG'deki metin dosyanın içinde düz metin olarak
-durur, herhangi biri -- ya da bir yapay zeka -- doğrudan okuyabilir,
-captcha'yı anlamsız kılar). Ayrıca üçüncü-taraf servisleri saran iki
-sağlayıcı daha (`ReCaptchaProvider`, `HCaptchaProvider`) -- kendi
-site_key/secret_key'inizi geçip kullanırsınız. Kendi captcha
-kütüphanenizi/servisinizi de `CaptchaProvider` Protocol'ünü (`issue()` +
-`verify()`) uygulayarak bağlayabilirsiniz -- miras almaya gerek yok,
-kütüphanedeki her Store'la aynı "kendi implementasyonunu getir" deseni.
+Hepsi tek bir `CaptchaProvider` Protocol'ü (`issue()` + `verify()`)
+uyguluyor -- kendi captcha kütüphanenizi/servisinizi de aynı arayüzle
+bağlayabilirsiniz (miras yok, "kendi implementasyonunu getir" deseni).
+Sağlayıcı aileleri:
+
+- **Görsel (basit) captcha'lar** -- `MathCaptchaProvider` (matematik
+  sorusu), `TextCaptchaProvider` (bozuk yazıyı okuma). Her render'da farklı
+  renk/döndürme/gürültüyle gerçek bir PNG (SVG değil: SVG'de metin dosya
+  içinde düz metin durur, doğrudan okunabilir). `discord-webapi[captcha]`
+  (Pillow) gerektirir. **Dürüst not:** bu görselleri modern OCR/vision
+  modelleri kolay çözüyor -- bunlar "basit" katman olarak duruyor.
+- **Görünmez / düşük maliyet katmanı** -- `ProofOfWorkProvider`: Cloudflare
+  Turnstile mantığında, kullanıcı hiçbir şey yapmaz; sayfa yüklenince/form
+  gönderilince tarayıcı arka planda küçük bir hashcash araması yapar.
+  Asimetri özü: istemci ~2^difficulty hash yapar, **sunucu tek hash'le**
+  doğrular -- görsel render yok, IP-itibarı sorgusu yok, üçüncü-taraf
+  çağrısı yok. Sunucu maliyeti her zaman minimum. `difficulty` tek maliyet
+  düğmesi (ucuz tier ~12-16 bit; sıkı tier ~18-22 bit -- sunucu maliyeti
+  ikisinde de aynı). Ek bağımlılık gerektirmez. **Dürüst not:** "CPU
+  harcandı" der, "insan" demez -- kütlesel otomasyonun maliyetini
+  yükseltir; hesap-bağlama ile katmanlayın. Tasarlanan akış: önce bunu
+  sessizce çalıştır, sadece hâlâ şüpheli isteklerde görünür bir captcha'ya
+  düş.
+- **Zorlaştırılmış etkileşimli captcha'lar** -- `PathTraceProvider` (ekranda
+  kalın bir çizgi çıkar, kullanıcı fare/parmakla takip eder; sunucu izin
+  çizgiye tolerans içinde kalıp kalmadığını ve baştan sona kapsayıp
+  kapsamadığını geometrik olarak doğrular), `FlashTapProvider` (karanlık
+  ekranda noktalar yanıp söner, kullanıcı yandıkları sırada onlara dokunur).
+  Ek bağımlılık gerektirmez. **Dürüst not:** bunlar statik OCR'dan daha zor
+  *etkileşim* sürtünmesidir, kriptografik garanti DEĞİL -- challenge verisi
+  (çizgi/nokta düzeni) çizilebilmesi için istemciye gönderildiğinden kararlı
+  bir script onu okuyup eşleşen bir cevap üretebilir. "Bot çözemez" değil;
+  PoW (maliyet) + hesap-bağlama (kimlik) ile birlikte katman olarak
+  kullanın.
+- **Üçüncü-taraf widget'lar** -- `ReCaptchaProvider`, `HCaptchaProvider`
+  (kendi site_key/secret_key'iniz). Sadece `httpx` (zaten çekirdek).
+- **Tarayıcı instrumentation'ı** (görünmez katmanın "gerçek tarayıcı mı"
+  yarısı): DOM/navigator sinyalleri istemci JS'inde toplanır -- backend
+  sadece istemcinin gönderdiği sinyali *şeffaf* kurallarla değerlendirebilir
+  (`captcha.signals`'daki `reject_webdriver`/`require_signal_flag`/
+  `require_min_interaction_ms` `PredicateCheck`'leri, ya da kendi
+  yazdığınız). Bunlar kolayca atlatılabilir hız engelleridir, bot
+  dedektörü değil -- kimse client-submitted sinyalden sunucu tarafında
+  insan/bot ayrımını güvenilir yapamaz; PoW + hesap ile birlikte kullanın.
 
 Rate limiter/escalation'ın aksine `DiscordWebAPI` hiçbir captcha
 sağlayıcısını otomatik kurmaz (hangi sağlayıcı, hangi reCAPTCHA

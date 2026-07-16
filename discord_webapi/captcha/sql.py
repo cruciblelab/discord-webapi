@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String, Text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -30,7 +30,10 @@ class PendingCaptchaRow(Base):
 
     challenge_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     kind: Mapped[str] = mapped_column(String(32))
-    answer: Mapped[str] = mapped_column(String(256))
+    # Text, not a bounded String: interactive providers (path-trace,
+    # flash-tap) store a JSON-encoded expected answer here that's larger
+    # than a plain math result.
+    answer: Mapped[str] = mapped_column(Text)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
     expires_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
