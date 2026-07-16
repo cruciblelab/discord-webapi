@@ -77,5 +77,14 @@ limiting) iki gerçek bug bulunup düzeltildi:
    limit eksikti.
 2. `DiscordAuth._refresh_locks` dict'i sınırsız büyüyordu.
 
-Detaylı denetim raporu için `CHANGELOG.md`'deki ilgili sürüm notuna
-bakın.
+Kuyruk sistemi eklendikten sonraki ikinci bir taramada (bu kez jobs/
+çoklu-sunucu refactoring'ine odaklı) iki bug daha bulunup düzeltildi:
+
+3. `RedisJobQueue`'da kuyrukta bekleyen bir job'ın status'u, TTL süresi
+   geçince sessizce silinip job'ın kaybolmasına yol açabiliyordu — TTL
+   artık sadece terminal (succeeded/failed) durumdaki job'lara uygulanıyor.
+4. `RedisJobQueue.register_worker()`, `start()`'tan sonra çağrılırsa
+   sessizce hiçbir şey yapmıyordu — artık açık bir hata fırlatıyor.
+
+Detaylı denetim raporları için `CHANGELOG.md`'deki ilgili sürüm
+notlarına bakın.

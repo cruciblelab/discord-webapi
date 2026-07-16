@@ -221,3 +221,49 @@ async def test_install_enable_jobs_without_job_queue_raises() -> None:
         sync_commands=False,
     )
     api2.install(FastAPI(), enable_jobs=True)
+
+
+async def test_for_bot_process_accepts_a_job_queue() -> None:
+    """A job handler that needs live bot/Gateway access must run in the
+    bot process -- for_bot_process() needs to accept job_queue=... for
+    that (it's not just a for_web_process()-only concern)."""
+    job_queue = InProcessJobQueue()
+
+    async def handle_bulk_dm(payload: dict) -> dict:
+        return {"sent": 0}
+
+    job_queue.register_worker("bulk_dm", handle_bulk_dm)
+
+    api = DiscordWebAPI.for_bot_process(
+        bot=_build_bot(),
+        transport=InProcessTransport(),
+        job_queue=job_queue,
+        sync_commands=False,
+    )
+
+    assert api.job_queue is job_queue
+
+
+async def test_lifespan_stops_job_queue_only_if_it_actually_started() -> None:
+    """If job_queue.start() itself raises, stop() must not be called on a
+    queue that never started (would otherwise be a latent resource-state
+    bug the moment start() grows any fallible step)."""
+    from unittest.mock import AsyncMock
+
+    from discord_webapi import _with_job_queue
+
+    job_queue = InProcessJobQueue()
+    job_queue.start = AsyncMock(side_effect=RuntimeError("boom"))  # type: ignore[method-assign]
+    job_queue.stop = AsyncMock()  # type: ignore[method-assign]
+
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def noop_inner():
+        yield
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async with _with_job_queue(noop_inner(), job_queue):
+            pass
+
+    job_queue.stop.assert_not_awaited()

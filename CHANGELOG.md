@@ -2,6 +2,42 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Kuyruk sistemi taraması: 2 gerçek bug bulunup düzeltildi
+
+Kuyruk sistemi eklendikten sonra yapılan geniş kapsamlı bir bug/güvenlik
+taramasında `discord_webapi/jobs/redis.py`'de iki gerçek bug bulundu:
+
+- **Kuyrukta bekleyen (henüz worker'a düşmemiş) bir job'ın status kaydı,
+  `result_ttl_seconds` süresi geçince sessizce silinebiliyordu** — worker'lar
+  uzun süre kapalıysa/backlog oluşmuşsa, `BLPOP` job_id'yi kuyruktan
+  çekiyor ama `get_status` `None` dönüyor, job hiçbir iz bırakmadan
+  kayboluyordu. **Fix**: TTL artık sadece terminal duruma (succeeded/failed)
+  ulaşan job'lara uygulanıyor — pending/running durumundaki bir job'ın
+  status kaydı asla süresi dolarak silinmiyor. Ayrıca `get_status` yine de
+  `None` dönerse (ör. Redis `maxmemory` baskısı altında eviction) artık
+  sessizce değil, bir `logger.warning` ile job düşürülüyor.
+- **`register_worker()`, `start()`'tan SONRA çağrılırsa sessizce hiçbir
+  şey yapmıyordu** — worker zaten `_worker_loop`'un BLPOP key listesini
+  `start()` anında sabitliyordu, yeni bir job_type asla işlenmiyordu, ne
+  hata ne uyarı. Bu, `InProcessJobQueue`'nun (geç register'ı sessizce
+  kabul eden) davranışıyla tutarsızdı — dev'de `InProcessJobQueue`'ya
+  karşı çalışan kod, production'da `RedisJobQueue`'ya geçince sessizce
+  bozulabilirdi. **Fix**: `start()`'tan sonra `register_worker()`
+  çağrılırsa artık açık bir `RuntimeError` fırlatılıyor.
+
+Ayrıca iki küçük iyileştirme:
+- `_with_job_queue`'da `job_queue.start()` başarısız olursa artık
+  `stop()` çağrılmıyor (hiç başlamamış bir queue'yu durdurmaya
+  çalışmaktan kaynaklanan potansiyel kaynak-durumu hatası önlendi).
+- `DiscordWebAPI.for_bot_process()`'e de `job_queue=...` parametresi
+  eklendi (sadece `for_web_process`'te vardı) — bot/Gateway erişimi
+  gereken job handler'ları artık bot sürecinde de register edilebiliyor.
+
+220 test yeşil (gerçek Redis'e karşı çalıştırıldı, 1 ortam-bağımlı
+Postgres testi hariç), ruff+mypy temiz. Yeni testler:
+`tests/unit/test_redis_job_queue.py`, `tests/integration/test_facade.py`'ye
+eklenen 2 test.
+
 ## [Unreleased] — Kuyruk sistemi (background jobs)
 
 ### Eklenenler

@@ -61,9 +61,11 @@ class RedisJobQueue:
         self._redis: Redis | None = None
         self._handlers: dict[str, JobHandler] = {}
         self._workers: list[asyncio.Task[None]] = []
+        self._started = False
 
     async def start(self) -> None:
         self._redis = Redis.from_url(self._redis_url, **self._redis_kwargs)
+        self._started = True
         if self._handlers:
             self._workers = [
                 asyncio.create_task(self._worker_loop()) for _ in range(self._concurrency)
@@ -76,11 +78,19 @@ class RedisJobQueue:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._workers = []
+        self._started = False
         if self._redis is not None:
             await self._redis.aclose()
             self._redis = None
 
     def register_worker(self, job_type: str, handler: JobHandler) -> None:
+        if self._started:
+            raise RuntimeError(
+                "register_worker() called after start() -- the set of queue keys a "
+                "worker BLPOPs from is fixed when start() runs, so this handler would "
+                "silently never be picked up. Call register_worker() for every "
+                "job_type before start()."
+            )
         self._handlers[job_type] = handler
 
     async def enqueue(
@@ -98,7 +108,7 @@ class RedisJobQueue:
             created_at=now,
             updated_at=now,
         )
-        await self._save(status)
+        await self._save(status)  # no TTL yet -- see _save's docstring
         await self._redis.rpush(_queue_key(job_type), job_id)
         return status
 
@@ -110,12 +120,18 @@ class RedisJobQueue:
         return JobStatus.model_validate_json(raw)
 
     async def _save(self, status: JobStatus) -> None:
+        """`result_ttl_seconds` only applies once a job reaches a terminal
+        state (succeeded/failed) -- it's a "how long to keep the result
+        around for polling" cleanup TTL, not an expiry on the job itself.
+        Applying it from the very first (pending) write would mean a job
+        sitting in the queue longer than the TTL (worker backlog, or all
+        workers briefly down) has its status key evicted out from under
+        it -- `_run_job` would then find no status for a job_id it just
+        popped and silently drop the job with no error surfaced anywhere.
+        """
         assert self._redis is not None
-        await self._redis.set(
-            _status_key(status.job_id),
-            status.model_dump_json(),
-            ex=self._result_ttl_seconds,
-        )
+        ttl = self._result_ttl_seconds if status.state in ("succeeded", "failed") else None
+        await self._redis.set(_status_key(status.job_id), status.model_dump_json(), ex=ttl)
 
     async def _worker_loop(self) -> None:
         assert self._redis is not None
@@ -131,7 +147,18 @@ class RedisJobQueue:
     async def _run_job(self, job_id: str) -> None:
         status = await self.get_status(job_id)
         if status is None:
-            return  # pragma: no cover -- can't happen, enqueue always sets this first
+            # Shouldn't happen in the common case (enqueue always saves
+            # status before pushing the job_id, and pending/running writes
+            # no longer carry a TTL -- see _save), but Redis can still
+            # evict a key under memory pressure (e.g. maxmemory-policy
+            # allkeys-lru). Log it rather than silently dropping the job
+            # with no trace anywhere.
+            logger.warning(
+                "Job %s popped from queue but has no status -- its key was likely "
+                "evicted (e.g. Redis maxmemory pressure). Dropping it.",
+                job_id,
+            )
+            return
 
         handler = self._handlers.get(status.job_type)
         if handler is None:

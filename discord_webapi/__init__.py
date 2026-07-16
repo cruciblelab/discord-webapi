@@ -167,12 +167,15 @@ async def _with_job_queue(
         async with inner:
             yield
         return
-    await job_queue.start()
+    started = False
     try:
+        await job_queue.start()
+        started = True
         async with inner:
             yield
     finally:
-        await job_queue.stop()
+        if started:
+            await job_queue.stop()
 
 
 class DiscordWebAPI:
@@ -265,6 +268,7 @@ class DiscordWebAPI:
         bot: commands.Bot,
         transport: Transport,
         command_store: CommandConfigStore | None = None,
+        job_queue: JobQueue | None = None,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
     ) -> DiscordWebAPI:
@@ -275,11 +279,19 @@ class DiscordWebAPI:
         `bot.extension.run_bot_process`) in a standalone process, pointed
         at a `RedisTransport` so any number of `for_web_process` FastAPI
         replicas/machines can reach it.
+
+        Pass `job_queue=...` (with `register_worker()` already called on
+        it) if any of your job handlers need live bot/Gateway access (e.g.
+        "bulk-DM every member") -- `.lifespan(token)` starts/stops it
+        alongside the bot, same as `for_web_process`. Job handlers with no
+        such need don't have to run here at all; a plain standalone
+        `run_worker()` process works just as well for those.
         """
         return cls(
             transport=transport,
             bot=bot,
             command_store=command_store,
+            job_queue=job_queue,
             sync_commands=sync_commands,
             sync_guild_id=sync_guild_id,
         )

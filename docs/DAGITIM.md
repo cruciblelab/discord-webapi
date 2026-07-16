@@ -80,6 +80,11 @@ Tek-process kurulumda da kullanılabilir (`InProcessJobQueue`,
 `web_lifespan()` queue'yu otomatik start/stop ediyor, ekstra boilerplate
 gerekmiyor.
 
+**Önemli**: `register_worker()` her zaman `start()`'tan ÖNCE çağrılmalı
+— `RedisJobQueue` bu sırayı zorunlu kılıyor (`start()`'tan sonra
+`register_worker()` çağırmak `RuntimeError` fırlatır), çünkü worker'ların
+dinlediği kuyruk listesi `start()` anında sabitleniyor.
+
 ## Özet tablo
 
 | Senaryo | Transport | Süreçler |

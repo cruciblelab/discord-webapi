@@ -1,6 +1,35 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Kuyruk sistemi / background jobs (bu oturumda tamamlandı)
+## Kuyruk sistemi taraması (bu oturumda tamamlandı)
+
+Kullanıcının "genel bir tarama daha yap, buglar/kırılma yerleri" talebiyle
+bir subagent'a kuyruk sistemi + çoklu sunucu refactoring'i + facade
+değişikliklerini kapsayan geniş bir denetim yaptırıldı (önceki auth/authz
+denetimi tekrar edilmedi, o kısım zaten temizdi). İki gerçek bug bulundu,
+ikisi de `discord_webapi/jobs/redis.py`'de:
+
+1. **TTL, pending/running durumundaki job'lara da uygulanıyordu** — worker
+   backlog'u/kapalı kalması `result_ttl_seconds`'tan uzun sürerse, job
+   kuyrukta beklerken status'u sessizce silinip job kayboluyordu. Fix:
+   TTL artık sadece terminal state'e (succeeded/failed) uygulanıyor.
+2. **`register_worker()`, `start()`'tan sonra çağrılırsa sessizce
+   hiçbir şey yapmıyordu** (BLPOP key listesi `start()` anında
+   sabitleniyor). `InProcessJobQueue`'nun geç register'ı sessizce kabul
+   etmesiyle tutarsız — dev'de çalışan kod prod'da (Redis) sessizce
+   bozulabilirdi. Fix: artık `RuntimeError` fırlatıyor.
+
+Ayrıca iki küçük düzeltme: `_with_job_queue`'da `start()` başarısız
+olursa `stop()` çağrılmıyor (kaynak-durumu hatası önlendi);
+`for_bot_process()`'e `job_queue=...` eklendi (bot/Gateway erişimi
+gereken job handler'ları için, önceden sadece `for_web_process`'te vardı).
+
+**Not**: Bu oturumda ortamda gerçek bir Redis sunucusu (`redis-server`)
+başlatılıp testler ona karşı gerçekten çalıştırıldı (önceki oturumlarda
+Redis'e bağımlı testler hep skip ediliyordu, lokal ortamda Redis yoktu)
+— 220 test yeşil, hepsi gerçek geçti, sadece 1 ortam-bağımlı Postgres
+testi (Postgres kurulu değil) skip/fail.
+
+## Kuyruk sistemi / background jobs (tamamlandı)
 
 Kullanıcının "sırada kuyruk sistemi var" talebiyle eklendi (çoklu sunucu
 işinden hemen sonra, çoklu bot hâlâ ertelenmiş durumda).

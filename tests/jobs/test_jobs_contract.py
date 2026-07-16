@@ -21,6 +21,7 @@ async def _wait_until(predicate, *, timeout: float = 2.0) -> None:
 
 
 async def test_enqueue_returns_pending_status(job_queue: JobQueue) -> None:
+    await job_queue.start()
     status = await job_queue.enqueue("noop", {"x": 1}, guild_id=999)
 
     assert status.state == "pending"
@@ -32,6 +33,7 @@ async def test_enqueue_returns_pending_status(job_queue: JobQueue) -> None:
 
 
 async def test_get_status_of_unknown_job_returns_none(job_queue: JobQueue) -> None:
+    await job_queue.start()
     assert await job_queue.get_status("does-not-exist") is None
 
 
