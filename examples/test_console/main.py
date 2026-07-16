@@ -52,6 +52,19 @@ BANNED_WORDS = ["badword1", "badword2", "badword3"]
 
 bot = commands.Bot(command_prefix="!", intents=default_intents(), help_command=None)
 
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
+    """discord.py's own default: with no error handler at all, a prefix
+    command's error (bad syntax, a check failure that raises instead of
+    just returning False, ...) is printed to the server's own console and
+    NEVER reaches Discord -- from inside Discord it looks exactly like the
+    bot silently ignored you. This is what makes that visible for testing
+    (a real bot would want friendlier per-error-type messages, but "show
+    something" beats "show nothing" for a test console)."""
+    await ctx.reply(f"Error: {error}")
+
+
 # One shared store: the manual /warn command, automod's auto-warns, and the
 # /warnings + console listing all read/write the exact same counts.
 warn_store = MemoryWarnStore()
