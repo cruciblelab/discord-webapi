@@ -352,6 +352,15 @@ gerçek bir MariaDB/Postgres'e taşımak istersen:
 - [ ] `--no-checkpoint` ile tekrar çalıştır → checkpoint dosyası oluşturulmadığını doğrula.
 - [ ] Kaynak SQLite dosyasının **hiç değişmediğini** (checksum/dosya boyutu aynı) doğrula — araç sadece okuyor.
 
+## 24. Yedek alma CLI'si (`discord-webapi-backup`, v0.7)
+
+- [ ] `discord-webapi-backup create --from sqlite+aiosqlite:///examples/test_console/dashboard.sqlite3 --out tam.json` → onay isteğini doğrula, `y` ile onaylayıp dosyanın oluştuğunu doğrula.
+- [ ] `discord-webapi-backup list tam.json` → tablo/satır sayılarının doğru göründüğünü doğrula.
+- [ ] `--guild-id <bir_guild_id>` ile tekrar oluştur → sadece o guild'e ait satırların (ve guild_id sütunu olmayan tabloların tam) geldiğini doğrula.
+- [ ] `--since <dün>` ile tekrar oluştur → sadece son 1 günün satırlarının geldiğini doğrula.
+- [ ] Boş (ama tabloları `create_all`/`quickstart` ile oluşturulmuş) bir hedefe `discord-webapi-backup restore tam.json --to <hedef-url>` çalıştır → satırların yazıldığını doğrula.
+- [ ] Hiç tablosu olmayan bir hedefe restore dene → hata vermeden "tablo yok, atlanıyor" mesajıyla atladığını doğrula.
+
 ---
 
 Bir adım beklenmedik davranış gösterirse (özellikle WebSocket round-trip,

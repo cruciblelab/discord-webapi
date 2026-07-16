@@ -2,6 +2,39 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `discord_webapi.tools.backup`: yedek alma CLI'si
+
+### Eklenenler
+
+- **`discord-webapi-backup`** (`discord_webapi.tools.backup`): bağımsız,
+  istediğin an geri dönebileceğin bir yedek dosyası oluşturan/listeleyen/
+  geri yükleyen CLI — bir migrasyona bağlı değil. `migrate` ile aynı
+  şema-agnostik yaklaşım (SQLAlchemy introspection, hiçbir ORM sınıfı
+  hardcode edilmiyor); ortak reflection/okuma/yazma/(de)serileştirme
+  kodu iki araç arasında `discord_webapi/tools/_sql_dump.py`'ye taşındı.
+  - `discord-webapi-backup create --from <url> --out <dosya>`: tam
+    yedek (varsayılan). `--guild-id N` ile sadece bir guild'in satırları
+    (guild_id sütunu olmayan tablolar tam alınır). `--since`/`--until`
+    (ISO 8601) ile tarih aralığı (her tablonun sahip olduğu
+    `created_at`/`updated_at`/`given_at`/`expires_at`'a göre). Bu iki
+    kapsam birleştirilebilir. `--tables` ile belirli tablolarla
+    sınırlandırılabilir.
+  - `discord-webapi-backup list <dosya>`: hiçbir şey yazmadan yedeğin
+    içeriğini (tablo/satır sayıları) gösterir.
+  - `discord-webapi-backup restore <dosya> --to <url>`: yedeği bir
+    veritabanına yazar (aynı sil-sonra-yaz semantiği). Bir yedek dosyası
+    sadece satır verisi tutar, şema/sütun tipi tutmaz — `migrate`'in
+    aksine hedefte olmayan bir tabloyu oluşturamaz, atlar (hedefin
+    en az bir kez `create_all()`/`quickstart()` ile kurulmuş olması
+    gerekir; bu, dokümantasyonda açıkça belirtilen bilinçli bir sınır).
+  - `migrate` ile aynı güvenlik tasarımı: kaynağa asla yazmaz, `--yes`
+    verilmedikçe onay ister, şifreler terminale basılmadan önce gizlenir.
+
+Full/guild-scoped/date-scoped/birleşik kapsam ve restore gerçek
+SQLite dosyalarına karşı elle doğrulandı, ardından 11 otomatik test
+yazıldı (`tests/unit/test_tools_backup.py`). 449 test yeşil (1
+ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — `discord_webapi.tools.migrate`: veritabanı taşıma CLI'si + `tools/` alt paketi
 
 ### Eklenenler

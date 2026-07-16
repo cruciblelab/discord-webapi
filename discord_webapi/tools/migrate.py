@@ -24,81 +24,43 @@ Safety, by design:
 - This tool's checkpoint only covers discord-webapi's own tables. It is
   NOT a substitute for your own database backup (a full `mysqldump`/
   `pg_dump`/file copy) -- take one before running this against anything
-  that matters.
+  that matters. See `discord_webapi.tools.backup` for a standalone,
+  scoped (whole DB / one guild / a date range) backup file you can keep
+  around independently of a migration.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
-from sqlalchemy import MetaData, Table, insert, select
+from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-
-async def _reflect(engine: AsyncEngine) -> MetaData:
-    metadata = MetaData()
-    async with engine.connect() as conn:
-        await conn.run_sync(metadata.reflect)
-    return metadata
-
-
-async def _table_exists(engine: AsyncEngine, table_name: str) -> bool:
-    metadata = await _reflect(engine)
-    return table_name in metadata.tables
-
-
-async def _read_rows(engine: AsyncEngine, table: Table) -> list[dict[str, Any]]:
-    async with engine.connect() as conn:
-        result = await conn.execute(select(table))
-        return [dict(row._mapping) for row in result]
-
-
-async def _ensure_table(dest_engine: AsyncEngine, table: Table) -> None:
-    async with dest_engine.begin() as conn:
-        await conn.run_sync(lambda sync_conn: table.create(sync_conn, checkfirst=True))
-
-
-async def _write_rows(dest_engine: AsyncEngine, table: Table, rows: list[dict[str, Any]]) -> None:
-    if not rows:
-        return
-    async with dest_engine.begin() as conn:
-        await conn.execute(insert(table), rows)
-
-
-async def _delete_rows(dest_engine: AsyncEngine, table: Table) -> None:
-    async with dest_engine.begin() as conn:
-        await conn.execute(table.delete())
-
-
-def _json_default(value: Any) -> Any:
-    if isinstance(value, datetime):
-        return {"__datetime_iso__": value.isoformat()}
-    if isinstance(value, bytes):
-        return {"__bytes_hex__": value.hex()}
-    raise TypeError(f"Cannot serialize {value!r} for a checkpoint file")
-
-
-def _json_object_hook(obj: dict[str, Any]) -> Any:
-    if set(obj.keys()) == {"__bytes_hex__"}:
-        return bytes.fromhex(obj["__bytes_hex__"])
-    if set(obj.keys()) == {"__datetime_iso__"}:
-        return datetime.fromisoformat(obj["__datetime_iso__"])
-    return obj
+from discord_webapi.tools._sql_dump import (
+    confirm,
+    delete_rows,
+    ensure_table,
+    read_rows,
+    redact,
+    reflect,
+    table_exists,
+    write_rows,
+)
+from discord_webapi.tools._sql_dump import dumps as dump_json
+from discord_webapi.tools._sql_dump import loads as load_json
 
 
 async def _write_checkpoint(dest_engine: AsyncEngine, tables: list[Table], path: Path) -> None:
-    snapshot: dict[str, list[dict[str, Any]]] = {}
+    snapshot: dict[str, list[dict[str, object]]] = {}
     for table in tables:
-        if await _table_exists(dest_engine, table.name):
-            snapshot[table.name] = await _read_rows(dest_engine, table)
+        if await table_exists(dest_engine, table.name):
+            snapshot[table.name] = await read_rows(dest_engine, table)
         else:
             snapshot[table.name] = []
-    path.write_text(json.dumps(snapshot, default=_json_default, indent=2), encoding="utf-8")
+    path.write_text(dump_json(snapshot), encoding="utf-8")
 
 
 async def run_migration(
@@ -112,10 +74,10 @@ async def run_migration(
     source_engine = create_async_engine(source_url)
     dest_engine = create_async_engine(dest_url)
 
-    print(f"Kaynak (salt okunur):  {_redact(source_url)}")
-    print(f"Hedef (yazılacak):     {_redact(dest_url)}")
+    print(f"Kaynak (salt okunur):  {redact(source_url)}")
+    print(f"Hedef (yazılacak):     {redact(dest_url)}")
 
-    metadata = await _reflect(source_engine)
+    metadata = await reflect(source_engine)
     tables = list(metadata.tables.values())
     if not tables:
         print("Kaynak veritabanında hiç tablo bulunamadı -- yapılacak bir şey yok.")
@@ -126,7 +88,7 @@ async def run_migration(
     print(f"\n{len(tables)} tablo bulundu:")
     row_counts: dict[str, int] = {}
     for table in tables:
-        rows = await _read_rows(source_engine, table)
+        rows = await read_rows(source_engine, table)
         row_counts[table.name] = len(rows)
         print(f"  - {table.name}: {len(rows)} satır")
 
@@ -138,16 +100,16 @@ async def run_migration(
         "genel bir veritabanı yedeği DEĞİL."
     )
 
-    if not assume_yes:
-        answer = input(
-            f"\n{sum(row_counts.values())} satır '{_redact(dest_url)}' hedefine "
-            "yazılacak. Devam edilsin mi? [y/N] "
-        )
-        if answer.strip().lower() not in ("y", "yes", "evet"):
-            print("İptal edildi.")
-            await source_engine.dispose()
-            await dest_engine.dispose()
-            return
+    proceed = confirm(
+        f"\n{sum(row_counts.values())} satır '{redact(dest_url)}' hedefine "
+        "yazılacak. Devam edilsin mi? [y/N] ",
+        assume_yes=assume_yes,
+    )
+    if not proceed:
+        print("İptal edildi.")
+        await source_engine.dispose()
+        await dest_engine.dispose()
+        return
 
     checkpoint_path: Path | None = None
     if checkpoint:
@@ -165,9 +127,9 @@ async def run_migration(
 
     print("\nTaşıma başlıyor...")
     for table in tables:
-        await _ensure_table(dest_engine, table)
-        rows = await _read_rows(source_engine, table)
-        await _write_rows(dest_engine, table, rows)
+        await ensure_table(dest_engine, table)
+        rows = await read_rows(source_engine, table)
+        await write_rows(dest_engine, table, rows)
         print(f"  - {table.name}: {len(rows)} satır yazıldı")
 
     print("\nTamamlandı.")
@@ -176,53 +138,38 @@ async def run_migration(
 
 
 async def restore_checkpoint(*, checkpoint_path: Path, dest_url: str, assume_yes: bool) -> None:
-    snapshot: dict[str, list[dict[str, Any]]] = json.loads(
-        checkpoint_path.read_text(encoding="utf-8"), object_hook=_json_object_hook
-    )
+    snapshot = load_json(checkpoint_path.read_text(encoding="utf-8"))
     dest_engine = create_async_engine(dest_url)
-    metadata = await _reflect(dest_engine)
+    metadata = await reflect(dest_engine)
 
     print(f"Checkpoint: {checkpoint_path}")
-    print(f"Hedef (yazılacak): {_redact(dest_url)}")
+    print(f"Hedef (yazılacak): {redact(dest_url)}")
     print(f"{len(snapshot)} tablo geri yüklenecek:")
     for name, rows in snapshot.items():
         print(f"  - {name}: {len(rows)} satır")
 
-    if not assume_yes:
-        answer = input(
-            "\nBu, hedefteki bu tabloların İÇERİĞİNİ checkpoint anındaki haline "
-            "geri döndürecek (mevcut satırlar silinip checkpoint'tekiler yazılacak). "
-            "Devam edilsin mi? [y/N] "
-        )
-        if answer.strip().lower() not in ("y", "yes", "evet"):
-            print("İptal edildi.")
-            await dest_engine.dispose()
-            return
+    proceed = confirm(
+        "\nBu, hedefteki bu tabloların İÇERİĞİNİ checkpoint anındaki haline "
+        "geri döndürecek (mevcut satırlar silinip checkpoint'tekiler yazılacak). "
+        "Devam edilsin mi? [y/N] ",
+        assume_yes=assume_yes,
+    )
+    if not proceed:
+        print("İptal edildi.")
+        await dest_engine.dispose()
+        return
 
     for name, rows in snapshot.items():
         table = metadata.tables.get(name)
         if table is None:
             print(f"  - {name}: hedefte bu tablo yok, atlanıyor")
             continue
-        await _delete_rows(dest_engine, table)
-        await _write_rows(dest_engine, table, rows)
+        await delete_rows(dest_engine, table)
+        await write_rows(dest_engine, table, rows)
         print(f"  - {name}: {len(rows)} satır geri yüklendi")
 
     print("\nGeri yükleme tamamlandı.")
     await dest_engine.dispose()
-
-
-def _redact(url: str) -> str:
-    """Hides a password embedded in a DB URL (scheme://user:PASSWORD@host/db)
-    before printing it to the terminal/logs."""
-    if "://" not in url or "@" not in url:
-        return url
-    scheme, rest = url.split("://", 1)
-    creds, _, host_and_db = rest.partition("@")
-    if ":" not in creds:
-        return url
-    user, _sep, _password = creds.partition(":")
-    return f"{scheme}://{user}:***@{host_and_db}"
 
 
 def main(argv: list[str] | None = None) -> int:

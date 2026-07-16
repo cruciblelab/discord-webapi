@@ -124,6 +124,49 @@ istersen bu araca hiç ihtiyacın yok — her `Store` bir `Protocol`
 uygulayan bir sınıf yazıp constructor'a (`session_store=`, `rate_limit_store=`,
 ...) geçmen yeterli; kütüphanenin geri kalanı hiç fark etmez.
 
+## 5. Yedek alma
+
+`discord-webapi-backup` (`discord_webapi.tools.backup`) — bir migrasyona
+bağlı olmadan, elinde bağımsız tutabileceğin bir yedek dosyası. Aynı
+şema-agnostik yaklaşım: `migrate` gibi kaynak veritabanında ne tablo
+varsa SQLAlchemy introspection'ıyla bulur, hiçbir ORM sınıfını hardcode
+etmez.
+
+Üç kapsam, birleştirilebilir:
+- **Tam yedek** (varsayılan, filtre verilmezse).
+- **Guild bazlı** (`--guild-id N`): sadece `guild_id` sütunu olan
+  tablolardan o guild'e ait satırlar (`dwa_sessions` gibi guild
+  sütunu olmayan tablolar tam alınır).
+- **Tarih bazlı** (`--since`/`--until`, ISO 8601): her tablonun sahip
+  olduğu `created_at`/`updated_at`/`given_at`/`expires_at`
+  sütunlarından hangisi varsa ona göre filtrelenir; hiçbiri yoksa tam
+  alınır.
+
+```bash
+discord-webapi-backup create \
+  --from sqlite+aiosqlite:///dashboard.sqlite3 \
+  --out yedekler/tam_yedek.json
+
+# sadece bir guild, sadece son 7 gün
+discord-webapi-backup create \
+  --from sqlite+aiosqlite:///dashboard.sqlite3 \
+  --out yedekler/guild123_son_hafta.json \
+  --guild-id 123 --since 2026-07-09T00:00:00
+
+discord-webapi-backup list yedekler/tam_yedek.json
+
+discord-webapi-backup restore yedekler/tam_yedek.json \
+  --to mysql+aiomysql://kullanici:sifre@host/veritabani
+```
+
+Güvenlik tasarımı `migrate` ile aynı: kaynağa asla yazmaz, `--yes`
+verilmedikçe onay ister, DB URL'lerindeki şifreler terminale
+basılmadan önce gizlenir. Tek fark: bir yedek dosyası sadece satır
+verisi tutar, şema/sütun tipi bilgisi tutmaz -- bu yüzden `restore`,
+hedefte olmayan bir tabloyu **oluşturamaz**, sadece atlayıp devam eder
+(hedefin botun en az bir kez çalışıp `create_all()`/`quickstart()` ile
+tabloları oluşturmuş olması gerekir).
+
 ## Özet tablo
 
 | Senaryo | Transport | Süreçler |

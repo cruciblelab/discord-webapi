@@ -58,6 +58,9 @@ discord-webapi-scaffold = "discord_webapi.extensions.scaffold:main"
 # Move discord-webapi's SQL data from one database to another (needs the
 # `sql` extra installed for whichever DBAPI driver(s) --from/--to require).
 discord-webapi-migrate = "discord_webapi.tools.migrate:main"
+# Create/list/restore a standalone (full, guild-scoped, or date-scoped)
+# backup file, independent of any migration.
+discord-webapi-backup = "discord_webapi.tools.backup:main"
 
 [project.urls]
 Repository = "https://github.com/cruciblelab/discord-webapi"

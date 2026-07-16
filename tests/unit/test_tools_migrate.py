@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from discord_webapi.storage.sql import SessionRow, SQLSessionStore
 from discord_webapi.storage.sql import create_all as create_all_tables
 from discord_webapi.tools import migrate
+from discord_webapi.tools._sql_dump import redact
 
 
 def _sqlite_url(path: Path, name: str) -> str:
@@ -176,11 +177,11 @@ async def test_empty_source_database_is_a_noop(tmp_path: Path) -> None:
 
 
 def test_redact_hides_the_password() -> None:
-    assert migrate._redact("mysql+aiomysql://user:secret@host/db") == "mysql+aiomysql://user:***@host/db"
+    assert redact("mysql+aiomysql://user:secret@host/db") == "mysql+aiomysql://user:***@host/db"
 
 
 def test_redact_leaves_urls_without_credentials_alone() -> None:
-    assert migrate._redact("sqlite+aiosqlite:///local.sqlite3") == "sqlite+aiosqlite:///local.sqlite3"
+    assert redact("sqlite+aiosqlite:///local.sqlite3") == "sqlite+aiosqlite:///local.sqlite3"
 
 
 def test_cli_run_requires_from_and_to() -> None:

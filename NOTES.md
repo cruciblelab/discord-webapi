@@ -1,5 +1,60 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## `discord_webapi.tools.backup`: yedek alma CLI'si (bu oturumda)
+
+`migrate` bittikten sonra kullanıcının istediği takip: "Yedek alma komutu
+ekleyebiliriz tam yedek belli bir yere kadar yedek tarihe belli yerlerin
+yedeği health check eklenebilir" — yani tam yedek + guild-scoped +
+tarih-scoped yedek (health check ayrı bir sonraki iş).
+
+**Refactor önce**: `migrate.py`'nin reflection/okuma/yazma/(de)serileştirme
+kodu (`_reflect`, `_read_rows`, `_write_rows`, `_delete_rows`,
+`_json_default`/`_json_object_hook`, `_redact`, onay istemi) `backup.py`
+ile birebir aynı ihtiyaç olduğu için `discord_webapi/tools/_sql_dump.py`'ye
+taşındı, `migrate.py` da bunları import edecek şekilde güncellendi. İkisi
+arasında kod tekrarı yok.
+
+**Üç kapsam, SQL seviyesinde filtrelenip birleştirilebiliyor** (Python'da
+değil — `sqlalchemy.and_` ile `where` clause'una gömülüyor):
+- Guild: `table.c.guild_id == guild_id`, sadece `guild_id` sütunu olan
+  tablolara uygulanıyor.
+- Tarih: her tablonun `created_at`/`updated_at`/`given_at`/`expires_at`
+  sütunlarından hangisi varsa (bu sırayla kontrol edilip) ona göre
+  `>=`/`<=`.
+- İkisi aynı anda verilirse `and_(*conditions)` ile birleşiyor.
+
+**Bilinçli sınır (dokümante edildi)**: bir yedek JSON dosyası sadece
+satır verisi tutuyor, `migrate.py`'nin aksine canlı bir kaynak engine'i
+yok ki oradan şema/sütun tipi reflect edilsin. Bu yüzden `restore_backup`,
+hedefte olmayan bir tabloyu OLUŞTURAMIYOR — `migrate restore` ile aynı
+davranışla sadece atlayıp mesaj basıyor. Restore için hedefin en az bir
+kez `create_all()`/`quickstart()` görmüş olması gerekiyor.
+
+**Uçtan uca elle doğrulandı** (sandbox'ta gerçek SQLite dosyalarıyla): 2
+guild/2 tarihe yayılan 3 satır seed edildi; tam yedek 3, `--guild-id 111`
+2, `--since <1 gün önce>` 2 (10 günlük satır hariç) satır verdi —
+hepsi hem komutun kendi çıktısından hem `discord-webapi-backup list`'ten
+doğrulandı. Boş bir hedefe `create_all` sonrası tam restore yapıldı,
+`SQLCommandConfigStore.get_all_overrides()` ile guild 111'in
+`{ping, warn}`, guild 222'nin `{ping}` override'larına sahip olduğu
+doğrulandı (seed edilenle birebir eşleşti).
+
+Testler: `tests/unit/test_tools_backup.py` (11 test — tam/guild/tarih/
+birleşik kapsam, tablo filtresi, restore/var-olan-tabloya-yazma,
+restore/eksik-tabloyu-atlama, `list_backup` çıktısı, CLI argüman
+doğrulama, `_parse_iso`'nun naive datetime'ı UTC varsayması). 449 test
+yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
+`pyproject.toml`'a `discord-webapi-backup` console script eklendi,
+`discord_webapi/tools/__init__.py`'nin docstring'i güncellendi.
+`docs/DAGITIM.md`'ye "5. Yedek alma" ve `TESTING.md`'ye "24. Yedek alma
+CLI'si" bölümleri eklendi.
+
+Sırada: health check aracı (kullanıcının aynı istekte belirttiği ikinci
+parça, henüz başlanmadı — kapsam tam netleşmedi: DB bağlantı kontrolü,
+opsiyonel Redis `PING`, opsiyonel HTTP endpoint kontrolü, cron/monitoring
+için 0/1 exit code fikri var ama kullanıcıyla teyit edilmedi).
+
 ## `discord_webapi.tools.migrate`: veritabanı taşıma CLI'si (bu oturumda)
 
 Fiziksel test turunda kullanıcının sorduğu "SQLite'tan MariaDB'ye geçebilir

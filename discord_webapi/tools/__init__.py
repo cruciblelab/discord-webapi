@@ -7,4 +7,7 @@ not a `setup(bot, ...)` call).
 - `discord_webapi.tools.migrate`: move all data from one SQL database to
   another (e.g. SQLite -> MariaDB), with an automatic pre-migration
   checkpoint so a bad migration can be undone.
+- `discord_webapi.tools.backup`: create a standalone backup file (full,
+  guild-scoped, and/or date-scoped) and restore from it later, independent
+  of any migration.
 """

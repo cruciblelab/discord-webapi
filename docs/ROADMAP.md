@@ -151,6 +151,23 @@ bu süreçte checkpoint'in kendi bir gerçek bug'ı bulundu (datetime'lar
 JSON'a string olarak yazılıyordu ama restore'da tekrar `datetime`
 nesnesine çevrilmiyordu, SQLite bunu reddediyordu) ve düzeltildi.
 
+**P2.5 — `discord_webapi.tools.backup`** ✅ **TAMAMLANDI** (aynı talep
+zincirinin devamı: "yedek alma komutu ekleyebiliriz tam yedek belli bir
+yere kadar yedek tarihe belli yerlerin yedeği"). `migrate`'ten bağımsız,
+elde tutulan bir yedek dosyası oluşturan/listeleyen/geri yükleyen CLI.
+Aynı şema-agnostik yaklaşım; paylaşılan reflection/okuma/yazma/
+(de)serileştirme kodu `discord_webapi/tools/_sql_dump.py`'ye çıkarıldı.
+Üç birleştirilebilir kapsam: tam, guild-scoped (`--guild-id`), tarih-
+scoped (`--since`/`--until`). Bir yedek dosyası şema bilgisi tutmadığı
+için restore, hedefte olmayan bir tabloyu oluşturamıyor — bilinçli bir
+sınır olarak dokümante edildi. Full/guild/date/birleşik kapsam ve restore
+gerçek SQLite dosyalarına karşı elle doğrulandı, 11 otomatik test yazıldı.
+
+Sırada (aynı talepten, henüz başlanmadı): **health check aracı** — kapsam
+kullanıcıyla tam netleşmedi, olası tasarım: DB bağlantı kontrolü,
+opsiyonel Redis `PING`, opsiyonel HTTP endpoint kontrolü, cron/monitoring
+için 0/1 exit code.
+
 ---
 
 ## 3. v0.7 — Üçüncü-taraf uyumlu paket ekosistemi (plugin DEĞİL)
