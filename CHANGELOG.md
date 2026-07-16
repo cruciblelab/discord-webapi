@@ -2,6 +2,44 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Kod denetimi: `extras.warn`/`extras.welcome`'da 4 gerçek bug bulundu, düzeltildi
+
+Geniş bir arka-plan kod denetimi (auth/authz/jobs/audit/consent/transport/
+storage/extras/bridge.py) yapıldı. Çoğu alan temiz çıktı (jobs kuyruğu,
+Redis transport reconnect/RPC temizliği, auth token refresh race'i, authz
+cache invalidation'ı — hepsi doğru); `discord_webapi.extras`'ta 4 gerçek
+bug bulundu:
+
+### Düzeltildi
+
+- **`extras/warn.py`: `auto_timeout_after` her warn'da yeniden tetikleniyordu.**
+  Karşılaştırma `count >= auto_timeout_after` idi — eşiği bir kere geçtikten
+  sonra HER yeni warn, timeout'u tekrar tekrar uyguluyordu. Docstring
+  "üyenin N'inci uyarısı" diyor (tekil, bir kerelik), `escalation` motoru
+  da tam olarak eşiğe denk geldiğinde tetikliyor — tutarsızlık. **Fix**:
+  `count == auto_timeout_after` (tam olarak N'inci uyarıda, bir kere).
+- **`extras/warn.py`: bot'un `moderate_members` izni yoksa `member.timeout()`
+  yakalanmamış `discord.Forbidden` fırlatıyordu**, warn kaydı zaten
+  DB'ye yazıldıktan SONRA — komut hatası olarak sızıyordu. **Fix**: blanket
+  bir `@commands.bot_has_permissions(moderate_members=True)` decorator'ı
+  eklemek yerine (bu, `auto_timeout_after` hiç kullanmayan herkesi de o
+  izni vermeye zorlardı) `member.timeout()` çağrısı `try/except
+  discord.Forbidden` ile sarıldı, kullanıcıya "izin yok" diye best-effort
+  bir mesaj ekleniyor.
+- **`extras/welcome.py`: kanal'a mesaj gönderimi `dm_instead`'in aksine
+  best-effort değildi.** Bot'un o kanalda mesaj gönderme izni yoksa her
+  üye katılımında yakalanmamış `Forbidden` fırlatıyordu. **Fix**: aynı
+  `try/except discord.HTTPException` ile sarıldı.
+- **`extras/welcome.py`: bilinmeyen template placeholder'ı yakalanmamış
+  `KeyError` fırlatıyordu.** `message_template.format(...)` sadece
+  `mention`/`member`/`guild` sağlıyor; `{user}` gibi başka bir placeholder
+  kullanan bir template her üye katılımında listener'ı çökertiyordu.
+  **Fix**: `KeyError`/`IndexError` yakalanıyor (best-effort, aynı "bozuk
+  bir welcome mesajı bot'u çökmüş gibi göstermemeli" mantığı).
+
+4 yeni test (`test_warn.py`'ye 2, `test_welcome.py`'ye 2). 395 test yeşil
+(1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — İki bilinen boşluk/karışıklık düzeltildi
 
 ### Düzeltildi

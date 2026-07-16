@@ -38,10 +38,25 @@ madde ele alındı:
 
 391 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
 
-**Ayrıca**: kullanıcının isteğiyle geniş bir arka-plan kod denetimi
-başlatıldı ("birkaç gündür bakmadığımız dosyalara bakalım") — auth/authz/
-jobs/audit/consent/transport/storage/extras/bridge.py'yi kapsayan. Sonuç
-gelince bu dosyaya eklenecek.
+**Kod denetimi sonucu (tamamlandı)**: auth/authz/jobs/audit/consent/
+transport/storage/extras/bridge.py kapsayan arka-plan denetimi 4 gerçek
+bug buldu, hepsi `extras`'ta (diğer her alan — jobs kuyruğu, Redis
+reconnect/RPC temizliği, auth refresh race, authz cache — temiz çıktı):
+1. `warn.py`'de `auto_timeout_after` eşiği geçtikten sonra HER warn'da
+   yeniden tetikleniyordu (`>=` yerine `==` olmalıydı) — düzeltildi.
+2. `warn.py`'de bot'un `moderate_members` izni yoksa `member.timeout()`
+   yakalanmamış `Forbidden` fırlatıyordu, warn kaydı zaten yazıldıktan
+   sonra — `try/except` ile sarıldı (blanket
+   `bot_has_permissions` decorator'ı KULLANILMADI, çünkü bu
+   `auto_timeout_after` kullanmayanları da gereksiz yere kısıtlardı).
+3. `welcome.py`'de kanal gönderimi `dm_instead`'in aksine best-effort
+   değildi, izin yoksa listener'ı çökertiyordu — aynı `try/except` ile
+   sarıldı.
+4. `welcome.py`'de bilinmeyen bir template placeholder'ı (`{user}` gibi)
+   yakalanmamış `KeyError` fırlatıyordu — best-effort olarak yakalanıyor.
+
+4 yeni test eklendi. 395 test yeşil (1 ortam-bağımlı Postgres testi
+hariç), ruff+mypy temiz.
 
 ## `builtins` + `skeletons` → tek `discord_webapi.extras` paketi (bu oturumda yapıldı)
 

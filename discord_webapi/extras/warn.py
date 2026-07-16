@@ -110,10 +110,21 @@ def setup(
 
         confirmation = f"Warned **{member}** ({count} total warning(s)).\nReason: {reason}"
 
-        if auto_timeout_after is not None and count >= auto_timeout_after:
+        if auto_timeout_after is not None and count == auto_timeout_after:
+            # Bot-permission check is deliberately runtime/best-effort, not
+            # a blanket @commands.bot_has_permissions(moderate_members=True)
+            # decorator -- that would require every bot using warn() to
+            # grant moderate_members even when auto_timeout_after is never
+            # configured, when the bot never calls Member.timeout at all.
             until = discord.utils.utcnow() + timedelta(minutes=auto_timeout_minutes)
-            await member.timeout(until, reason=f"Reached {count} warnings")
-            confirmation += f"\nAuto-timed out for {auto_timeout_minutes} minute(s)."
+            try:
+                await member.timeout(until, reason=f"Reached {count} warnings")
+                confirmation += f"\nAuto-timed out for {auto_timeout_minutes} minute(s)."
+            except discord.Forbidden:
+                confirmation += (
+                    "\nReached the auto-timeout threshold, but I don't have permission "
+                    "to time this member out."
+                )
 
         await ctx.reply(confirmation)
 

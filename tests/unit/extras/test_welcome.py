@@ -81,6 +81,35 @@ async def test_dm_instead_swallows_forbidden() -> None:
     await _get_listener(bot)(member)  # must not raise
 
 
+async def test_channel_send_forbidden_is_swallowed() -> None:
+    """The bot lacking permission to post in channel_id must not raise
+    out of the on_member_join listener -- same best-effort reasoning as
+    the dm_instead path."""
+    bot = _build_bot()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "no perms"))
+    setup_welcome(bot, channel_id=123)
+    member = _fake_member()
+    member.guild.get_channel.return_value = channel
+
+    await _get_listener(bot)(member)  # must not raise
+
+
+async def test_unknown_template_placeholder_is_swallowed() -> None:
+    """A template referencing a placeholder other than mention/member/guild
+    would otherwise raise KeyError inside the listener on every join."""
+    bot = _build_bot()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send = AsyncMock()
+    setup_welcome(bot, channel_id=123, message_template="Welcome {user}!")
+    member = _fake_member()
+    member.guild.get_channel.return_value = channel
+
+    await _get_listener(bot)(member)  # must not raise
+
+    channel.send.assert_not_called()
+
+
 async def test_custom_message_template() -> None:
     bot = _build_bot()
     channel = MagicMock(spec=discord.TextChannel)

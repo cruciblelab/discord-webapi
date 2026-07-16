@@ -83,6 +83,44 @@ async def test_auto_timeout_after_threshold() -> None:
     assert "Auto-timed out" in ctx.reply.call_args.args[0]
 
 
+async def test_auto_timeout_does_not_refire_on_warnings_past_the_threshold() -> None:
+    """Regression test: auto_timeout_after used to compare with `>=`, so
+    every warning past the threshold re-applied a fresh timeout. It should
+    fire exactly once, at the Nth warning, matching the docstring."""
+    bot = _build_bot()
+    store = MemoryWarnStore()
+    command = setup_warn(bot, store=store, auto_timeout_after=2, auto_timeout_minutes=5)
+    ctx = _fake_ctx()
+    member = _fake_member()
+
+    await command.callback(ctx, member, "first")
+    await command.callback(ctx, member, "second")
+    member.timeout.assert_called_once()
+
+    await command.callback(ctx, member, "third")
+    member.timeout.assert_called_once()  # still only once, not called again
+
+
+async def test_auto_timeout_forbidden_is_reported_without_crashing() -> None:
+    """The warn record must still be persisted and the command must still
+    reply even if the bot lacks permission to actually apply the timeout
+    -- no @commands.bot_has_permissions(moderate_members=True) guard is
+    used here on purpose, since plenty of warn() users never configure
+    auto_timeout_after at all and shouldn't be forced to grant that
+    permission for a feature they don't use."""
+    bot = _build_bot()
+    store = MemoryWarnStore()
+    command = setup_warn(bot, store=store, auto_timeout_after=1)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.timeout.side_effect = discord.Forbidden(MagicMock(status=403), "missing permissions")
+
+    await command.callback(ctx, member, "first")
+
+    assert len(await store.list_for_user(999, 42)) == 1
+    assert "don't have permission" in ctx.reply.call_args.args[0]
+
+
 async def test_no_auto_timeout_when_not_configured() -> None:
     bot = _build_bot()
     store = MemoryWarnStore()
