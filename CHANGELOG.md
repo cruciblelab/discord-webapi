@@ -2,6 +2,32 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — P1.4: audit log bot-tarafı moderasyon aksiyonlarını da kapsıyor (opt-in)
+
+### Eklenenler
+
+Audit log şimdiye kadar sadece web-tarafı dashboard yazmalarını (`command.
+set_override`, `app_role.set/delete`) kaydediyordu. Artık bot-tarafı
+moderasyon aksiyonları da opsiyonel olarak audit'leniyor:
+
+- **`EscalationEngine`**: `audit_logger=` parametresi. Bir rung tetiklenince
+  `escalation.<action>` kaydı (`actor_user_id=0` = otomatik/sistem
+  aksiyonu, `detail`'de key/threshold/count/configured_by). `DiscordWebAPI`
+  `install(enable_audit_log=True)` ile motoru kendi audit logger'ına
+  otomatik bağlıyor — dashboard yazma audit'iyle AYNI store'a, `GET
+  /audit-log` her ikisini de gösteriyor.
+- **`extras.warn.setup(bot, ..., audit_logger=)`**: her uyarıda `warn`
+  kaydı (actor = uyaran moderatör).
+- **`extras.automod.setup(bot, ..., audit_logger=)`**: her ihlalde
+  `automod.violation` kaydı.
+- `DiscordWebAPI.audit_logger` özelliği eklendi (`enable_audit_log=True`
+  olana kadar `None`) — bot-tarafı kod (warn/automod setup'ları) buna
+  erişip kendi aksiyonlarını audit'leyebilsin.
+
+Hepsi tam opt-in: `audit_logger` verilmezse hiçbir şey yazılmaz, gizli
+bağımlılık yok. 8 yeni test. 427 test yeşil (1 ortam-bağımlı Postgres testi
+hariç), ruff+mypy temiz.
+
 ## [Unreleased] — P1: DX iyileştirmeleri (extras export ergonomisi, hata rehberliği, 2 örnek)
 
 ### Eklenenler / İyileştirildi

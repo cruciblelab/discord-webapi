@@ -1,5 +1,27 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## P1.4: audit log bot-tarafı moderasyonu kapsıyor (opt-in)
+
+Audit şimdiye dek sadece web-tarafı (dashboard PATCH/PUT/DELETE)
+aksiyonlarını `app.state.discord_webapi_audit_logger` üzerinden
+kaydediyordu. Bot-tarafı (warn/escalation/automod) için tasarım kararı:
+her birine opsiyonel `audit_logger` parametresi — verilmezse no-op (tam
+opt-in, gizli bağımlılık yok).
+- `EscalationEngine.__init__(..., audit_logger=None)` + `_audit_trigger`:
+  rung tetiklenince `escalation.<action>`, `actor_user_id=0` (otomatik).
+  Facade: `install(enable_audit_log=True)` `self.audit_logger`'ı yaratıp
+  hem app.state'e koyuyor hem `escalation_engine.audit_logger`'a atıyor
+  (aynı store → `GET /audit-log` ikisini de gösterir). `self.audit_logger`
+  `__init__`'te `None`, install'da set ediliyor.
+- `extras.warn.setup(..., audit_logger=)`: `warn` kaydı, actor=moderatör.
+- `extras.automod.setup(..., audit_logger=)`: `automod.violation`, actor=0.
+- Timing notu: warn/automod `setup()` genelde modül yüklenirken (api'den
+  ÖNCE) çağrıldığı için quickstart'ta `api.audit_logger`'ı geçmek zor;
+  composable API kullananlar ya da kendi `AuditLogger(store)`'unu kuranlar
+  bağlar. Escalation audit'i facade'ın kendi motoru olduğu için
+  quickstart'ta bile `enable_audit_log` ile çalışıyor.
+8 yeni test (`test_audit_bot_side.py` 7 + facade wiring 1). 427 test yeşil.
+
 ## P1 DX turu tamamlandı (extras export, hata rehberliği, 2 örnek)
 
 ROADMAP P1.1-P1.3 yapıldı:

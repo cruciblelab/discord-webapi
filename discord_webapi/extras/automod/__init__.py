@@ -25,9 +25,13 @@ on `warn.py` or any other builtin.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 import discord
 from discord.ext import commands
+
+if TYPE_CHECKING:
+    from discord_webapi.audit.logger import AuditLogger
 
 from discord_webapi.extras.automod import (
     banned_words,
@@ -88,6 +92,7 @@ def setup(
     violation_message: str = DEFAULT_VIOLATION_MESSAGE,
     log_channel_id: int | None = None,
     on_violation: Callable[[discord.Message, str], Awaitable[None]] | None = None,
+    audit_logger: AuditLogger | None = None,
 ) -> None:
     """Registers an `on_message` listener running every enabled check (in
     the order listed above), stopping at the first violation. Every check
@@ -105,6 +110,10 @@ def setup(
     `log_channel_id`, and optionally awaits `on_violation(message, reason)`
     -- e.g. to bump a `extras.warn` count, without this module needing
     to import `warn.py` itself.
+
+    `audit_logger`: opt-in. Pass an `AuditLogger` (e.g. `api.audit_logger`)
+    to record each violation to the audit trail (actor_user_id=0, marking
+    an automatic action); omit it and nothing is audited.
 
     See `extras.automod.exemptions.is_exempt` for who's skipped
     entirely (mods with `manage_messages` by default, plus any configured
@@ -172,6 +181,15 @@ def setup(
                     )
                 except (discord.Forbidden, discord.HTTPException):
                     pass
+
+        if audit_logger is not None:
+            await audit_logger.record(
+                guild_id=message.guild.id,
+                actor_user_id=0,  # automatic action, no human dashboard actor
+                action="automod.violation",
+                target=str(message.author.id),
+                detail={"reason": reason, "channel_id": message.channel.id},
+            )
 
         if on_violation is not None:
             await on_violation(message, reason)

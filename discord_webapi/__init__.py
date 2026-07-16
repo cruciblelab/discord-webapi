@@ -281,6 +281,10 @@ class DiscordWebAPI:
         self.command_store = command_store or MemoryCommandConfigStore()
         self.authz_store = authz_store or MemoryAuthzStore()
         self.audit_store = audit_store or MemoryAuditStore()
+        # Constructed in install() only when enable_audit_log=True; exposed
+        # here so bot-side code (e.g. extras.warn/automod setup()) can be
+        # handed `api.audit_logger` to audit their own actions too.
+        self.audit_logger: AuditLogger | None = None
         self.consent_store = consent_store or MemoryConsentStore()
         self.rate_limit_store = rate_limit_store or MemoryRateLimitStore()
         self.escalation_rule_store = escalation_rule_store or MemoryEscalationRuleStore()
@@ -476,8 +480,16 @@ class DiscordWebAPI:
         if enable_websocket:
             app.include_router(build_commands_websocket_router(self.transport))
         if enable_audit_log:
+            audit_logger = AuditLogger(self.audit_store)
+            self.audit_logger = audit_logger
             app.state.discord_webapi_audit_store = self.audit_store
-            app.state.discord_webapi_audit_logger = AuditLogger(self.audit_store)
+            app.state.discord_webapi_audit_logger = audit_logger
+            # Bot-side escalation actions (auto timeout/kick/ban) get audited
+            # too, using the same store the dashboard writes go to -- so GET
+            # /audit-log shows both dashboard changes and automatic
+            # enforcement. warn/automod audit is opt-in via their setup()'s
+            # own audit_logger= param (pass api.audit_logger).
+            self.escalation_engine.audit_logger = audit_logger
             app.include_router(build_audit_log_router())
         if enable_cookie_consent:
             app.state.discord_webapi_consent_store = self.consent_store

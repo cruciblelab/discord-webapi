@@ -87,12 +87,20 @@ atıyor ("neden komutum hep reddediliyor?" sessiz bug'ı yerine).
   %100 dashboard'dan yapılandırılabilir. İkisi de fake env ile uçtan uca
   build doğrulandı (app + komutlar + listener'lar kuruluyor).
 
-**P1.4 — Audit log kapsamını genişlet (opt-in).**
-Şu an sadece `command.set_override`/`app_role.set`/`app_role.delete`
-loglanıyor. `warn`, `escalation` tetiklenmesi, `automod` ihlali gibi
-kritik moderasyon aksiyonları için de opsiyonel audit kaydı — "profesyonel
-bot" vizyonu için önemli. Her biri opt-in, `AuditLogger`'ı ilgili
-`setup()`/engine'e geçirerek (gizli bağımlılık yok).
+**P1.4 — Audit log kapsamını genişlet (opt-in).** ✅ **TAMAMLANDI.**
+Bot-tarafı moderasyon aksiyonları artık opsiyonel olarak audit'leniyor:
+- `EscalationEngine`: bir rung tetiklenince `escalation.<action>` kaydı
+  (`actor_user_id=0` = otomatik aksiyon). Facade `enable_audit_log=True`
+  ile motoru kendi `audit_logger`'ına otomatik bağlıyor — dashboard yazma
+  audit'i ile aynı store'a, böylece `GET /audit-log` ikisini de gösteriyor.
+- `extras.warn.setup(bot, ..., audit_logger=)`: her uyarıda `warn` kaydı
+  (actor = moderatör).
+- `extras.automod.setup(bot, ..., audit_logger=)`: her ihlalde
+  `automod.violation` kaydı (`actor_user_id=0`).
+Hepsi tam opt-in (`audit_logger` verilmezse no-op, gizli bağımlılık yok).
+8 yeni test. warn/automod audit'i composable API ya da kendi
+`AuditLogger`'ınla bağlanır (quickstart'ta engine gizli); escalation
+audit'i quickstart'ta bile `enable_audit_log` ile çalışıyor.
 
 **P1.5 — Dokümantasyon netleştirmeleri (kod değişikliği yok).**
 - `docs/GUVENLIK.md`: Redis namespace "namespacing ≠ authentication;

@@ -375,3 +375,18 @@ async def test_facade_wires_its_own_app_role_cache_into_the_registry() -> None:
 
     assert api.registry is not None
     assert api.registry.app_role_cache is api.app_role_cache
+
+
+def test_enable_audit_log_wires_the_escalation_engines_logger() -> None:
+    """P1.4: turning on audit should also audit bot-side escalation
+    actions (auto timeout/kick/ban), using the same store the dashboard
+    writes go to -- confirm install(enable_audit_log=True) sets the
+    engine's logger to the facade's own."""
+    app, api = _build_app()
+    assert api.escalation_engine.audit_logger is None  # off by default
+
+    app2 = FastAPI()
+    api.install(app2, enable_audit_log=True)
+
+    assert api.audit_logger is not None
+    assert api.escalation_engine.audit_logger is api.audit_logger

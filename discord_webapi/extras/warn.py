@@ -28,6 +28,8 @@ from discord_webapi.extras._shared import check_role_hierarchy
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
 
+    from discord_webapi.audit.logger import AuditLogger
+
 
 class WarnRecord(BaseModel):
     guild_id: int
@@ -67,6 +69,7 @@ def setup(
     command_name: str = "warn",
     auto_timeout_after: int | None = None,
     auto_timeout_minutes: int = 10,
+    audit_logger: AuditLogger | None = None,
 ) -> Any:
     """Registers a warn command on `bot` and returns it.
 
@@ -78,6 +81,10 @@ def setup(
     `auto_timeout_after`: if set, a member's `N`th warning in this guild
     automatically applies a `Member.timeout` of `auto_timeout_minutes` --
     escalation is opt-in, never assumed.
+
+    `audit_logger`: opt-in. Pass an `AuditLogger` (e.g. `api.audit_logger`,
+    non-None only when `enable_audit_log=True`) to record each warning to
+    the audit trail; omit it and nothing is audited.
     """
     warn_store = store or MemoryWarnStore()
 
@@ -107,6 +114,15 @@ def setup(
             )
         )
         count = len(await warn_store.list_for_user(ctx.guild.id, member.id))
+
+        if audit_logger is not None:
+            await audit_logger.record(
+                guild_id=ctx.guild.id,
+                actor_user_id=ctx.author.id,
+                action="warn",
+                target=str(member.id),
+                detail={"reason": reason, "count": count},
+            )
 
         confirmation = f"Warned **{member}** ({count} total warning(s)).\nReason: {reason}"
 

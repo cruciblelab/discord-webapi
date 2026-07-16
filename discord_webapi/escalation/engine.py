@@ -13,6 +13,7 @@ counted, but nothing is ever done about them.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import discord
 
@@ -29,6 +30,9 @@ from discord_webapi.escalation.models import (
 )
 from discord_webapi.transport.base import Event, Transport
 
+if TYPE_CHECKING:
+    from discord_webapi.audit.logger import AuditLogger
+
 
 class EscalationEngine:
     """Same live-update architecture as `GuildRateLimiter`/`CommandRegistry`:
@@ -43,10 +47,16 @@ class EscalationEngine:
         transport: Transport,
         rule_store: EscalationRuleStore,
         violation_store: ViolationStore,
+        *,
+        audit_logger: AuditLogger | None = None,
     ) -> None:
         self.transport = transport
         self.rule_store = rule_store
         self.violation_store = violation_store
+        # Opt-in: when set (the DiscordWebAPI facade wires its own when
+        # enable_audit_log=True), a fired rung is recorded to the audit log.
+        # None -> no audit writes, same as every other opt-in in the library.
+        self.audit_logger = audit_logger
         self._rules: dict[tuple[int, str], list[EscalationRule]] = {}
         self._loaded: set[tuple[int, str]] = set()
 
@@ -89,7 +99,30 @@ class EscalationEngine:
             return EscalationOutcome(count=count, triggered_rule=None)
 
         await self._apply_action(member, triggered)
+        await self._audit_trigger(member, key, count, triggered)
         return EscalationOutcome(count=count, triggered_rule=triggered)
+
+    async def _audit_trigger(
+        self, member: discord.Member, key: str, count: int, rule: EscalationRule
+    ) -> None:
+        if self.audit_logger is None:
+            return
+        # actor_user_id=0 marks an automatic/system action (there's no human
+        # dashboard actor behind an auto-escalation) -- the human who
+        # configured the rung is captured separately as rule.updated_by_user_id.
+        await self.audit_logger.record(
+            guild_id=member.guild.id,
+            actor_user_id=0,
+            action=f"escalation.{rule.action.value}",
+            target=str(member.id),
+            detail={
+                "key": key,
+                "threshold": rule.threshold,
+                "count": count,
+                "reason": rule.reason,
+                "configured_by": rule.updated_by_user_id,
+            },
+        )
 
     async def get_count(self, guild_id: int, user_id: int, key: str) -> int:
         return await self.violation_store.count(guild_id, user_id, key)
