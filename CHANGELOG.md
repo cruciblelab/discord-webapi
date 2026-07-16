@@ -2,6 +2,40 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — İki bilinen boşluk/karışıklık düzeltildi
+
+### Düzeltildi
+
+- **`CommandOverride.required_app_role` ölü alandı** — modelde tanımlıydı,
+  SQL/Memory store'da persist ediliyordu, ama `PATCH
+  /api/guilds/{id}/commands/{name}` hiçbir zaman kabul etmiyordu ve
+  `CommandRegistry`'nin enforcement'ı (`global_check`/`interaction_check`)
+  hiçbir zaman kontrol etmiyordu — yazılamayan, hiç uygulanmayan bir alan.
+  Artık tam çalışıyor: `CommandRegistry` opsiyonel bir `app_role_cache`
+  (`AppRoleCache`) parametresi alıyor (`DiscordWebAPI` kendi
+  `app_role_cache`'ini otomatik bağlıyor), `_check_app_role` hem
+  prefix/hybrid (`global_check`) hem slash (`interaction_check`) yolunda
+  çağrılıyor, `set_override`/PATCH endpoint'i/RPC payload'ı hepsi
+  `required_app_role`'ü baştan sona taşıyor. **Fail-closed**: bir komutun
+  `required_app_role`'ü ayarlanmış ama registry'ye hiç `app_role_cache`
+  verilmemişse (yanlış yapılandırma), çağrı sessizce izin verilmek yerine
+  reddediliyor. 8 yeni test (`tests/unit/test_command_required_app_role.py`)
+  + PATCH passthrough testi + facade wiring testi.
+- **`discord_webapi/ratelimit.py` (`TokenBucketLimiter`, dashboard yazma
+  endpoint'lerini abuse'tan koruyan iç mekanizma) `discord_webapi/ratelimits/`
+  (`GuildRateLimiter`, botunuzun kendi komutları için genel amaçlı,
+  dashboard'dan ayarlanabilir rate limit sistemi) ile isim olarak kafa
+  karıştırıyordu** — tekil/çoğul farkı dışında hiçbir görsel ayrım yoktu,
+  ikisi de tamamen farklı amaçlara hizmet ediyor. `discord_webapi/ratelimit.py`
+  → `discord_webapi/dashboard_ratelimit.py` (bağımsız `TokenBucketLimiter`
+  sınıfı) + `discord_webapi/dashboard_ratelimit_dependency.py` (auth'a
+  bağımlı `rate_limit_dependency` FastAPI dependency'si — circular
+  import'u önlemek için ayrı dosyada, `commands/ratelimit.py`'nin eskiden
+  yaptığı gibi) olarak yeniden adlandırıldı/bölündü. Sadece isim/konum
+  değişikliği, davranış aynı.
+
+391 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — `discord_webapi.builtins` + `discord_webapi.skeletons` → tek `discord_webapi.extras` paketi
 
 ### Değişenler (BREAKING — henüz yayınlanmamış sürüm, migration gerekmiyor)

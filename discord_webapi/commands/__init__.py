@@ -7,8 +7,8 @@ from discord_webapi.commands.models import (
     CommandStatus,
     ParamSpec,
 )
-from discord_webapi.commands.ratelimit import TokenBucketLimiter
 from discord_webapi.commands.registry import CommandRegistry, install_command_registry_bridge
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 
 __all__ = [
     "EVENT_TYPE_COMMAND_CONFIG_CHANGED",

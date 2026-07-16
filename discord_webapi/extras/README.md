@@ -93,7 +93,7 @@ registry.command_meta(category="moderation")(ban_command)
   - `banned_words.py` — case-insensitive, whole-word filter.
   - `spam.py` — message-rate limiting (in-memory sliding window, same
     "an evicted/reset counter is harmless" reasoning as
-    `commands.ratelimit.TokenBucketLimiter`).
+    `dashboard_ratelimit.TokenBucketLimiter`).
   - `mention_spam.py` — mass-mention/raid protection.
   - `invite_filter.py` — blocks other servers' Discord invite links
     (with an allowlist for specific codes).

@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from discord_webapi.auth import DiscordAuth
-from discord_webapi.ratelimit import TokenBucketLimiter
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 
 TOKEN_URL = "https://discord.com/api/v10/oauth2/token"
 ME_URL = "https://discord.com/api/v10/users/@me"

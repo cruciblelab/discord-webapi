@@ -1,7 +1,7 @@
 """Simple message-rate spam filter: more than `threshold` messages from
 the same member in the same channel within `window_seconds` gets
 flagged. Deliberately in-memory only (no `Store`, no database) -- like
-`commands.ratelimit.TokenBucketLimiter`, a process restart resetting
+`dashboard_ratelimit.TokenBucketLimiter`, a process restart resetting
 everyone's window is harmless for a heuristic like this, not a
 correctness bug.
 """

@@ -12,8 +12,8 @@ from fastapi.responses import RedirectResponse
 from starlette.requests import HTTPConnection
 
 from discord_webapi.auth.models import DiscordUser, SessionSummary
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 from discord_webapi.exceptions import InvalidStateError, SessionExpiredError
-from discord_webapi.ratelimit import TokenBucketLimiter
 from discord_webapi.storage.base import Session, SessionStore
 from discord_webapi.storage.memory import MemorySessionStore
 

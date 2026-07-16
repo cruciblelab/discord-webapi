@@ -6,7 +6,8 @@ from discord_webapi.audit.logger import AuditLogger
 from discord_webapi.authz.app_roles import AppRoleCache
 from discord_webapi.authz.dependencies import GuildContext, require_guild_permission
 from discord_webapi.authz.models import AppRole, AppRolePatch
-from discord_webapi.commands.ratelimit import TokenBucketLimiter, rate_limit_dependency
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
+from discord_webapi.dashboard_ratelimit_dependency import rate_limit_dependency
 
 _DEFAULT_WRITE_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
 

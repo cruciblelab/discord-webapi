@@ -1,3 +1,20 @@
+"""Rate limiting for the dashboard's own state-changing HTTP endpoints
+(PATCH/PUT/DELETE) -- an internal abuse/brute-force guard, not to be
+confused with `discord_webapi.ratelimits` (`GuildRateLimiter`), which is a
+public, dashboard-configurable rate limiter for YOUR bot's own commands
+and logic. This module protects things like "PATCH command override" or
+"DELETE a session" from a stolen session being hammered; `ratelimits` is
+what you'd use to rate-limit your own `/ping` command. Different purpose,
+different audience, deliberately named far apart from each other to avoid
+the singular/plural mix-up this file used to invite when it was named
+`ratelimit.py` sitting right next to the `ratelimits/` package.
+
+Deliberately dependency-free of FastAPI's auth `Depends` machinery (see
+`dashboard_ratelimit_dependency.py` for that layer) so `TokenBucketLimiter`
+can be used both from a FastAPI dependency and directly by `auth.oauth`
+itself, without an import cycle between the two.
+"""
+
 from __future__ import annotations
 
 import time
@@ -9,16 +26,9 @@ from fastapi import HTTPException, status
 class TokenBucketLimiter:
     """Minimal in-memory token bucket, per key (typically a dashboard user id).
 
-    Protects state-changing endpoints (e.g. PATCH command overrides, DELETE
-    a session) from a stolen session being used for abuse/brute force.
     In-memory is sufficient for the InProcessTransport deployment shape; a
     Redis-backed limiter is a drop-in swap for multi-process deployments,
     not required for v0.1.
-
-    Deliberately dependency-free (no FastAPI `Depends`/auth imports) so it
-    can be used both by `commands.ratelimit.rate_limit_dependency` (which
-    does depend on auth) and directly by `auth.oauth` itself, without
-    creating an import cycle between the two.
 
     Bounded by `max_tracked_keys` (default 10,000, LRU-evicted) so a
     long-running process with many distinct users/sessions over its

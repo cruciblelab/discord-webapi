@@ -43,7 +43,7 @@ güvenlik denetiminde doğrulanan/düzeltilen noktaları özetliyor.
 State-changing tüm endpoint'ler (`PATCH` komut override, `PUT`/`DELETE`
 app-role, `DELETE` session, `POST` job enqueue) bir `TokenBucketLimiter`
 ile korunuyor — çalınmış bir session'ın brute-force/abuse aracı olmaması
-için. `discord_webapi.ratelimit.TokenBucketLimiter` bağımsız bir modülde
+için. `discord_webapi.dashboard_ratelimit.TokenBucketLimiter` bağımsız bir modülde
 (auth ile commands arasında circular import olmadan paylaşılabilsin diye).
 
 ## SQL storage

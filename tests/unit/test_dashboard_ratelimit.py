@@ -1,7 +1,7 @@
 import pytest
 from fastapi import HTTPException
 
-from discord_webapi.ratelimit import TokenBucketLimiter
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 
 
 def test_check_allows_up_to_max_calls_then_raises() -> None:

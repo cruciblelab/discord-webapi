@@ -314,7 +314,12 @@ class DiscordWebAPI:
             # `register_handler()` the same command name (see its
             # docstring), so exactly the one process that actually owns
             # the live bot may do this.
-            self.registry = CommandRegistry(bot, transport=transport, store=self.command_store)
+            self.registry = CommandRegistry(
+                bot,
+                transport=transport,
+                store=self.command_store,
+                app_role_cache=self.app_role_cache,
+            )
             install_command_registry_bridge(self.registry, transport)
             install_member_lookup(bot, transport)
             install_channel_permission_lookup(bot, transport)

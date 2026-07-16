@@ -365,3 +365,13 @@ async def test_install_enable_escalation_api_mounts_the_router() -> None:
 
     resp2 = client2.get("/api/guilds/123/escalation-rules")
     assert resp2.status_code == 200
+
+
+async def test_facade_wires_its_own_app_role_cache_into_the_registry() -> None:
+    """CommandOverride.required_app_role enforcement needs an AppRoleCache
+    inside CommandRegistry -- confirms DiscordWebAPI actually wires its own
+    (not a second, independent instance) rather than leaving it None."""
+    _app, api = _build_app()
+
+    assert api.registry is not None
+    assert api.registry.app_role_cache is api.app_role_cache

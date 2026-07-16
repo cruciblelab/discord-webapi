@@ -1,5 +1,48 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## İki bilinen boşluk düzeltildi: `required_app_role` + ratelimit isim çakışması (bu oturumda)
+
+Önceki oturumun sonunda dış bir gözden geçirmenin işaret ettiği iki somut
+madde ele alındı:
+
+1. **`CommandOverride.required_app_role`**: modelde tanımlı+persist
+   ediliyordu ama hiçbir zaman set edilemiyordu (PATCH endpoint'i kabul
+   etmiyordu) ve hiçbir zaman enforce edilmiyordu (`CommandRegistry`
+   hiçbir yerde okumuyordu) — tamamen ölü bir alan. Karar: silmek yerine
+   bitirmek, çünkü mimari olarak zaten iyi oturuyordu (mevcut `AppRole`/
+   `AppRoleCache` sistemiyle bire bir uyumlu, sadece registry'ye
+   bağlanmamıştı). `CommandRegistry` artık opsiyonel bir `app_role_cache`
+   parametresi alıyor, `_check_app_role()` hem `global_check`
+   (prefix/hybrid) hem `_wrap_interaction_check` (slash) yolunda
+   çağrılıyor — `is_enabled`/cooldown kontrolünün hemen ardından, ikisinin
+   de önce çalıştığı bir sırada (disabled/cooldown/app-role hepsi kısa
+   devre yapabilir). Diğer enforcement kontrollerinin aksine bu saf O(1)
+   in-memory değil — `AppRoleCache`'in kendi kısa-TTL cache'inden geçiyor,
+   çünkü bir `AppRole`'ün üyeliği `CommandOverride`'dan bağımsız
+   değişebilir. **Fail-closed** tasarım kararı: `required_app_role`
+   ayarlı ama `app_role_cache=None` ise (yanlış yapılandırma), sessizce
+   izin vermek yerine reddediyor. `DiscordWebAPI.__init__` kendi
+   `self.app_role_cache`'ini `CommandRegistry`'ye otomatik geçiyor.
+2. **`ratelimit.py`/`ratelimits/` isim çakışması**: `discord_webapi/ratelimit.py`
+   (TokenBucketLimiter — dashboard PATCH/PUT/DELETE endpoint'lerini
+   abuse'tan koruyan iç mekanizma) ile `discord_webapi/ratelimits/`
+   (GuildRateLimiter — botunuzun kendi komutları/mantığı için genel amaçlı
+   rate limit sistemi) sadece tekil/çoğul farkıyla ayrılıyordu, kafa
+   karıştırıcıydı. `discord_webapi/dashboard_ratelimit.py` (bağımsız
+   `TokenBucketLimiter`) + `discord_webapi/dashboard_ratelimit_dependency.py`
+   (auth'a bağımlı `rate_limit_dependency`, circular import'u önlemek için
+   ayrı dosyada — `commands/ratelimit.py`'nin eskiden yaptığı ayrımın
+   aynısı, sadece "commands" isim alanından çıkarılıp üst seviyeye taşındı
+   çünkü zaten `commands`'a özel değildi, `ratelimits`/`escalation`/`jobs`/
+   `authz` API'lerinin hepsi kullanıyordu) olarak yeniden adlandırıldı.
+
+391 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
+**Ayrıca**: kullanıcının isteğiyle geniş bir arka-plan kod denetimi
+başlatıldı ("birkaç gündür bakmadığımız dosyalara bakalım") — auth/authz/
+jobs/audit/consent/transport/storage/extras/bridge.py'yi kapsayan. Sonuç
+gelince bu dosyaya eklenecek.
+
 ## `builtins` + `skeletons` → tek `discord_webapi.extras` paketi (bu oturumda yapıldı)
 
 Dış bir gözden geçirme (ChatGPT'ye sorulup kullanıcının paylaştığı geri

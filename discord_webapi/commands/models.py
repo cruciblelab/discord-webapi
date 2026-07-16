@@ -54,6 +54,7 @@ class CommandOverridePatch(BaseModel):
     enabled: bool
     cooldown_seconds: float | None = None
     cooldown_uses: int | None = None
+    required_app_role: str | None = None
 
     @model_validator(mode="after")
     def _cooldown_fields_are_paired(self) -> Self:
@@ -74,4 +75,5 @@ class CommandStatus(BaseModel):
     enabled: bool
     cooldown_seconds: float | None = None
     cooldown_uses: int | None = None
+    required_app_role: str | None = None
     invocation_count: int = 0

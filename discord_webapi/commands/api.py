@@ -5,11 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from discord_webapi.audit.logger import AuditLogger
 from discord_webapi.authz.dependencies import GuildContext, require_guild_permission
 from discord_webapi.commands.models import CommandOverridePatch, CommandStatus
-from discord_webapi.commands.ratelimit import TokenBucketLimiter, rate_limit_dependency
 from discord_webapi.commands.registry import (
     COMMAND_LIST_COMMAND_STATUS,
     COMMAND_SET_COMMAND_OVERRIDE,
 )
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
+from discord_webapi.dashboard_ratelimit_dependency import rate_limit_dependency
 from discord_webapi.transport.base import Transport
 
 _DEFAULT_PATCH_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
@@ -68,6 +69,7 @@ def build_commands_router(*, patch_rate_limiter: TokenBucketLimiter | None = Non
                 "enabled": body.enabled,
                 "cooldown_seconds": body.cooldown_seconds,
                 "cooldown_uses": body.cooldown_uses,
+                "required_app_role": body.required_app_role,
                 "updated_by_user_id": ctx.user.id,
             },
         )

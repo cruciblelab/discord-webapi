@@ -12,8 +12,8 @@ from fastapi.testclient import TestClient
 from discord_webapi.auth import DiscordAuth
 from discord_webapi.authz import GuildMemberCache
 from discord_webapi.commands.api import build_commands_router
-from discord_webapi.commands.ratelimit import TokenBucketLimiter
 from discord_webapi.commands.registry import CommandRegistry, install_command_registry_bridge
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 from discord_webapi.storage import MemoryCommandConfigStore
 from discord_webapi.transport import InProcessTransport
 
@@ -128,6 +128,32 @@ async def test_patch_disables_command_live_without_restart() -> None:
     list_resp = client.get(f"/api/guilds/{GUILD_ID}/commands")
     kick = next(c for c in list_resp.json() if c["name"] == "kick")
     assert kick["enabled"] is False
+
+
+async def test_patch_sets_required_app_role() -> None:
+    """required_app_role used to be a dead field: persisted by the SQL/
+    Memory stores but never settable through this PATCH endpoint. This
+    confirms the passthrough (api.py -> RPC payload -> set_override) works
+    end to end."""
+    app, registry, _transport = _build_app()
+    await registry.register_all()
+    client = TestClient(app)
+    _log_in(client)
+
+    patch_resp = client.patch(
+        f"/api/guilds/{GUILD_ID}/commands/kick",
+        json={"enabled": True, "required_app_role": "moderator"},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["required_app_role"] == "moderator"
+
+    stored = await registry.store.get_override(GUILD_ID, "kick")
+    assert stored is not None
+    assert stored.required_app_role == "moderator"
+
+    list_resp = client.get(f"/api/guilds/{GUILD_ID}/commands")
+    kick = next(c for c in list_resp.json() if c["name"] == "kick")
+    assert kick["required_app_role"] == "moderator"
 
 
 async def test_patch_sets_cooldown_and_enforces_it_live() -> None:

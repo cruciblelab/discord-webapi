@@ -7,6 +7,7 @@ import discord
 from discord.ext import commands
 from discord.ext.commands import BucketType, Cooldown, CooldownMapping
 
+from discord_webapi.authz.app_roles import AppRoleCache
 from discord_webapi.commands.bridge import extract_command_specs
 from discord_webapi.commands.events import EVENT_TYPE_COMMAND_CONFIG_CHANGED, CommandConfigChanged
 from discord_webapi.commands.models import CommandOverride, CommandSpec, CommandStatus
@@ -36,18 +37,27 @@ class CommandRegistry:
     - Enforcement (`global_check` for prefix/hybrid, the wrapped
       `interaction_check` for slash) is an O(1) in-memory dict lookup —
       never a DB query — because it runs on the hot path of every single
-      command invocation across every guild.
+      command invocation across every guild. The one exception is
+      `required_app_role` (`_check_app_role`), which goes through
+      `AppRoleCache`'s own short-TTL cache instead, since `AppRole`
+      membership can change independently of the `CommandOverride` itself.
     - Writes (`set_override`) go web -> store -> `command_config_changed`
       Transport event; the bot process only ever reads the store on boot
       and reacts to that event afterwards, it never writes to it.
     """
 
     def __init__(
-        self, bot: commands.Bot, *, transport: Transport, store: CommandConfigStore
+        self,
+        bot: commands.Bot,
+        *,
+        transport: Transport,
+        store: CommandConfigStore,
+        app_role_cache: AppRoleCache | None = None,
     ) -> None:
         self.bot = bot
         self.transport = transport
         self.store = store
+        self.app_role_cache = app_role_cache
         self._specs: dict[str, CommandSpec] = {}
         self._meta: dict[str, dict[str, Any]] = {}
         self._override_cache: dict[tuple[int, str], CommandOverride] = {}
@@ -114,6 +124,9 @@ class CommandRegistry:
             guild_id, name = interaction.guild_id, interaction.command.qualified_name
             if not self.is_enabled(guild_id, name):
                 return False
+            role_ids = [role.id for role in getattr(interaction.user, "roles", [])]
+            if not await self._check_app_role(guild_id, name, interaction.user.id, role_ids):
+                return False
             # Slash-only path: no CommandOnCooldown exception here (that's an
             # ext.commands error type, not reliably handled by the tree's own
             # error pipeline) -- just reject, matching the disabled-check above.
@@ -146,6 +159,9 @@ class CommandRegistry:
         guild_id, name = ctx.guild.id, ctx.command.qualified_name
         if not self.is_enabled(guild_id, name):
             return False
+        role_ids = [role.id for role in getattr(ctx.author, "roles", [])]
+        if not await self._check_app_role(guild_id, name, ctx.author.id, role_ids):
+            return False
         retry_after = self._check_cooldown(guild_id, name, ctx)
         if retry_after is not None:
             cooldown = self._cooldowns[(guild_id, name)][2]
@@ -159,6 +175,32 @@ class CommandRegistry:
             return override.enabled
         spec = self._specs.get(command_name)
         return spec.default_enabled if spec else True
+
+    async def _check_app_role(
+        self, guild_id: int, command_name: str, user_id: int, discord_role_ids: list[int]
+    ) -> bool:
+        """Enforces `CommandOverride.required_app_role` -- unlike
+        `is_enabled`/`_check_cooldown` this can't be a pure in-memory O(1)
+        lookup (an `AppRole`'s membership can change independently of the
+        override itself), so it goes through `AppRoleCache`'s own short-TTL
+        cache rather than the override cache. No-op (always allowed) if the
+        override has no `required_app_role` configured. If one *is*
+        configured but this registry was built without an `app_role_cache`
+        (a misconfiguration -- there's no way to actually check membership),
+        this fails closed and denies the call rather than silently ignoring
+        the restriction.
+        """
+        override = self._override_cache.get((guild_id, command_name))
+        if override is None or override.required_app_role is None:
+            return True
+        if self.app_role_cache is None:
+            return False
+        return await self.app_role_cache.user_has_role(
+            guild_id,
+            override.required_app_role,
+            user_id=user_id,
+            discord_role_ids=discord_role_ids,
+        )
 
     def _count_invocation(self, guild_id: int, command_name: str) -> None:
         key = (guild_id, command_name)
@@ -214,6 +256,7 @@ class CommandRegistry:
         enabled: bool,
         cooldown_seconds: float | None = None,
         cooldown_uses: int | None = None,
+        required_app_role: str | None = None,
         updated_by_user_id: int | None = None,
     ) -> CommandStatus:
         if command_name not in self._specs:
@@ -225,6 +268,7 @@ class CommandRegistry:
             enabled=enabled,
             cooldown_seconds=cooldown_seconds,
             cooldown_uses=cooldown_uses,
+            required_app_role=required_app_role,
             updated_at=datetime.now(UTC),
             updated_by_user_id=updated_by_user_id,
         )
@@ -253,6 +297,7 @@ class CommandRegistry:
                 override.cooldown_seconds if override else spec.default_cooldown_seconds
             ),
             cooldown_uses=override.cooldown_uses if override else spec.default_cooldown_uses,
+            required_app_role=override.required_app_role if override else None,
             invocation_count=self._invocation_counts.get((guild_id, command_name), 0),
         )
 
@@ -296,6 +341,7 @@ def install_command_registry_bridge(registry: CommandRegistry, transport: Transp
                 enabled=payload["enabled"],
                 cooldown_seconds=payload.get("cooldown_seconds"),
                 cooldown_uses=payload.get("cooldown_uses"),
+                required_app_role=payload.get("required_app_role"),
                 updated_by_user_id=payload.get("updated_by_user_id"),
             )
         except ValueError as exc:

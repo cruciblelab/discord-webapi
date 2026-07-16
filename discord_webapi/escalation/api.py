@@ -3,7 +3,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request, Response, status
 
 from discord_webapi.authz.dependencies import GuildContext, require_guild_permission
-from discord_webapi.commands.ratelimit import TokenBucketLimiter, rate_limit_dependency
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
+from discord_webapi.dashboard_ratelimit_dependency import rate_limit_dependency
 from discord_webapi.escalation.engine import EscalationEngine
 from discord_webapi.escalation.models import EscalationRule, EscalationRulePatch
 

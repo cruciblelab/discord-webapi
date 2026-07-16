@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from discord_webapi.authz.dependencies import GuildContext, require_guild_permission
-from discord_webapi.commands.ratelimit import TokenBucketLimiter, rate_limit_dependency
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
+from discord_webapi.dashboard_ratelimit_dependency import rate_limit_dependency
 from discord_webapi.jobs.base import JobQueue, JobStatus
 
 _DEFAULT_ENQUEUE_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
