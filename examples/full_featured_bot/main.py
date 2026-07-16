@@ -26,8 +26,10 @@ from fastapi.responses import HTMLResponse
 from discord_webapi import DiscordWebAPI
 from discord_webapi.authz import ChannelContext, require_channel_permission
 from discord_webapi.bot import default_intents
+from discord_webapi.builtins.automod import setup as setup_automod
 from discord_webapi.builtins.ban import setup as setup_ban
 from discord_webapi.builtins.kick import setup as setup_kick
+from discord_webapi.builtins.role_assign import setup as setup_role_assign
 from discord_webapi.builtins.timeout import setup as setup_timeout
 from discord_webapi.builtins.warn import setup as setup_warn
 from discord_webapi.builtins.welcome import setup as setup_welcome
@@ -52,6 +54,11 @@ setup_ban(bot)
 setup_kick(bot)
 setup_timeout(bot)
 setup_warn(bot, auto_timeout_after=3, auto_timeout_minutes=10)
+setup_role_assign(bot)
+# banned_words=[] means the word filter does nothing yet -- add real
+# words to see it in action. The spam filter is on by default (5
+# messages/10s).
+setup_automod(bot, banned_words=[])
 # channel_id=None means this does nothing yet (see welcome.py's docstring)
 # -- it never guesses a channel. Set it to a real channel ID from your
 # test server to actually see the welcome message on a new member join.

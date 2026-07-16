@@ -145,6 +145,8 @@ Serbestçe import edilebilir, opsiyonel, `setup(bot, **kwargs)` ile açıkça
 - `warn.py` — kalıcı durumlu, kendi `WarnStore`'u (Memory/SQL), opsiyonel
   otomatik timeout eskalasyonu.
 - `welcome.py` — `on_member_join` event listener'ı, kanal ya da DM.
+- `role_assign.py` — `/role-add`/`/role-remove` komutları. Diğer moderasyon komutları gibi rol-hiyerarşisi korumalı, ama hedef *üyenin* değil, verilen/alınan *rolün* sırasını kontrol ediyor (bot token'ı API çağrısını yaptığı için Discord hiyerarşi kontrolünü botun kendi sırasına göre yapıyor, çağıran kullanıcının sırasına göre değil).
+- `automod.py` — ikinci komut-olmayan builtin: yasaklı kelime filtresi + basit mesaj hızı (spam) filtresi, `on_message` üzerinden. Ban/kick/timeout'a yükseltmiyor, kalıcı ihlal sayacı tutmuyor (o `warn.py`'nin işi) — sadece mesajı siliyor ve isteğe bağlı kısa bir kanal bildirimi gönderiyor. Her ikisi de bellek-içi (process ömrü kadar), `TokenBucketLimiter` ile aynı gerekçeyle.
 
 `_shared.py`'deki `check_role_hierarchy`/`notify_member_best_effort`
 bağımsız kullanılabilir — sadece bunları alıp kendi komutunuza gömebilir,

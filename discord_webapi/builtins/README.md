@@ -58,6 +58,20 @@ registry.command_meta(category="moderation")(ban_command)
   `on_member_join` listener. Same `setup(bot, **kwargs)` shape, proving the
   convention isn't just for slash/hybrid commands. No channel is guessed;
   you pass `channel_id` (or `dm_instead=True`) explicitly.
+- `role_assign.py` — `/role-add`/`/role-remove` commands. Stateless, same
+  role-hierarchy philosophy as `ban.py`/`kick.py`/`timeout.py`, but checks
+  the *role being granted/removed* rather than a target member's rank
+  (`_shared.check_role_assignable`) -- Discord enforces `MANAGE_ROLES`
+  hierarchy against the bot's own rank when a bot token makes the call,
+  not the invoking human's, so this needs its own client-side guard for
+  the same reason the member-targeting commands do.
+- `automod.py` — the second non-command builtin: a configurable
+  `on_message` listener with an independent banned-word filter and a
+  simple message-rate spam filter. Neither escalates to a ban/kick/timeout
+  or keeps a persistent strike count (that's `warn.py`'s job) -- this only
+  ever deletes a message and optionally posts a short in-channel notice.
+  Both checks are in-memory only, same "an evicted/reset counter is
+  harmless" reasoning as `commands.ratelimit.TokenBucketLimiter`.
 
 Every database/cache/permission concern above stays a separate,
 composable piece — use one function from `_shared.py`, one whole builtin,

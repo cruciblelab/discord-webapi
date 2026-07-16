@@ -51,3 +51,25 @@ async def notify_member_best_effort(member: discord.Member, message: str) -> Non
         pass
     except discord.HTTPException:
         pass
+
+
+def check_role_assignable(
+    ctx: commands.Context[commands.Bot], role: discord.Role
+) -> str | None:
+    """Returns a user-facing error string if `role` is at or above the
+    bot's or the invoking moderator's own highest role, else `None`.
+
+    Unlike `check_role_hierarchy` (which checks a target *member's* rank),
+    this checks the *role being granted/removed* itself. Discord enforces
+    role-hierarchy for `MANAGE_ROLES` against whichever identity actually
+    calls the API -- since a bot token makes the call, Discord checks the
+    **bot's** hierarchy, not the invoking human's, so a role-assignment
+    command needs this same client-side guard for the same reason
+    `check_role_hierarchy` exists for ban/kick/timeout.
+    """
+    me = ctx.guild.me if ctx.guild is not None else None
+    if me is not None and role >= me.top_role:
+        return "I can't manage that role -- it outranks (or matches) my highest role."
+    if isinstance(ctx.author, discord.Member) and role >= ctx.author.top_role:
+        return "You can't manage that role -- it outranks (or matches) your highest role."
+    return None

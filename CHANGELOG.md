@@ -2,6 +2,16 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — İki yeni builtin: rol atama, otomatik moderasyon
+
+### Eklenenler
+
+- **`discord_webapi.builtins.role_assign`**: `/role-add`/`/role-remove` komutları. `_shared.py`'ye eklenen `check_role_assignable` ile, hedef üyenin değil verilen/alınan ROLÜN kendisinin sırasını kontrol ediyor — Discord'un `MANAGE_ROLES` hiyerarşi kontrolü, API çağrısını yapan bot token'ının sırasına göre çalışıyor, çağıran insanın sırasına göre değil, bu yüzden ban/kick/timeout'un kendi client-side kontrolüne ihtiyaç duyması gibi bu da kendi kontrolüne ihtiyaç duyuyor.
+- **`discord_webapi.builtins.automod`**: ikinci komut-olmayan builtin. `on_message` üzerinden bağımsız iki kontrol: yasaklı kelime filtresi (case-insensitive, tam kelime eşleşmesi) ve basit mesaj-hızı spam filtresi (guild/kanal/üye başına kayan pencere). İkisi de bilerek bellek-içi (process ömrü kadar) — `TokenBucketLimiter` ile aynı "evict edilen bir sayaç zararsız" gerekçesi. Ban/kick/timeout'a yükseltmiyor, kalıcı ihlal sayacı tutmuyor (`warn.py`'nin işi) — sadece mesajı siliyor + isteğe bağlı kısa kanal bildirimi.
+- `examples/full_featured_bot/`'a her iki builtin de eklendi.
+
+278 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — Test coverage: %91 → %95
 
 Fiziksel test turu beklerken test coverage'ı `pytest-cov` ile ölçüp

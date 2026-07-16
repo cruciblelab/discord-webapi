@@ -1,6 +1,29 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Test coverage artırma (bu oturumda tamamlandı, fiziksel test beklerken)
+## İki yeni builtin: rol atama, otomatik moderasyon (bu oturumda tamamlandı)
+
+Daha önce NOTES'ta "daha fazla builtin fikri: on_message otomatik
+moderasyon, rol-atama komutu — zamanı değil" diye not edilmişti; kullanıcı
+bu oturumda "builtins genişlet" isteyince sırası geldi.
+
+- **`role_assign.py`**: `/role-add`/`/role-remove`. Önemli tasarım detayı:
+  `check_role_hierarchy` (ban/kick/timeout'un kullandığı) hedef ÜYENİN
+  sırasını kontrol ediyor, ama rol atama için asıl önemli olan verilen/
+  alınan ROLÜN kendi sırası — bu yüzden `_shared.py`'ye ayrı bir
+  `check_role_assignable(ctx, role)` eklendi.
+- **`automod.py`**: `on_message` tabanlı, iki bağımsız kontrol (yasaklı
+  kelime + basit spam). Bilerek bellek-içi, kalıcı state yok (warn.py'nin
+  aksine) — TokenBucketLimiter'la aynı "zararsız eviction" mantığı.
+
+Her ikisi de mevcut convention'a (`setup(bot, **kwargs)`, tek dosya, hiçbir
+şey hardcoded değil) uyuyor. Testler: `tests/unit/test_builtins_role_assign.py`
+(8 test), `tests/unit/test_builtins_automod.py` (9 test),
+`test_builtins_shared.py`'ye `check_role_assignable` testleri eklendi.
+`examples/full_featured_bot/main.py`'a da eklendi.
+
+278 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
+## Test coverage artırma (tamamlandı)
 
 Kullanıcı fiziksel testleri akşama erteledi, bu arada "test coverage artır"
 ve "builtins genişlet" istedi (PyPI/repo taşıma işine hiç dokunmadık,

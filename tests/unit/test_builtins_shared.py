@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import discord
 
-from discord_webapi.builtins._shared import check_role_hierarchy, notify_member_best_effort
+from discord_webapi.builtins._shared import (
+    check_role_assignable,
+    check_role_hierarchy,
+    notify_member_best_effort,
+)
 
 
 def _fake_ctx(*, author_top_role: int = 5, bot_top_role: int = 10) -> MagicMock:
@@ -47,6 +51,36 @@ def test_check_role_hierarchy_rejects_target_outranking_the_moderator() -> None:
     error = check_role_hierarchy(ctx, member)
 
     assert error is not None and "outranks yours" in error
+
+
+def test_check_role_assignable_allows_a_role_below_both() -> None:
+    ctx = _fake_ctx(author_top_role=50, bot_top_role=100)
+
+    assert check_role_assignable(ctx, 10) is None  # type: ignore[arg-type]
+
+
+def test_check_role_assignable_rejects_a_role_outranking_the_bot() -> None:
+    ctx = _fake_ctx(author_top_role=50, bot_top_role=5)
+
+    error = check_role_assignable(ctx, 10)  # type: ignore[arg-type]
+
+    assert error is not None and "outranks (or matches) my" in error
+
+
+def test_check_role_assignable_rejects_a_role_outranking_the_moderator() -> None:
+    ctx = _fake_ctx(author_top_role=5, bot_top_role=100)
+
+    error = check_role_assignable(ctx, 10)  # type: ignore[arg-type]
+
+    assert error is not None and "outranks (or matches) your" in error
+
+
+def test_check_role_assignable_rejects_a_role_matching_the_moderators_own() -> None:
+    ctx = _fake_ctx(author_top_role=10, bot_top_role=100)
+
+    error = check_role_assignable(ctx, 10)  # type: ignore[arg-type]
+
+    assert error is not None and "outranks (or matches) your" in error
 
 
 async def test_notify_member_best_effort_swallows_forbidden() -> None:
