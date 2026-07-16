@@ -152,24 +152,28 @@ runtime'a gerek yok: üçüncü-taraf paket sadece, dokümante edilmiş
 konvansiyonu izleyen **sıradan bir Python paketi**.
 
 **v0.7 kapsamı (aşamalı):**
-1. **Konvansiyonu resmîleştir** (`docs/PAKET_YAZMA.md`): "discord-webapi
-   uyumlu paket" nedir? Tek giriş noktası (`setup(bot, **kwargs)` ya da
-   decorator), gizli bağımlılık yok, kendi `Store` Protocol'ü + Memory/SQL,
-   bizim public API'mize karşı yazılır, kendi `create_all()`'ı çekirdek
-   şemadan bağımsız. (Bu kurallar zaten `extras`'ta uygulanıyor — sadece
-   dışa dönük belgelenecek.)
-2. **Scaffold CLI** (`python -m discord_webapi.scaffold new-extension
-   <isim>`): konvansiyona uygun bir iskelet paket üretir (setup fonksiyonu,
-   opsiyonel store, test şablonu, README). "Komut satırıyla import" DX'inin
-   yazma tarafı.
-3. **Hafif manifest (opsiyonel)**: paketin adı/sürümü/yazarı/uyumlu
-   discord-webapi aralığı için basit bir `discord_webapi_extension` entry
-   point ya da `pyproject` metadata konvansiyonu. Discovery için — kod
-   çalıştırma/izolasyon için DEĞİL. Kurulum sıradan `pip install <paket>`.
-4. **(Uzun vade, opsiyonel) Topluluk index'i**: paketleri listeleyen bir
-   dizin (bizim host etmediğimiz, kod çalıştırmayan — sadece "şu paketler
-   var" diyen bir metadata listesi). Güvenlik yüzeyi minimal çünkü biz kod
-   barındırmıyoruz; kurulum `pip`'in kendi güven modeliyle.
+1. **Konvansiyonu resmîleştir** (`docs/PAKET_YAZMA.md`) — ✅ **TAMAMLANDI.**
+2. **`discord_webapi.extensions` paketi** — ✅ **TAMAMLANDI.**
+   `ExtensionManifest` (metadata), `Extension` (manifest + `setup`),
+   `ExtensionRegistry.discover()` (entry-point keşfi + sürüm uyumluluk
+   kontrolü, `setup`'ı asla otomatik çağırmadan), `sdk.py` (kararlı
+   re-export yüzeyi — bir extension'ın karşı yazacağı public API).
+3. **Scaffold CLI** — ✅ **TAMAMLANDI.**
+   `discord-webapi-scaffold new <isim>` (ya da `python -m
+   discord_webapi.extensions.scaffold new <isim>`): çalışan, kurulabilir,
+   keşfedilebilir bir iskelet paket üretir (örnek `/roll` komutu, manifest,
+   entry point, geçen test).
+4. **Hafif manifest** — ✅ **TAMAMLANDI.** `pyproject` entry-point
+   konvansiyonu (`[project.entry-points."discord_webapi.extensions"]`).
+   Discovery için, kod çalıştırma/izolasyon için DEĞİL. Kurulum sıradan
+   `pip install <paket>`.
+5. **(Uzun vade, opsiyonel, HENÜZ YOK) Topluluk index'i**: paketleri
+   listeleyen bir dizin (bizim host etmediğimiz, kod çalıştırmayan — sadece
+   "şu paketler var" diyen bir metadata listesi). Güvenlik yüzeyi minimal
+   çünkü biz kod barındırmıyoruz; kurulum `pip`'in kendi güven modeliyle.
+
+**v0.7 çekirdeği (1-4) bu oturumda tamamlandı ve push edildi.** Kalan
+opsiyonel adım sadece topluluk index'i (talep olunca).
 
 **Bilinçli olarak KAPSAM DIŞI:**
 - Manifest'ten kod çalıştıran bir installer/resolver VM.

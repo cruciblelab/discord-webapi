@@ -1,5 +1,58 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## v0.7: `discord_webapi.extensions` — üçüncü-taraf paket ekosistemi (bu oturumda tamamlandı)
+
+Kullanıcının vizyonu: insanlar bizim `extras`'ta yaptığımız gibi tam
+kapasite bot altyapıları yazıp paylaşsın, başkaları `pip` ile kurup
+projesine taksın. **Kritik kısıt (kullanıcı):** "pluginler core'a etki
+etmesin, ağır sistem istemem" — yani plugin VM/sandbox DEĞİL.
+
+**Tasarım kararının temeli** (bunu bir daha tartışma): bizim `extras`'ımız
+zaten SADECE public API kullanıyor. Dolayısıyla üçüncü-taraf bir paket,
+birinci-taraf bir paketten mimari olarak AYIRT EDİLEMEZ — aynı yüzey, aynı
+yetki, aynı sınır. Bu yüzden özel bir runtime'a gerek yok; extension =
+dokümante edilmiş konvansiyonu izleyen sıradan bir pip paketi. Güvenlik
+modeli = pip'in kendi güven modeli (extension kurmak = herhangi bir
+bağımlılık kurmak). discord-webapi, kullanıcının açıkça kurup açıkça
+çağırmadığı hiçbir kodu çalıştırmaz.
+
+**Mimari** (`discord_webapi/extensions/`):
+1. `manifest.py::ExtensionManifest` — metadata (name/version/author/
+   `discord_webapi_requires`/`provides`), sıfır ayrıcalık.
+2. `base.py::Extension` — `manifest + setup` container'ı (frozen dataclass),
+   paketin entry point'ine koyduğu şey.
+3. `registry.py::ExtensionRegistry.discover()` — `discord_webapi.extensions`
+   entry-point grubunu okur (`importlib.metadata.entry_points`), her
+   extension'ın modülünü import eder (manifest'i okumak için — "import yan
+   etkisiz" konvansiyonu bunu güvenli kılıyor), `discord_webapi_requires`'ı
+   `packaging.SpecifierSet` ile kurulu `__version__`'a karşı kontrol eder
+   (packaging yoksa best-effort atlar). **`setup`'ı ASLA çağırmaz.**
+   Kırık/uyumsuz/duplicate'leri `ExtensionLoadError` olarak toplar (biri
+   diğerini gizlemez). `get`/`list`/`names`/`errors`.
+4. `sdk.py` — bir extension'ın karşı yazacağı KARARLI re-export yüzeyi.
+   Stabilite sözü: burada re-export edilen her isim public/garantili;
+   edilmeyen her şey sürümler arası değişebilir. Bu, "plugin runtime
+   gereksiz" argümanının somut karşılığı — extension'lar da bizim
+   `extras`'ımız da tam olarak bu yüzeyi kullanır.
+5. `scaffold.py` + `__main__` — `discord-webapi-scaffold new <isim>` CLI'si.
+   Templating `.format` DEĞİL token-replacement (`__PKG__`/`__NAME__`/
+   `__DIST__`) çünkü üretilen kod f-string süslü parantezleri içeriyor.
+   Üretilen paket: örnek `/roll` (SDK'daki `rate_limited` ile), manifest,
+   entry point, `[tool.pytest.ini_options] asyncio_mode="auto"`, geçen test.
+
+`discord_webapi.__version__ = "0.6.0"` eklendi (uyumluluk kontrolü için;
+`pyproject`'teki `version` hâlâ `0.1.0` — bu, PyPI publish'le birlikte ayrı
+ele alınacak versiyon disiplini maddesi, bkz. ROADMAP P2.3).
+
+**Uçtan uca doğrulandı** (sandbox'ta): scaffold → `pip install -e . --no-deps`
+→ `ExtensionRegistry.discover()` → keşfedildi, uyumlu raporlandı, `setup`
+çalıştı, üretilen paketin kendi testi geçti. Sonra funbot uninstall edildi
+(ana suite temiz kalsın diye). 24 yeni test (`test_extensions_registry.py`
+14, `test_extensions_scaffold.py` 10). 419 test yeşil, ruff+mypy temiz.
+
+`pyproject`: `[extensions]` extra'sı (`packaging`), `[project.scripts]`
+scaffold komutu. Doküman: `docs/PAKET_YAZMA.md`.
+
 ## Kapsamlı inceleme + uzun yol haritası: `docs/ROADMAP.md` (bu oturumda)
 
 Kullanıcının isteğiyle tam kapsamlı bir mimari/kod incelemesi yapıldı ve

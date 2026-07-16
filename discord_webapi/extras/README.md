@@ -132,20 +132,28 @@ per-guild independent config, sharing one handler between prefix and
 slash commands, permission-gate stacking, shared quotas across commands,
 localized replies, and running against a SQL-backed store).
 
-## What this is explicitly *not* (yet)
+## Sharing your own: `discord_webapi.extensions`
 
-A larger idea came up while planning this: a proper third-party
-plugin/package format — a `.json` manifest per package (name, version,
-author, dependencies), something that could be published and installed
-almost like a mini app store for bot commands, with a build/install step
-that "just works" once dropped into a project. That's a real and
-potentially valuable direction, but it's a different, much bigger project
-(package format design, a resolver/installer, security review for
-running third-party code, versioning policy) than "ship a well-written ban
-command." It's intentionally deferred — same category as the "extension /
-structure system" already noted as a v0.3+/"after core is frozen" idea in
-the original architecture plan — not because it isn't wanted, but because
-building it well needs its own dedicated design pass rather than being
-bolted onto this one. The convention above (self-contained, no hidden
-dependencies, `setup(bot, **kwargs)` or a plain decorator) is deliberately
-already compatible with that future without needing to change.
+Because the convention above (self-contained, no hidden dependencies,
+`setup(bot, **kwargs)` or a plain decorator, built against only the public
+API) is exactly what our own first-party `extras` follow, a **third-party**
+package written the same way is architecturally indistinguishable from a
+first-party one. That's what `discord_webapi.extensions` builds on: a
+lightweight "share a full bot infrastructure as a pip package" convention —
+**not** a plugin runtime, sandbox, or privileged-hook system.
+
+- Write one: `discord-webapi-scaffold new <name>` generates a working,
+  installable, discoverable skeleton. Build against
+  `discord_webapi.extensions.sdk` (the stability-promised surface). See
+  `docs/PAKET_YAZMA.md`.
+- Use installed ones: `ExtensionRegistry.discover()` lists what's `pip
+  install`ed, checks version compatibility, and hands each one's `setup`
+  back for you to call explicitly — discord-webapi never runs it for you.
+
+A **full** third-party plugin format with its own manifest resolver,
+installer, and sandboxed execution of untrusted code was considered and
+deliberately **not** built: the security and complexity cost outweighs the
+value when "it's a normal pip package following a documented convention"
+already delivers the goal. The only piece left for later is an optional
+community index (a metadata listing of available extensions — no code
+hosting, no execution), added if real demand appears.

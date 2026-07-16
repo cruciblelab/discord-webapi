@@ -2,6 +2,50 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — v0.7: `discord_webapi.extensions` — üçüncü-taraf paket ekosistemi (plugin VM DEĞİL)
+
+### Eklenenler
+
+- **`discord_webapi.extensions`**: insanların kendi tam-kapasite bot
+  altyapılarını (eğlence botu, moderasyon paketi, ...) yazıp `pip` paketi
+  olarak paylaşabilmesi, başkalarının da kurup projesine takabilmesi için
+  hafif bir konvansiyon. **Bilinçli olarak bir plugin runtime'ı/sandbox'ı/
+  çekirdeğe özel erişim veren bir API DEĞİL** — kullanıcının net kararı
+  ("pluginler core'a etki etmesin, ağır sistem istemem"). Anahtar içgörü:
+  bizim `extras`'ımız zaten yalnızca public API kullandığı için, üçüncü-taraf
+  bir paket birinci-taraftan mimari olarak ayırt edilemez; o yüzden özel
+  bir runtime gerekmez, extension sadece dokümante edilmiş konvansiyonu
+  izleyen sıradan bir Python paketidir.
+- `extensions/manifest.py::ExtensionManifest`: paketin adı/sürümü/yazarı/
+  uyumlu discord-webapi aralığı (`discord_webapi_requires`). Sadece metadata,
+  hiçbir ayrıcalık vermez.
+- `extensions/base.py::Extension`: bir paketin entry point'ine koyduğu
+  `manifest + setup` container'ı.
+- `extensions/registry.py::ExtensionRegistry.discover()`: `discord_webapi.
+  extensions` entry-point grubunu okur, sürüm uyumluluğunu kontrol eder,
+  kırık/uyumsuz/duplicate extension'ları hata olarak toplar (biri diğerini
+  gizlemez). **`setup`'ı asla otomatik çağırmaz** — kurulum her zaman
+  host'un açık kararı.
+- `extensions/sdk.py`: bir extension'ın karşı yazacağı **kararlı, stabilite-
+  garantili** re-export yüzeyi (`GuildRateLimiter`, `EscalationEngine`,
+  `rate_limited`, `check_role_hierarchy`, Store protokolleri, `Transport`,
+  `Extension`/`ExtensionManifest`...).
+- **Scaffold CLI**: `discord-webapi-scaffold new <isim>` (ya da `python -m
+  discord_webapi.extensions.scaffold new <isim>`) — çalışan, kurulabilir,
+  keşfedilebilir bir iskelet paket üretir (örnek `/roll` komutu, manifest,
+  entry point, `pip install -e .` sonrası geçen test).
+- `discord_webapi.__version__ = "0.6.0"` eklendi (extension uyumluluk
+  kontrolü bununla yapılıyor).
+- `pyproject.toml`: `[extensions]` extra'sı (`packaging`, uyumluluk kontrolü
+  için — yoksa kontrol atlanır, extension yine çalışır), `[project.scripts]`
+  scaffold komutu.
+- `docs/PAKET_YAZMA.md`: extension yazma rehberi.
+
+Uçtan uca doğrulandı: scaffold ile üretilen paket gerçekten `pip install`
+edilip `ExtensionRegistry.discover()` ile keşfediliyor, uyumluluğu doğru
+raporlanıyor, `setup`'ı çalışıyor. 24 yeni test. 419 test yeşil (1
+ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — Kod denetimi: `extras.warn`/`extras.welcome`'da 4 gerçek bug bulundu, düzeltildi
 
 Geniş bir arka-plan kod denetimi (auth/authz/jobs/audit/consent/transport/

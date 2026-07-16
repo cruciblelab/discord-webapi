@@ -94,7 +94,12 @@ if TYPE_CHECKING:
     )
     from discord_webapi.transport.redis import RedisTransport
 
+__version__ = "0.6.0"
+"""The library's own version. Third-party extensions check their declared
+`discord_webapi_requires` against this (see `discord_webapi.extensions`)."""
+
 __all__ = [
+    "__version__",
     "AppRole",
     "AppRoleCache",
     "AppRolePatch",
