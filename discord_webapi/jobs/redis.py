@@ -17,16 +17,7 @@ from discord_webapi.jobs.base import JobHandler, JobState, JobStatus
 
 logger = logging.getLogger("discord_webapi.jobs.redis")
 
-_QUEUE_PREFIX = "discord_webapi:jobs:queue:"
-_STATUS_PREFIX = "discord_webapi:jobs:job:"
-
-
-def _queue_key(job_type: str) -> str:
-    return f"{_QUEUE_PREFIX}{job_type}"
-
-
-def _status_key(job_id: str) -> str:
-    return f"{_STATUS_PREFIX}{job_id}"
+DEFAULT_NAMESPACE = "discord_webapi"
 
 
 class RedisJobQueue:
@@ -41,13 +32,22 @@ class RedisJobQueue:
     `register_worker()` must be called before `start()` -- the set of
     queue keys a worker BLPOPs from is fixed at start time (this mirrors
     the memory implementation's -- and `Transport.register_handler`'s --
-    "wire up your handlers, then start" contract).
+    "wire up your handlers, then start" contract). Calling it after
+    `start()` raises `RuntimeError` rather than silently never picking up
+    the new job_type.
+
+    **Multi-tenant Redis**: same consideration as `RedisTransport` -- pass
+    a distinct `namespace=` per otherwise-unrelated deployment sharing one
+    Redis instance/cluster, so their queue/status keys never collide. This
+    is namespacing, not authentication; see `RedisTransport`'s docstring
+    and `docs/GUVENLIK.md` for the actual trust boundary.
     """
 
     def __init__(
         self,
         redis_url: str = "redis://localhost:6379",
         *,
+        namespace: str = DEFAULT_NAMESPACE,
         concurrency: int = 4,
         poll_timeout_seconds: float = 1.0,
         result_ttl_seconds: int = 86400,
@@ -55,6 +55,9 @@ class RedisJobQueue:
     ) -> None:
         self._redis_url = redis_url
         self._redis_kwargs = redis_kwargs
+        self._namespace = namespace
+        self._queue_prefix = f"{namespace}:jobs:queue:"
+        self._status_prefix = f"{namespace}:jobs:job:"
         self._concurrency = concurrency
         self._poll_timeout_seconds = poll_timeout_seconds
         self._result_ttl_seconds = result_ttl_seconds
@@ -62,6 +65,12 @@ class RedisJobQueue:
         self._handlers: dict[str, JobHandler] = {}
         self._workers: list[asyncio.Task[None]] = []
         self._started = False
+
+    def _queue_key(self, job_type: str) -> str:
+        return f"{self._queue_prefix}{job_type}"
+
+    def _status_key(self, job_id: str) -> str:
+        return f"{self._status_prefix}{job_id}"
 
     async def start(self) -> None:
         self._redis = Redis.from_url(self._redis_url, **self._redis_kwargs)
@@ -109,12 +118,12 @@ class RedisJobQueue:
             updated_at=now,
         )
         await self._save(status)  # no TTL yet -- see _save's docstring
-        await self._redis.rpush(_queue_key(job_type), job_id)
+        await self._redis.rpush(self._queue_key(job_type), job_id)
         return status
 
     async def get_status(self, job_id: str) -> JobStatus | None:
         assert self._redis is not None, "call start() before get_status()"
-        raw = await self._redis.get(_status_key(job_id))
+        raw = await self._redis.get(self._status_key(job_id))
         if raw is None:
             return None
         return JobStatus.model_validate_json(raw)
@@ -131,11 +140,11 @@ class RedisJobQueue:
         """
         assert self._redis is not None
         ttl = self._result_ttl_seconds if status.state in ("succeeded", "failed") else None
-        await self._redis.set(_status_key(status.job_id), status.model_dump_json(), ex=ttl)
+        await self._redis.set(self._status_key(status.job_id), status.model_dump_json(), ex=ttl)
 
     async def _worker_loop(self) -> None:
         assert self._redis is not None
-        keys = [_queue_key(job_type) for job_type in self._handlers]
+        keys = [self._queue_key(job_type) for job_type in self._handlers]
         while True:
             popped = await self._redis.blpop(keys, timeout=self._poll_timeout_seconds)
             if popped is None:
@@ -166,7 +175,7 @@ class RedisJobQueue:
             # one no longer handles (e.g. redeployed with fewer handlers) --
             # put it back for someone else rather than losing it.
             assert self._redis is not None
-            await self._redis.rpush(_queue_key(status.job_type), job_id)
+            await self._redis.rpush(self._queue_key(status.job_type), job_id)
             return
 
         await self._save(self._with_state(status, state="running"))

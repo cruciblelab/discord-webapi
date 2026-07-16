@@ -23,17 +23,7 @@ logger = logging.getLogger("discord_webapi.transport.redis")
 
 _RECONNECT_DELAY_SECONDS = 1.0
 
-EVENTS_CHANNEL = "discord_webapi:events"
-_RPC_REQUEST_PREFIX = "discord_webapi:rpc:"
-_RPC_REPLY_PREFIX = "discord_webapi:rpc:reply:"
-
-
-def _rpc_request_channel(command: str) -> str:
-    return f"{_RPC_REQUEST_PREFIX}{command}"
-
-
-def _rpc_reply_channel(request_id: str) -> str:
-    return f"{_RPC_REPLY_PREFIX}{request_id}"
+DEFAULT_NAMESPACE = "discord_webapi"
 
 
 def _assert_json_serializable(payload: dict[str, Any], *, context: str) -> None:
@@ -66,11 +56,34 @@ class RedisTransport:
     Calling `register_handler()` again after `start()` still works, but
     only from within a running event loop (it subscribes via a background
     task) — see the raised `TransportError` otherwise.
+
+    **Multi-tenant Redis**: if multiple, otherwise-unrelated deployments
+    (e.g. different customers' bots, in a hosted setup) share one Redis
+    instance/cluster, pass a distinct `namespace=` to each -- channel names
+    are namespaced (`{namespace}:events`, `{namespace}:rpc:...`), so two
+    deployments with different namespaces never see each other's events or
+    RPC traffic even on the same Redis. This does *not* add authentication
+    (Redis itself still has to be treated as trusted infrastructure -- see
+    `docs/GUVENLIK.md`); it only prevents accidental cross-talk between
+    tenants that are otherwise isolated but happen to share a Redis
+    instance for cost/ops reasons. For real isolation between mutually
+    untrusted tenants, use separate Redis databases/ACL users, not just
+    separate namespaces.
     """
 
-    def __init__(self, redis_url: str = "redis://localhost:6379", **redis_kwargs: Any) -> None:
+    def __init__(
+        self,
+        redis_url: str = "redis://localhost:6379",
+        *,
+        namespace: str = DEFAULT_NAMESPACE,
+        **redis_kwargs: Any,
+    ) -> None:
         self._redis_url = redis_url
         self._redis_kwargs = redis_kwargs
+        self._namespace = namespace
+        self._events_channel = f"{namespace}:events"
+        self._rpc_request_prefix = f"{namespace}:rpc:"
+        self._rpc_reply_prefix = f"{namespace}:rpc:reply:"
         self._redis: Redis | None = None
         self._pubsub: PubSub | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -79,10 +92,19 @@ class RedisTransport:
         self._handlers: dict[str, RequestHandler] = {}
         self._pending_replies: dict[str, asyncio.Future[dict[str, Any]]] = {}
 
+    def _rpc_request_channel(self, command: str) -> str:
+        return f"{self._rpc_request_prefix}{command}"
+
+    def _rpc_reply_channel(self, request_id: str) -> str:
+        return f"{self._rpc_reply_prefix}{request_id}"
+
     async def start(self) -> None:
         self._redis = Redis.from_url(self._redis_url, **self._redis_kwargs)
         self._pubsub = self._redis.pubsub()
-        channels = [EVENTS_CHANNEL, *(_rpc_request_channel(c) for c in self._handlers)]
+        channels = [
+            self._events_channel,
+            *(self._rpc_request_channel(c) for c in self._handlers),
+        ]
         await self._pubsub.subscribe(*channels)
         self._reader_task = asyncio.create_task(self._read_loop())
 
@@ -137,11 +159,11 @@ class RedisTransport:
                 logger.warning("Dropping non-JSON message on channel %r", channel)
                 continue
 
-            if channel == EVENTS_CHANNEL:
+            if channel == self._events_channel:
                 await self._dispatch_event(envelope)
-            elif channel.startswith(_RPC_REPLY_PREFIX):
+            elif channel.startswith(self._rpc_reply_prefix):
                 self._resolve_reply(channel, envelope)
-            elif channel.startswith(_RPC_REQUEST_PREFIX):
+            elif channel.startswith(self._rpc_request_prefix):
                 asyncio.create_task(self._handle_rpc_request(channel, envelope))
 
     async def _resubscribe_all(self) -> None:
@@ -151,8 +173,8 @@ class RedisTransport:
         # `request()` call is still waiting on.
         assert self._pubsub is not None
         channels = [
-            EVENTS_CHANNEL,
-            *(_rpc_request_channel(c) for c in self._handlers),
+            self._events_channel,
+            *(self._rpc_request_channel(c) for c in self._handlers),
             *self._pending_replies.keys(),
         ]
         try:
@@ -183,7 +205,7 @@ class RedisTransport:
             future.set_result(envelope)
 
     async def _handle_rpc_request(self, channel: str, envelope: dict[str, Any]) -> None:
-        command = channel.removeprefix(_RPC_REQUEST_PREFIX)
+        command = channel.removeprefix(self._rpc_request_prefix)
         handler = self._handlers.get(command)
         if handler is None:
             return  # not this process's command to answer
@@ -198,14 +220,15 @@ class RedisTransport:
 
         redis = self._require_redis()
         await redis.publish(
-            _rpc_reply_channel(request_id), json.dumps({"response": response, "error": error})
+            self._rpc_reply_channel(request_id),
+            json.dumps({"response": response, "error": error}),
         )
 
     async def publish(self, event: Event) -> None:
         redis = self._require_redis()
         _assert_json_serializable(event.payload, context=f"Event({event.type!r})")
         envelope = {"type": event.type, "payload": event.payload, "source": event.source}
-        await redis.publish(EVENTS_CHANNEL, json.dumps(envelope))
+        await redis.publish(self._events_channel, json.dumps(envelope))
 
     def subscribe(self, event_type: str, handler: EventHandler) -> None:
         self._subscribers.setdefault(event_type, []).append(handler)
@@ -236,7 +259,7 @@ class RedisTransport:
                 "event loop, so the Redis channel subscription can't be scheduled. Register "
                 "handlers before start(), or from within an async context."
             ) from None
-        loop.create_task(self._pubsub.subscribe(_rpc_request_channel(command)))
+        loop.create_task(self._pubsub.subscribe(self._rpc_request_channel(command)))
 
     async def request(
         self, command: str, payload: dict[str, Any], *, timeout: float = 5.0
@@ -246,7 +269,7 @@ class RedisTransport:
         _assert_json_serializable(payload, context=f"Request({command!r})")
 
         request_id = uuid.uuid4().hex
-        reply_channel = _rpc_reply_channel(request_id)
+        reply_channel = self._rpc_reply_channel(request_id)
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
         self._pending_replies[reply_channel] = future
 
@@ -255,7 +278,7 @@ class RedisTransport:
         await self._pubsub.subscribe(reply_channel)
         try:
             await redis.publish(
-                _rpc_request_channel(command),
+                self._rpc_request_channel(command),
                 json.dumps({"request_id": request_id, "payload": payload}),
             )
             try:

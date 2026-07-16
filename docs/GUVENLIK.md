@@ -61,12 +61,32 @@ hiçbir yerde loglanmıyor.
   taklit edebilir. Bu bilinçli bir tasarım kararı — kaynak: Redis
   genellikle "iç veritabanı" gibi ele alınır, dışa açık bir servis değil.
 - **`RedisJobQueue`**: aynı gerekçe — Redis'in kendisi güvenilir olmalı.
+- **Çoklu-tenant Redis paylaşımı**: birbirinden bağımsız birden fazla
+  deployment (ör. farklı müşterilerin botları) aynı Redis
+  instance'ını/cluster'ını paylaşıyorsa, her birine ayrı bir
+  `namespace=` verin (`RedisTransport(namespace=...)`,
+  `RedisJobQueue(namespace=...)`) — kanal/kuyruk isimleri
+  namespace'lendiği için, farklı namespace'lere sahip iki deployment aynı
+  Redis'te bile birbirinin event'lerini/RPC trafiğini/job'larını
+  göremiyor. **Bu bir kimlik doğrulama değil, sadece isim-alanı
+  izolasyonu** — birbirine güvenmeyen (mutually untrusted) tenant'lar
+  için gerçek izolasyon istiyorsanız ayrı Redis veritabanı/ACL kullanıcısı
+  kullanın, sadece `namespace` yeterli değildir.
+- **"Bir komuta tek handler" kısıtlaması** (`RedisTransport`): iki process
+  aynı komutu register ederse hangisinin cevap vereceği garanti değil
+  (ilk cevap kazanır, undefined davranış). Bu operasyonel bir tuzak —
+  dikkatli deploy gerektiriyor (bkz. `docs/DAGITIM.md`'deki "tam olarak
+  bir `bot_process.py`" notu). Kütüphane şu an bunu çalışma zamanında
+  otomatik tespit etmiyor; deploy sürecinizde (ör. tek bir replica/pod
+  sayısı ile) bunu garanti altına almanız gerekiyor.
 
-## Bilinen, düşük öncelikli noktalar (düzeltilmedi, dokümante edildi)
+## Bilinen, düşük öncelikli noktalar (düzeltildi)
 
-- `commands.ratelimit.TokenBucketLimiter`'ın `_buckets` dict'i process
-  ömrü boyunca sınırsız büyüyor (yeni kullanıcı başına bir entry) — sadece
-  bellek, auth bypass değil.
+- ~~`TokenBucketLimiter`'ın `_buckets` dict'i process ömrü boyunca
+  sınırsız büyüyor~~ **Düzeltildi**: artık `max_tracked_keys` (varsayılan
+  10.000) ile sınırlı, LRU-evicted bir `OrderedDict` kullanıyor. Bir
+  entry'nin evict edilmesi zararsız — o key bir sonraki görülüşünde dolu
+  bir bucket'la geri geliyor (hiç görülmemiş bir key'le aynı davranış).
 
 ## Denetim geçmişi
 
@@ -85,6 +105,21 @@ Kuyruk sistemi eklendikten sonraki ikinci bir taramada (bu kez jobs/
    artık sadece terminal (succeeded/failed) durumdaki job'lara uygulanıyor.
 4. `RedisJobQueue.register_worker()`, `start()`'tan sonra çağrılırsa
    sessizce hiçbir şey yapmıyordu — artık açık bir hata fırlatıyor.
+
+Bu iki denetimi harici olarak inceleyen bir üçüncü taraf, üç ek nokta
+işaret etti (ikisi bilinçli tasarım kararı olarak zaten dokümante
+edilmişti, biri gerçek bir iyileştirmeydi) — üçü de ele alındı:
+
+5. `TokenBucketLimiter._buckets`'ın sınırsız büyümesi — yukarıda
+   anlatıldığı gibi düzeltildi (LRU-bounded).
+6. Çoklu-tenant Redis paylaşımı riski — `RedisTransport`/`RedisJobQueue`'ye
+   `namespace=` parametresi eklendi, farklı tenant'ların kanal/kuyruk
+   isimlerini çakıştırmadan aynı Redis'i paylaşabilmesi için (yukarıdaki
+   "Transport güven sınırları" bölümüne bakın — bu izolasyon, kimlik
+   doğrulama değil).
+7. "Bir komuta tek handler" kısıtlaması — bilinçli bir tasarım kararı
+   olarak kalıyor (bkz. yukarısı), operasyonel bir dikkat noktası olarak
+   dokümante edildi, çalışma zamanında otomatik tespit eklenmedi.
 
 Detaylı denetim raporları için `CHANGELOG.md`'deki ilgili sürüm
 notlarına bakın.

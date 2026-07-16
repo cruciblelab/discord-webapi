@@ -11,3 +11,4 @@ dist/
 .env
 examples/*/.env
 *.sqlite3
+*.rdb

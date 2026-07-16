@@ -84,3 +84,43 @@ async def test_succeeded_job_status_has_a_ttl() -> None:
         assert 0 < ttl <= 60
     finally:
         await queue.stop()
+
+
+async def test_different_namespaces_dont_see_each_others_jobs() -> None:
+    """Multi-tenant Redis: two RedisJobQueues with different namespaces,
+    pointed at the same Redis instance, must not cross-talk."""
+    await _skip_if_unreachable()
+    tenant_a = RedisJobQueue(REDIS_URL, namespace="tenant-a")
+    tenant_b = RedisJobQueue(REDIS_URL, namespace="tenant-b")
+
+    a_seen = []
+    b_seen = []
+
+    async def handle_a(payload: dict) -> dict:
+        a_seen.append(payload)
+        return {}
+
+    async def handle_b(payload: dict) -> dict:
+        b_seen.append(payload)
+        return {}
+
+    tenant_a.register_worker("shared_job_type", handle_a)
+    tenant_b.register_worker("shared_job_type", handle_b)
+    await tenant_a.start()
+    await tenant_b.start()
+    try:
+        status = await tenant_a.enqueue("shared_job_type", {"tenant": "a"})
+
+        for _ in range(50):
+            current = await tenant_a.get_status(status.job_id)
+            if current is not None and current.state == "succeeded":
+                break
+            await asyncio.sleep(0.02)
+
+        assert a_seen == [{"tenant": "a"}]
+        assert b_seen == []
+        # tenant_b's Redis connection has no visibility into tenant_a's key at all
+        assert await tenant_b.get_status(status.job_id) is None
+    finally:
+        await tenant_a.stop()
+        await tenant_b.stop()

@@ -1,6 +1,43 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Kuyruk sistemi taraması (bu oturumda tamamlandı)
+## Harici inceleme geri bildirimi (bu oturumda tamamlandı)
+
+Kullanıcı önceki iki denetim raporunu (auth/authz + jobs/çoklu-sunucu)
+harici birine incelettirmiş, üç nokta gelmiş:
+
+1. `RedisTransport`/`RedisJobQueue` imzasız/kimlik doğrulamasız — çoklu-
+   tenant paylaşımlı Redis'te risk. **Yanıt**: bilinçli tasarım kararı
+   olduğu zaten dokümante edilmişti, ama gerçek bir iyileştirme yapılabilir
+   gördüm: `namespace=` parametresi ekledim (`DEFAULT_NAMESPACE =
+   "discord_webapi"`, geriye dönük uyumlu) — kanal/kuyruk isimleri artık
+   `{namespace}:events`, `{namespace}:jobs:queue:...` şeklinde. Bu
+   authentication değil ama farklı tenant'ların (ayrı `namespace` ile)
+   aynı Redis'te yanlışlıkla birbirinin event/RPC/job trafiğini
+   görmesini engelliyor. Gerçek mutually-untrusted izolasyon için hâlâ
+   ayrı Redis DB/ACL gerekiyor, dokümante edildi.
+2. `TokenBucketLimiter._buckets` sınırsız büyüyor — **düzeltildi**:
+   `max_tracked_keys` (varsayılan 10.000) ile `OrderedDict` tabanlı
+   LRU eviction eklendi.
+3. `RedisTransport`'un "bir komuta tek handler" kısıtlaması — **bilinçli
+   olarak değiştirilmedi**, dağıtık kilit/lease mekanizması eklemek
+   library'nin basitlik hedefine (plain pub/sub, Streams/consumer-group
+   yok) aykırı olurdu; operasyonel dokümantasyonla ele alınmaya devam
+   ediyor (`docs/DAGITIM.md`'deki "tam olarak bir bot_process.py" notu).
+
+**Refactor detayı**: `RedisTransport`/`RedisJobQueue`'daki modül-seviyesi
+sabitler (`EVENTS_CHANNEL`, `_RPC_REQUEST_PREFIX` vb., `_QUEUE_PREFIX`,
+`_STATUS_PREFIX`) instance-seviyesine taşındı (`self._events_channel`,
+`self._queue_key()` vb.) çünkü artık `namespace`'e bağlı olarak her
+instance farklı bir prefix kullanabiliyor — modül sabitleri olarak
+kalamazlardı.
+
+226 test yeşil (gerçek Redis'e karşı çalıştırıldı — ortamda
+`redis-server` başlatılıp doğrulandı), ruff+mypy temiz. Yeni testler:
+`tests/unit/test_ratelimit.py` (LRU eviction), `tests/unit/
+test_redis_transport_namespace.py`, `tests/unit/test_redis_job_queue.py`'ye
+eklenen namespace-isolation testi.
+
+## Kuyruk sistemi taraması (tamamlandı)
 
 Kullanıcının "genel bir tarama daha yap, buglar/kırılma yerleri" talebiyle
 bir subagent'a kuyruk sistemi + çoklu sunucu refactoring'i + facade

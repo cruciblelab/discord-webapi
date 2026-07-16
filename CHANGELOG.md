@@ -2,6 +2,37 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Harici inceleme geri bildirimi: rate limiter sınırı + Redis namespace izolasyonu
+
+Önceki iki denetimi (auth/authz ve jobs/çoklu-sunucu) harici olarak
+inceleyen bir üçüncü tarafın işaret ettiği üç nokta ele alındı:
+
+### Düzeltilen
+
+- **`TokenBucketLimiter._buckets` artık sınırlı (LRU-bounded)**: yeni
+  `max_tracked_keys` parametresi (varsayılan 10.000) — `OrderedDict`
+  kullanılarak en eski entry evict ediliyor. Evict edilen bir key zararsız
+  şekilde bir sonraki görülüşünde dolu bir bucket'la geri geliyor.
+- **`RedisTransport`/`RedisJobQueue`'ye `namespace=` parametresi eklendi**:
+  birbirinden bağımsız birden fazla deployment (ör. farklı müşterilerin
+  botları) tek bir Redis instance'ını/cluster'ını paylaşıyorsa, farklı
+  `namespace` değerleriyle kanal/kuyruk isimlerinin çakışması önleniyor.
+  Bu, kimlik doğrulama değil sadece isim-alanı izolasyonu — gerçek
+  mutually-untrusted tenant izolasyonu için hâlâ ayrı Redis
+  veritabanı/ACL kullanıcısı gerekiyor (`docs/GUVENLIK.md`'de detaylı).
+
+### Bilinçli olarak değiştirilmeyen (zaten dokümante edilmiş tasarım kararı)
+
+- `RedisTransport`'un "bir komuta tek handler" kısıtlaması — operasyonel
+  bir dikkat noktası olarak kalıyor, dağıtık kilit/koordinasyon gibi
+  ekstra karmaşıklık eklemeden dokümantasyonla (bkz. `docs/GUVENLIK.md`,
+  `docs/DAGITIM.md`) ele alınmaya devam ediyor.
+
+226 test yeşil (gerçek Redis'e karşı, 1 ortam-bağımlı Postgres testi
+hariç), ruff+mypy temiz. Yeni testler: `tests/unit/test_ratelimit.py`,
+`tests/unit/test_redis_transport_namespace.py`,
+`tests/unit/test_redis_job_queue.py`'ye eklenen namespace testi.
+
 ## [Unreleased] — Kuyruk sistemi taraması: 2 gerçek bug bulunup düzeltildi
 
 Kuyruk sistemi eklendikten sonra yapılan geniş kapsamlı bir bug/güvenlik
