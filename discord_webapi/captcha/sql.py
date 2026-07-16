@@ -44,7 +44,7 @@ class VerificationRequestRow(Base):
     guild_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     purpose: Mapped[str] = mapped_column(String(128))
     metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    challenge_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    challenge_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
     expires_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
@@ -134,7 +134,11 @@ class SQLVerificationStore:
                     guild_id=request.guild_id,
                     purpose=request.purpose,
                     metadata_json=request.metadata,
-                    challenge_json=request.challenge.model_dump(mode="json"),
+                    challenge_json=(
+                        request.challenge.model_dump(mode="json")
+                        if request.challenge is not None
+                        else None
+                    ),
                     verified=request.verified,
                     created_at=request.created_at,
                     expires_at=request.expires_at,
@@ -153,7 +157,11 @@ class SQLVerificationStore:
                 guild_id=row.guild_id,
                 purpose=row.purpose,
                 metadata=row.metadata_json,
-                challenge=CaptchaChallenge.model_validate(row.challenge_json),
+                challenge=(
+                    CaptchaChallenge.model_validate(row.challenge_json)
+                    if row.challenge_json is not None
+                    else None
+                ),
                 verified=row.verified,
                 created_at=_as_utc(row.created_at),
                 expires_at=_as_utc(row.expires_at),

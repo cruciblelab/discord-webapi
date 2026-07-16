@@ -2,6 +2,57 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: hesap-bağlama + kompoz edilebilir doğrulama katmanları
+
+Kullanıcının geri bildirimi: bir captcha "insan mı" der ama "hangi hesap"
+demez -- güvenilirlik için doğrulama gerçek Discord hesabına bağlanmalı; ve
+bu iki-seçenekli sabit bir menü değil, kek katları gibi kompoz edilebilir
+katmanlar olmalı (bizimkini kullan, kendininkini ekle, karıştır, hiç
+kullanma).
+
+### Eklenenler / Değişenler
+
+- **`discord_webapi.captcha.checks`** (yeni): kompoz edilebilir doğrulama
+  "katmanları". Her biri bağımsız bir `VerificationCheck` (Protocol);
+  gate hepsinin geçmesini şart koşuyor (mantıksal AND). Yerleşik olanlar:
+  - `AccountMatchCheck` -- **asıl güven çıpası**: doğrulayan kişi,
+    kütüphanenin kendi Discord OAuth girişiyle, linkin ait olduğu **tam
+    hesap** olarak giriş yapmış olmalı. Forwardlanmış bir link başkası
+    tarafından çözülürse burada patlıyor.
+  - `CaptchaCheck` -- captcha çözümünü bir `CaptchaProvider`'a devrediyor.
+  - `PredicateCheck` -- tüketicinin kendi async fonksiyonunu bir check'e
+    sarıyor (tarayıcı parmak izi, davranışsal skor, "N gündür üye", harici
+    anti-fraud... -- kancayı biz veriyoruz, politikayı/eşiği tüketici
+    yazıyor; kasıtlı olarak biz ML/bot-tespiti inşa etmiyoruz).
+- **`CaptchaGate`** artık genel bir doğrulama gate'i: `require_captcha`/
+  `require_account`/`extra_checks` ile mod seçiliyor -- sadece captcha
+  (varsayılan), sadece hesap (görsel yok, sadece doğru hesapla giriş),
+  ikisi ("safety mod"), sadece tıklama (tek-kullanımlık gizli link tek
+  kanıt), ya da tümüne kendi katmanlarını ekleme. `verify()` artık bir
+  `CheckResult` döndürüyor (`.verified`/`.failed_check`/`.passed` --
+  frontend "önce Discord ile giriş yap" gibi yönlendirebilsin diye) ama
+  hâlâ truthy (`if await gate.verify(...):` çalışıyor). Consuming olan
+  captcha check'i her zaman en sona çalışıyor -- daha ucuz bir check
+  patlarsa doğru çözülmüş captcha boşa gitmesin diye.
+- `CaptchaVerified` event'i artık `checks_passed: list[str]` taşıyor -- bot
+  ne kadar güçlü doğrulandığını bilerek tepki verebilir.
+- **`get_current_user_optional`** (`discord_webapi.auth.dependencies`): 401
+  fırlatmak yerine giriş yoksa `None` döndüren dependency -- gate verify
+  endpoint'i hesap check'i için giriş yapmış kullanıcıyı okuyor ama
+  captcha-only/click-only modlarda giriş zorunlu olmadan da çalışıyor.
+- Dashboard: `GET /api/captcha/gate/{token}` artık `GateInfo` döndürüyor
+  (challenge + `requires_captcha`/`requires_account` -- frontend neyi
+  render edeceğini bilsin diye); `POST .../verify` gövdesi artık
+  `{captcha_response?, signals?}` ve giriş yapmış kullanıcıyı OAuth
+  session'ından çözüyor. `VerificationRequest.challenge` artık nullable
+  (captcha'sız modlar için), SQL sütunu da nullable.
+
+Yeni testler dahil (hesap-only gate'in doğru kullanıcıyı gerçek OAuth
+giriş akışıyla şart koşması -- HTTP üstünden uçtan uca, `respx`-mock'lu
+login ile; safety mod; click-only; kendi extra_check'ini yığma; check
+edge case'leri). 598 test yeşil (1 ortam-bağımlı Postgres testi hariç),
+ruff+mypy temiz.
+
 ## [Unreleased] — `discord_webapi.captcha`: sıfırdan captcha altyapısı
 
 ### Eklenenler

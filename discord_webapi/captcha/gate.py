@@ -1,28 +1,55 @@
-"""`CaptchaGate` -- ties a `CaptchaProvider` challenge to a specific
-Discord user/guild/purpose so a bot command can gate on "prove you're
-human first," with the actual solving happening on the web.
+"""`CaptchaGate` -- ties a *verification* to a specific Discord
+user/guild/purpose so a bot command can gate on it, with the actual
+verifying happening on the web.
+
+It's called a *captcha* gate because solving a captcha is its default
+layer, but it's really a general verification gate: you stack whichever
+checks (`discord_webapi.captcha.checks`) you want, and it requires all of
+them to pass. Think of it as building a cake rather than picking one of
+two dishes -- our captcha layer, our Discord-account layer, and any of
+your own layers, used whole, mixed, or not at all:
+
+- **captcha only** (default): `require_captcha=True`. A human solves an
+  image. Proves "a human," not "which account."
+- **account only**: `require_captcha=False, require_account=True`. The
+  user just has to be signed in (the library's own Discord OAuth login)
+  *as the exact account the link was issued for*. No image. This is the
+  trust anchor a bare captcha can't give -- a forwarded link solved by
+  someone else fails.
+- **both ("safety mode")**: `require_captcha=True, require_account=True`.
+- **click-only**: both False, no extra checks -- possession of the
+  one-time secret link is the only proof. Lowest friction; document to
+  yourself that it's the weakest.
+- **your own layers**: `extra_checks=[...]` -- a `PredicateCheck` wrapping
+  your own function, or any object implementing `VerificationCheck` (your
+  browser-fingerprint / behavioral / membership-age / anti-fraud policy).
+  These run alongside ours.
 
 Concrete scenario this was built for: a giveaway bot's `/join` command
 calls `create_verification()`, sends the user the resulting link however
-the bot developer chooses (a DM, an ephemeral reply -- this class doesn't
-care), and replies "click the link to confirm you're human." The web side
-serves that link (`discord_webapi.captcha.api.build_captcha_router()`'s
-`/api/captcha/gate/{token}` endpoints render the challenge and accept the
-answer). The moment it's solved, `verify()` publishes `captcha_verified`
-over `Transport` -- the bot subscribes via `on_verified()` and DMs the
-user "you're in!" right then, no polling needed, and it works the same
-way whether the bot and the web dashboard are the same process or two
-separate ones (`for_bot_process`/`for_web_process`).
+it likes (a DM, an ephemeral reply), and replies "click the link to
+verify." The web side serves it (see
+`discord_webapi.captcha.api.build_captcha_router()`). The moment every
+check passes, `verify()` publishes `captcha_verified` over `Transport` --
+the bot subscribes via `on_verified()` and reacts (e.g. DMs "you're in!")
+right then, no polling, whether the bot and web run in the same process or
+two separate ones (`for_bot_process`/`for_web_process`).
 """
 
 from __future__ import annotations
 
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from discord_webapi.captcha.base import CaptchaProvider, VerificationStore
+from discord_webapi.captcha.checks import (
+    AccountMatchCheck,
+    CaptchaCheck,
+    VerificationCheck,
+    VerificationContext,
+)
 from discord_webapi.captcha.events import EVENT_TYPE_CAPTCHA_VERIFIED, CaptchaVerified
 from discord_webapi.captcha.models import CaptchaChallenge, VerificationRequest
 from discord_webapi.transport.base import Event, Transport
@@ -33,14 +60,38 @@ class CaptchaGate:
         self,
         transport: Transport,
         store: VerificationStore,
-        provider: CaptchaProvider,
+        provider: CaptchaProvider | None = None,
         *,
+        require_captcha: bool = True,
+        require_account: bool = False,
+        extra_checks: Sequence[VerificationCheck] | None = None,
         ttl: timedelta = timedelta(minutes=15),
     ) -> None:
+        if require_captcha and provider is None:
+            raise ValueError("require_captcha=True needs a CaptchaProvider (pass provider=...)")
         self.transport = transport
         self.store = store
         self.provider = provider
+        self.require_captcha = require_captcha
+        self.require_account = require_account
         self.ttl = ttl
+
+        # The captcha check is put LAST on purpose: it *consumes* the
+        # one-time answer when it runs, so if a cheaper, side-effect-free
+        # check (account, or one of yours) is going to fail, we want it to
+        # fail first -- before the captcha answer is spent -- so the user
+        # doesn't lose a correctly-solved captcha just because they weren't
+        # signed in yet. Verification is all-or-nothing (logical AND), so
+        # this ordering doesn't change *whether* it passes, only that a
+        # failure doesn't waste the captcha.
+        checks: list[VerificationCheck] = []
+        if require_account:
+            checks.append(AccountMatchCheck())
+        checks.extend(extra_checks or [])
+        if require_captcha:
+            assert provider is not None  # guarded above
+            checks.append(CaptchaCheck(provider))
+        self.checks = checks
 
     async def create_verification(
         self,
@@ -50,13 +101,17 @@ class CaptchaGate:
         purpose: str,
         metadata: dict[str, Any] | None = None,
     ) -> VerificationRequest:
-        """Issues a fresh challenge from `self.provider` and wraps it in a
-        one-time verification token. Hand the token (or a URL built from
-        it, e.g. `f"https://yoursite.com/verify/{request.token}"`) to the
-        user however you like -- DM, ephemeral interaction reply, a
-        button, whatever fits your bot.
+        """Creates a one-time verification token for `user_id`. Issues a
+        captcha challenge from `self.provider` only when `require_captcha`
+        (otherwise `challenge` is `None` -- account-only/click-only gates
+        have nothing to render). Hand the token (or a URL built from it,
+        e.g. `f"https://yoursite.com/verify/{request.token}"`) to the user
+        however you like -- DM, ephemeral reply, a button.
         """
-        challenge = await self.provider.issue()
+        challenge = None
+        if self.require_captcha:
+            assert self.provider is not None  # guaranteed by __init__
+            challenge = await self.provider.issue()
         now = datetime.now(UTC)
         request = VerificationRequest(
             token=secrets.token_urlsafe(24),
@@ -72,29 +127,67 @@ class CaptchaGate:
         return request
 
     async def get_challenge(self, token: str) -> CaptchaChallenge | None:
-        """For the web side to render: `None` if the token doesn't exist,
-        already expired, or was already verified (a solved/expired link
-        has nothing left to show)."""
+        """The captcha image to render, or `None` if the token doesn't
+        exist / expired / was already verified, *or* this gate simply has
+        no captcha (account-only/click-only). Use `get_info()` when you
+        also need to know which non-captcha checks apply."""
         request = await self._get_live(token)
         if request is None or request.verified:
             return None
         return request.challenge
 
-    async def verify(self, token: str, response: str) -> bool:
-        """Checks `response` against the token's embedded challenge via
-        `self.provider.verify()`. On success, marks the token verified
-        (idempotent -- calling this again, e.g. a page refresh re-posting
-        the same form, just confirms "yes, already verified" without
-        re-checking the provider) and publishes `captcha_verified`.
+    async def get_info(self, token: str) -> dict[str, Any] | None:
+        """Everything the frontend needs to render the right thing: the
+        captcha image (if any), plus whether the user must be signed in.
+        `None` if the token is gone/expired/already used."""
+        request = await self._get_live(token)
+        if request is None or request.verified:
+            return None
+        return {
+            "challenge": request.challenge,
+            "requires_captcha": self.require_captcha,
+            "requires_account": self.require_account,
+        }
+
+    async def verify(
+        self,
+        token: str,
+        response: str | None = None,
+        *,
+        authenticated_user_id: int | None = None,
+        signals: dict[str, Any] | None = None,
+    ) -> CheckResult:
+        """Runs every configured check; the verification passes only if
+        they *all* pass. `response` is the captcha answer (ignored by a
+        gate with no `CaptchaCheck`); `authenticated_user_id` is the
+        currently-signed-in Discord user id (the web layer resolves this
+        from the OAuth session -- `AccountMatchCheck` needs it); `signals`
+        is passed straight to your own checks.
+
+        Idempotent: verifying an already-verified token returns success
+        without re-running the checks (a page refresh re-posting the same
+        form doesn't re-consume a one-time captcha answer). On success,
+        marks it verified and publishes `captcha_verified`.
         """
         request = await self._get_live(token)
         if request is None:
-            return False
+            return CheckResult(verified=False, failed_check=None, detail="link expired or unknown")
         if request.verified:
-            return True
-        ok = await self.provider.verify(request.challenge.challenge_id, response)
-        if not ok:
-            return False
+            return CheckResult(verified=True, passed=[c.name for c in self.checks])
+
+        ctx = VerificationContext(
+            request=request,
+            authenticated_user_id=authenticated_user_id,
+            captcha_response=response,
+            signals=signals or {},
+        )
+        passed: list[str] = []
+        for check in self.checks:
+            outcome = await check.run(ctx)
+            if not outcome.passed:
+                return CheckResult(verified=False, failed_check=check.name, detail=outcome.detail)
+            passed.append(check.name)
+
         await self.store.mark_verified(token)
         await self.transport.publish(
             Event(
@@ -105,16 +198,17 @@ class CaptchaGate:
                     guild_id=request.guild_id,
                     purpose=request.purpose,
                     metadata=request.metadata,
+                    checks_passed=passed,
                 ).model_dump(),
             )
         )
-        return True
+        return CheckResult(verified=True, passed=passed)
 
     def on_verified(self, handler: Callable[[CaptchaVerified], Awaitable[None]]) -> None:
         """Convenience wrapper around `transport.subscribe` so bot-side
         code doesn't need to know the event type string or unwrap the
         payload itself -- `handler` receives an already-parsed
-        `CaptchaVerified`."""
+        `CaptchaVerified` (including `checks_passed`)."""
 
         async def _wrapped(event: Event) -> None:
             await handler(CaptchaVerified.model_validate(event.payload))
@@ -129,3 +223,26 @@ class CaptchaGate:
             await self.store.delete(token)
             return None
         return request
+
+
+class CheckResult:
+    """The outcome of `CaptchaGate.verify()`. Truthy iff `verified` -- so
+    `if await gate.verify(...):` still reads naturally -- while also
+    carrying which check failed (for a helpful frontend message, e.g.
+    "please sign in with Discord") or which checks passed."""
+
+    def __init__(
+        self,
+        *,
+        verified: bool,
+        failed_check: str | None = None,
+        detail: str | None = None,
+        passed: list[str] | None = None,
+    ) -> None:
+        self.verified = verified
+        self.failed_check = failed_check
+        self.detail = detail
+        self.passed = passed or []
+
+    def __bool__(self) -> bool:
+        return self.verified

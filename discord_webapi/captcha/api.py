@@ -5,9 +5,10 @@
   with whichever registered provider you name by `kind` -- no Discord
   user/guild involved at all.
 - **Bot-gated verification** (`/api/captcha/gate/{token}`): the other half
-  of `discord_webapi.captcha.gate.CaptchaGate` -- renders and accepts the
-  answer for a token a bot handed a specific user (see that module's
-  docstring for the giveaway-bot scenario this was built for).
+  of `discord_webapi.captcha.gate.CaptchaGate` -- serves and resolves a
+  token a bot handed a specific user (see that module's docstring for the
+  giveaway-bot scenario and the account-only / captcha / "safety" /
+  click-only modes).
 
 Neither is wired into `DiscordWebAPI.install()` automatically: unlike
 audit/consent/ratelimits, there's no sensible default *provider* to fall
@@ -17,13 +18,22 @@ yourself once you've picked and constructed one:
     app.state.discord_webapi_captcha_providers = {"math": math_provider}
     app.state.discord_webapi_captcha_gate = gate  # optional, only if you use CaptchaGate
     app.include_router(build_captcha_router())
+
+The gate's account-check (`require_account=True`) reads the signed-in
+Discord user from the same OAuth session the rest of the library uses, so
+`DiscordAuth.install(app)` must have run for that mode to have anyone to
+match against. Captcha-only / click-only gates work without it.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request, status
+from typing import Any
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
+from discord_webapi.auth.dependencies import get_current_user_optional
+from discord_webapi.auth.models import DiscordUser
 from discord_webapi.captcha.base import CaptchaProvider
 from discord_webapi.captcha.gate import CaptchaGate
 from discord_webapi.captcha.models import CaptchaChallenge
@@ -39,11 +49,34 @@ class CaptchaVerifyRequest(BaseModel):
 
 
 class GateVerifyRequest(BaseModel):
-    response: str
+    captcha_response: str | None = None
+    # Arbitrary client-submitted signals for your own extra_checks
+    # (fingerprint token, behavioral data, ...). Untrusted -- your check
+    # decides how much to believe them.
+    signals: dict[str, Any] = {}
 
 
 class CaptchaVerifyResult(BaseModel):
     verified: bool
+
+
+class GateVerifyResult(BaseModel):
+    verified: bool
+    # Which check blocked it (e.g. "account" -> the frontend can prompt
+    # "sign in with Discord first"; "captcha" -> "wrong answer"). None on
+    # success.
+    failed_check: str | None = None
+    detail: str | None = None
+
+
+class GateInfo(BaseModel):
+    """What the frontend needs to render the right thing for a gate link:
+    the captcha image if there is one, plus whether the visitor has to be
+    signed in with Discord."""
+
+    challenge: CaptchaChallenge | None
+    requires_captcha: bool
+    requires_account: bool
 
 
 def _get_providers(request: Request) -> dict[str, CaptchaProvider]:
@@ -97,22 +130,32 @@ def build_captcha_router(*, verify_rate_limiter: TokenBucketLimiter | None = Non
         return CaptchaVerifyResult(verified=ok)
 
     @router.get("/gate/{token}")
-    async def get_gate_challenge(token: str, request: Request) -> CaptchaChallenge:
+    async def get_gate_info(token: str, request: Request) -> GateInfo:
         gate = _get_gate(request)
-        challenge = await gate.get_challenge(token)
-        if challenge is None:
+        info = await gate.get_info(token)
+        if info is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "This verification link has expired or was already used"
             )
-        return challenge
+        return GateInfo(**info)
 
     @router.post("/gate/{token}/verify")
     async def verify_gate(
-        token: str, body: GateVerifyRequest, request: Request
-    ) -> CaptchaVerifyResult:
+        token: str,
+        body: GateVerifyRequest,
+        request: Request,
+        user: DiscordUser | None = Depends(get_current_user_optional),
+    ) -> GateVerifyResult:
         limiter.check(token)
         gate = _get_gate(request)
-        ok = await gate.verify(token, body.response)
-        return CaptchaVerifyResult(verified=ok)
+        result = await gate.verify(
+            token,
+            body.captcha_response,
+            authenticated_user_id=user.id if user is not None else None,
+            signals=body.signals,
+        )
+        return GateVerifyResult(
+            verified=result.verified, failed_check=result.failed_check, detail=result.detail
+        )
 
     return router

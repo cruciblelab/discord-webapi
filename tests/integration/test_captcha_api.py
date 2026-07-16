@@ -4,10 +4,15 @@ the bot-gated verification endpoints (the giveaway-bot scenario).
 """
 
 import asyncio
+from urllib.parse import parse_qs, urlparse
 
+import httpx
+import respx
+from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from discord_webapi.auth import DiscordAuth
 from discord_webapi.captcha import (
     CaptchaGate,
     MathCaptchaProvider,
@@ -17,6 +22,10 @@ from discord_webapi.captcha import (
 )
 from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 from discord_webapi.transport import InProcessTransport
+
+TOKEN_URL = "https://discord.com/api/v10/oauth2/token"
+ME_URL = "https://discord.com/api/v10/users/@me"
+GUILDS_URL = "https://discord.com/api/v10/users/@me/guilds"
 
 
 def _build_app(
@@ -31,6 +40,53 @@ def _build_app(
     app.state.discord_webapi_captcha_gate = gate
     app.include_router(build_captcha_router(verify_rate_limiter=verify_rate_limiter))
     return app, gate
+
+
+def _build_account_app() -> tuple[FastAPI, CaptchaGate]:
+    """An account-only gate behind the library's own Discord OAuth login --
+    so the account-check has a real signed-in user to match against."""
+    app = FastAPI()
+    transport = InProcessTransport()
+    gate = CaptchaGate(
+        transport, MemoryVerificationStore(), require_captcha=False, require_account=True
+    )
+    auth = DiscordAuth(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://testserver/auth/discord/callback",
+        encryption_keys=Fernet.generate_key(),
+        cookie_secure=False,
+    )
+    auth.install(app)
+    app.state.discord_webapi_captcha_gate = gate
+    app.include_router(build_captcha_router())
+    return app, gate
+
+
+def _mock_discord_endpoints(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(TOKEN_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "access_token": "access-token",
+                "refresh_token": "refresh-token",
+                "expires_in": 604800,
+                "token_type": "Bearer",
+            },
+        )
+    )
+    respx_mock.get(ME_URL).mock(
+        return_value=httpx.Response(200, json={"id": "1", "username": "admin"})
+    )
+    respx_mock.get(GUILDS_URL).mock(return_value=httpx.Response(200, json=[]))
+
+
+def _log_in(client: TestClient) -> None:
+    login_resp = client.get("/auth/discord/login", follow_redirects=False)
+    state = parse_qs(urlparse(login_resp.headers["location"]).query)["state"][0]
+    with respx.mock:
+        _mock_discord_endpoints(respx.mock)
+        client.get(f"/auth/discord/callback?code=abc&state={state}", follow_redirects=False)
 
 
 # -- plain web usage --
@@ -109,7 +165,7 @@ def test_verify_rate_limit_returns_429_when_exceeded() -> None:
 # -- bot-gated verification (the giveaway-bot scenario) --
 
 
-def test_gate_get_challenge_renders_the_verification_links_challenge() -> None:
+def test_gate_get_info_renders_the_verification_links_challenge() -> None:
     app, gate = _build_app()
     with TestClient(app) as client:
         request = asyncio.run(
@@ -119,7 +175,10 @@ def test_gate_get_challenge_renders_the_verification_links_challenge() -> None:
         resp = client.get(f"/api/captcha/gate/{request.token}")
 
         assert resp.status_code == 200
-        assert resp.json()["challenge_id"] == request.challenge.challenge_id
+        body = resp.json()
+        assert body["challenge"]["challenge_id"] == request.challenge.challenge_id
+        assert body["requires_captcha"] is True
+        assert body["requires_account"] is False
 
 
 def test_gate_get_challenge_of_unknown_token_is_404() -> None:
@@ -149,13 +208,14 @@ def test_gate_verify_solves_the_giveaway_scenario() -> None:
         assert pending is not None
 
         verify_resp = client.post(
-            f"/api/captcha/gate/{request.token}/verify", json={"response": pending.answer}
+            f"/api/captcha/gate/{request.token}/verify",
+            json={"captcha_response": pending.answer},
         )
 
         assert verify_resp.status_code == 200
-        assert verify_resp.json() == {"verified": True}
+        assert verify_resp.json()["verified"] is True
 
-        # the link is now spent -- re-fetching its challenge has nothing to show
+        # the link is now spent -- re-fetching its info has nothing to show
         followup = client.get(f"/api/captcha/gate/{request.token}")
         assert followup.status_code == 404
 
@@ -163,10 +223,44 @@ def test_gate_verify_solves_the_giveaway_scenario() -> None:
 def test_gate_verify_of_unknown_token_returns_not_verified() -> None:
     app, _gate = _build_app()
     with TestClient(app) as client:
-        resp = client.post("/api/captcha/gate/never-issued/verify", json={"response": "anything"})
+        resp = client.post(
+            "/api/captcha/gate/never-issued/verify", json={"captcha_response": "anything"}
+        )
 
         assert resp.status_code == 200
-        assert resp.json() == {"verified": False}
+        assert resp.json()["verified"] is False
+
+
+# -- account binding through the real OAuth login --
+
+
+def test_account_only_gate_needs_the_right_signed_in_user_via_http() -> None:
+    """The trust anchor a captcha alone can't give: through the actual
+    web flow, verifying an account-only link requires being logged in as
+    the exact Discord user it was issued for. The mocked login is user
+    id=1, so a link for user 1 verifies once logged in; a link for a
+    different user does not."""
+    app, gate = _build_account_app()
+    with TestClient(app) as client:
+        # not logged in yet -> account check fails
+        req_for_1 = asyncio.run(gate.create_verification(user_id=1, purpose="giveaway_entry"))
+        anon = client.post(f"/api/captcha/gate/{req_for_1.token}/verify", json={})
+        assert anon.json()["verified"] is False
+        assert anon.json()["failed_check"] == "account"
+
+        _log_in(client)  # now signed in as user id=1
+
+        # a link issued for someone else -> still fails even while logged in
+        req_for_other = asyncio.run(
+            gate.create_verification(user_id=999, purpose="giveaway_entry")
+        )
+        wrong = client.post(f"/api/captcha/gate/{req_for_other.token}/verify", json={})
+        assert wrong.json()["verified"] is False
+        assert wrong.json()["failed_check"] == "account"
+
+        # a link issued for the signed-in user -> passes
+        right = client.post(f"/api/captcha/gate/{req_for_1.token}/verify", json={})
+        assert right.json()["verified"] is True
 
 
 def test_captcha_router_without_a_gate_configured_returns_404_for_gate_routes() -> None:

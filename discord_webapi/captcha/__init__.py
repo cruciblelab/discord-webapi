@@ -21,8 +21,16 @@ from typing import TYPE_CHECKING
 
 from discord_webapi.captcha.api import build_captcha_router
 from discord_webapi.captcha.base import CaptchaProvider, CaptchaStore, VerificationStore
+from discord_webapi.captcha.checks import (
+    AccountMatchCheck,
+    CaptchaCheck,
+    CheckOutcome,
+    PredicateCheck,
+    VerificationCheck,
+    VerificationContext,
+)
 from discord_webapi.captcha.events import EVENT_TYPE_CAPTCHA_VERIFIED, CaptchaVerified
-from discord_webapi.captcha.gate import CaptchaGate
+from discord_webapi.captcha.gate import CaptchaGate, CheckResult
 from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
 from discord_webapi.captcha.providers.hcaptcha import HCaptchaProvider
@@ -35,20 +43,27 @@ if TYPE_CHECKING:
 
 __all__ = [
     "EVENT_TYPE_CAPTCHA_VERIFIED",
+    "AccountMatchCheck",
     "CaptchaChallenge",
+    "CaptchaCheck",
     "CaptchaGate",
     "CaptchaProvider",
     "CaptchaStore",
     "CaptchaVerified",
+    "CheckOutcome",
+    "CheckResult",
     "HCaptchaProvider",
     "MathCaptchaProvider",
     "MemoryCaptchaStore",
     "MemoryVerificationStore",
     "PendingCaptcha",
+    "PredicateCheck",
     "ReCaptchaProvider",
     "SQLCaptchaStore",
     "SQLVerificationStore",
     "TextCaptchaProvider",
+    "VerificationCheck",
+    "VerificationContext",
     "VerificationRequest",
     "VerificationStore",
     "build_captcha_router",

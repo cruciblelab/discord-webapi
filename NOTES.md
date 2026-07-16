@@ -1,5 +1,69 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha genişletme: hesap-bağlama + kompoz edilebilir doğrulama katmanları (bu oturumda)
+
+Kullanıcı captcha teslim edildikten sonra önemli bir eksiği işaret etti
+(kek/krema analojisiyle): captcha "insan mı" der ama "hangi hesap" demez --
+forwardlanmış bir link başkası tarafından çözülebilir, bu yüzden gerçek
+güvenilirlik için doğrulama gerçek Discord hesabına (OAuth) bağlanmalı. Ve
+bunun iki-seçenekli sabit bir menü değil, kompoz edilebilir katmanlar
+olmasını istedi: bizim captcha katımız, bizim hesap katımız, tüketicinin
+kendi katları; hepsi kullanılır/karıştırılır/hiç kullanılmaz.
+
+**Tasarım -- `VerificationCheck` Protocol (kek katları)**: `captcha/
+checks.py`'de her doğrulama gereksinimi bağımsız bir check
+(`async run(ctx) -> CheckOutcome`). Gate bir liste tutuyor, hepsinin
+geçmesini şart koşuyor (AND). Yerleşikler: `AccountMatchCheck` (asıl güven
+çıpası -- `ctx.authenticated_user_id == request.user_id`), `CaptchaCheck`
+(provider'a devreder), `PredicateCheck` (tüketicinin kendi async
+fonksiyonu -- fingerprint/davranış/üyelik-yaşı/anti-fraud kancası; kasıtlı
+olarak biz ML/bot-tespiti YAZMIYORUZ, sadece kancayı veriyoruz).
+
+**`CaptchaGate` genelleştirildi ama geriye uyumlu**: `provider` hâlâ 3.
+pozisyonel arg ama artık opsiyonel (`None`). Yeni flag'ler:
+`require_captcha` (varsayılan True), `require_account` (varsayılan False),
+`extra_checks`. Modlar bunlardan çıkıyor -- captcha-only (varsayılan,
+mevcut davranış), account-only, ikisi (safety), click-only (boş check
+listesi -- linke sahip olmak tek kanıt), veya bunlara kendi katmanını
+ekleme. `create_verification` captcha challenge'ı sadece `require_captcha`
+ise üretiyor (aksi halde `challenge=None`, o yüzden model + SQL sütunu
+nullable yapıldı).
+
+**Bulunan gerçek tasarım sorunu -- consuming check sırası**: ilk
+implementasyonda check'ler kayıt sırasında çalışıyordu (captcha ilk). Ama
+`CaptchaCheck` doğru cevabı tüketiyor (tek-kullanımlık); eğer captcha
+doğru ama SONRAKİ bir check (hesap, custom) patlarsa, captcha zaten
+harcanmış oluyor ve kullanıcı doğru çözdüğü captcha'yı kaybediyordu. Test
+yazarken yakalandı (safety-mod ve extra-check testleri patladı). Çözüm:
+consuming olan captcha check'i HER ZAMAN en sona koy -- ucuz/yan-etkisiz
+check'ler (hesap, custom) önce çalışıp patlarsa captcha hiç tüketilmiyor.
+AND-semantiği olduğu için sıra sonucu değiştirmiyor, sadece bir
+başarısızlığın captcha'yı boşa harcamasını önlüyor. `checks_passed`/
+`.passed` listesinin sırası da buna göre (["account", "captcha"]).
+
+**`verify()` dönüşü**: artık `bool` değil `CheckResult` (`.verified`,
+`.failed_check`, `.passed`, `.detail`) -- frontend "önce Discord ile giriş
+yap" gibi yönlendirebilsin diye. `__bool__` tanımlı, yani
+`if await gate.verify(...):` hâlâ okunaklı çalışıyor. `CaptchaVerified`
+event'ine `checks_passed` eklendi.
+
+**API tarafı**: gate GET artık `GateInfo` (challenge + requires_captcha/
+requires_account); gate verify gövdesi `{captcha_response?, signals?}`;
+giriş yapmış kullanıcı OAuth session'ından çözülüyor. Bunun için
+`auth/dependencies.py`'ye `get_current_user_optional` eklendi (401 yerine
+None -- captcha-only gate'te giriş zorunlu değil ama hesap check'i için
+lazım). Hesap-bağlamanın gerçek OAuth giriş akışıyla uçtan uca çalıştığı
+`respx`-mock'lu bir entegrasyon testiyle doğrulandı (mock login id=1;
+id=1 için link giriş sonrası geçiyor, başka kullanıcı için geçmiyor).
+
+Yeni testler: `test_captcha_checks.py` (check edge case'leri),
+`test_captcha_gate.py`'ye account-only/safety/click-only/extra-check/
+provider-eksik testleri, `test_captcha_api.py`'ye account-binding HTTP
+akışı + GateInfo/yeni gövde, `test_captcha_stores.py`'ye None-challenge
+SQL round-trip. 598 test yeşil (1 ortam-bağımlı Postgres testi hariç),
+ruff+mypy temiz. `docs/OZELLIKLER.md` captcha bölümü kompoz-edilebilir
+katman örnekleriyle genişletildi.
+
 ## `discord_webapi.captcha`: sıfırdan captcha sistemi (bu oturumda)
 
 Kullanıcının isteği (Türkçe, yorumlanmış): web tabanlı robot doğrulama

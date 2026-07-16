@@ -184,6 +184,28 @@ async def test_sql_verification_store_create_and_get(engine: AsyncEngine) -> Non
     assert fetched.verified is False
 
 
+async def test_sql_verification_store_round_trips_a_none_challenge(engine: AsyncEngine) -> None:
+    """An account-only / click-only gate stores a verification with no
+    captcha challenge -- challenge_json is nullable and must round-trip."""
+    store = SQLVerificationStore(engine)
+    await store.create_all()
+    now = datetime.now(UTC)
+    request = VerificationRequest(
+        token="t-no-captcha",
+        user_id=100,
+        purpose="account_only",
+        challenge=None,
+        created_at=now,
+        expires_at=now + timedelta(minutes=15),
+    )
+    await store.create(request)
+
+    fetched = await store.get("t-no-captcha")
+
+    assert fetched is not None
+    assert fetched.challenge is None
+
+
 async def test_sql_verification_store_mark_verified(engine: AsyncEngine) -> None:
     store = SQLVerificationStore(engine)
     await store.create_all()

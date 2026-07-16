@@ -39,12 +39,15 @@ class PendingCaptcha(BaseModel):
 class VerificationRequest(BaseModel):
     """One bot-gated verification -- e.g. "prove you're human before
     joining this giveaway." Created by `CaptchaGate.create_verification()`,
-    resolved (and `verified` flipped to `True`) when the embedded
-    `challenge` is solved. `purpose`/`metadata` are entirely yours -- the
-    gate never interprets them, it just carries them through to the
-    `captcha_verified` Transport event so your bot-side handler knows what
-    to do next (e.g. `purpose="giveaway_entry"`,
-    `metadata={"giveaway_id": "..."}`).
+    resolved (and `verified` flipped to `True`) when its checks all pass.
+    `purpose`/`metadata` are entirely yours -- the gate never interprets
+    them, it just carries them through to the `captcha_verified` Transport
+    event so your bot-side handler knows what to do next (e.g.
+    `purpose="giveaway_entry"`, `metadata={"giveaway_id": "..."}`).
+
+    `challenge` is `None` for verifications that don't use a captcha at all
+    (account-only or click-only gates -- see `CaptchaGate`), since there's
+    no image to render or answer to store in those modes.
     """
 
     token: str
@@ -52,7 +55,7 @@ class VerificationRequest(BaseModel):
     guild_id: int | None = None
     purpose: str
     metadata: dict[str, Any] = {}
-    challenge: CaptchaChallenge
+    challenge: CaptchaChallenge | None = None
     verified: bool = False
     created_at: datetime
     expires_at: datetime

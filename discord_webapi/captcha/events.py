@@ -24,3 +24,8 @@ class CaptchaVerified(BaseModel):
     guild_id: int | None
     purpose: str
     metadata: dict[str, Any] = {}
+    # Which checks the verification actually passed (e.g. ["captcha",
+    # "account"]) -- lets a bot-side handler react to *how strongly* the
+    # user was verified, not just that they were. Empty for a click-only
+    # gate (possession of the link was the only proof).
+    checks_passed: list[str] = []

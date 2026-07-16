@@ -295,10 +295,60 @@ async def join(ctx):
     await ctx.reply("Sana DM attım, linkten doğrula.", ephemeral=True)
 ```
 
+**Doğrulama katmanları -- kompoz edilebilir (kek katları gibi):** bir
+captcha "insan mı" der ama "hangi hesap" demez -- forwardlanmış bir link
+başkası tarafından da çözülebilir. Gerçek güvenilirlik için doğrulamayı
+gerçek Discord hesabına (kütüphanenin kendi OAuth girişi) bağlamak lazım.
+`CaptchaGate` bunu birleştirilebilir "check" katmanlarıyla yapıyor -- her
+biri bağımsız bir `VerificationCheck`, gate hepsinin geçmesini şart
+koşuyor (mantıksal AND):
+
+```python
+# sadece captcha (varsayılan): insan mı -- ama hangi hesap belli değil
+CaptchaGate(transport, store, provider)
+
+# sadece hesap: görsel yok, kullanıcı sadece linkin ait olduğu Discord
+# hesabıyla giriş yapmış olmalı ("linke tıkla, hesabınla doğrula, geç")
+CaptchaGate(transport, store, require_captcha=False, require_account=True)
+
+# ikisi birden ("safety mod")
+CaptchaGate(transport, store, provider, require_captcha=True, require_account=True)
+
+# sadece tıklama: tek-kullanımlık gizli linke sahip olmak tek kanıt
+# (en düşük sürtünme, en zayıf)
+CaptchaGate(transport, store, require_captcha=False, require_account=False)
+
+# kendi katmanını ekle: bizim captcha'mız + senin kendi mantığın
+# (tarayıcı parmak izi, davranışsal skor, "N gündür üye" ... -- kancayı
+# biz veriyoruz, politikayı sen yazıyorsun)
+async def kendi_kontrolun(ctx):
+    return ctx.signals.get("fingerprint_score", 0) > 70
+
+CaptchaGate(
+    transport, store, provider,
+    extra_checks=[PredicateCheck("fingerprint", kendi_kontrolun)],
+)
+```
+
+`extra_checks`'e ister `PredicateCheck` (tek fonksiyon) ister `issue()`/
+`run()`... `VerificationCheck` Protocol'ünü uygulayan kendi sınıfınızı
+verirsiniz -- birinci-taraf ve üçüncü-taraf check'ler gate için ayırt
+edilemez. Tüketici kekimizin katını da kullanır, kendininkini de ekler,
+hiç kullanmaz, tamamen kendininkini koyar. `verify()` bir `CheckResult`
+döndürüyor (`.verified`, hangi check patladı `.failed_check`, hangileri
+geçti `.passed`) ve `captcha_verified` event'i `checks_passed` taşıyor --
+bot ne kadar güçlü doğrulandığını bilerek tepki verebilir.
+
+Not: tüketici bu check'leri ve eşikleri kendi yazabildiği için, ihtiyaçları
+yoksa hiç captcha kullanmadan sadece hesap-doğrulamayla da geçebilirler,
+ya da tamamen kendi doğrulama zincirlerini kurabilirler.
+
 Kaba kuvvet koruması: her self-hosted challenge sınırlı sayıda yanlış
 denemeden sonra geçersiz oluyor (`max_attempts`, varsayılan 5), tek
 kullanımlık (doğru cevap bile ikinci kez kabul edilmiyor), ve süresi
-doluyor (`ttl`, varsayılan 10-15 dakika). Dashboard endpoint'leri de
+doluyor (`ttl`, varsayılan 10-15 dakika). Consuming olan captcha check'i
+her zaman en sona konuyor -- daha ucuz bir check (hesap, seninki) patlarsa
+doğru çözülmüş captcha boşa gitmesin diye. Dashboard endpoint'leri de
 (kimliksiz, herkese açık olduğu için IP bazlı) rate limit'li.
 
 ## Kuyruk sistemi (`discord_webapi.jobs`, opt-in)
