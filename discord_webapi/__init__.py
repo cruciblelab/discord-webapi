@@ -43,6 +43,13 @@ from discord_webapi.commands import (
 )
 from discord_webapi.consent import ConsentRecord, build_consent_router
 from discord_webapi.guilds import ManageableGuild, build_guilds_router
+from discord_webapi.jobs import (
+    InProcessJobQueue,
+    JobQueue,
+    JobStatus,
+    build_jobs_router,
+    run_worker,
+)
 from discord_webapi.members import MemberInfo, build_members_router, install_member_listing
 from discord_webapi.storage import (
     AuditStore,
@@ -63,6 +70,7 @@ from discord_webapi.web import (
 )
 
 if TYPE_CHECKING:
+    from discord_webapi.jobs.redis import RedisJobQueue
     from discord_webapi.storage.sql import (
         SQLAuditStore,
         SQLAuthzStore,
@@ -94,13 +102,17 @@ __all__ = [
     "Event",
     "GuildContext",
     "GuildMemberCache",
+    "InProcessJobQueue",
     "InProcessTransport",
+    "JobQueue",
+    "JobStatus",
     "ManageableGuild",
     "MemberInfo",
     "MemoryAuditStore",
     "MemoryAuthzStore",
     "MemoryCommandConfigStore",
     "MemoryConsentStore",
+    "RedisJobQueue",
     "RedisTransport",
     "SQLAuditStore",
     "SQLAuthzStore",
@@ -114,12 +126,14 @@ __all__ = [
     "build_commands_router",
     "build_consent_router",
     "build_guilds_router",
+    "build_jobs_router",
     "build_members_router",
     "get_current_user",
     "require_app_role",
     "require_channel_permission",
     "require_guild_permission",
     "require_role",
+    "run_worker",
 ]
 
 
@@ -128,6 +142,10 @@ def __getattr__(name: str) -> object:
         from discord_webapi.transport.redis import RedisTransport
 
         return RedisTransport
+    if name == "RedisJobQueue":
+        from discord_webapi.jobs.redis import RedisJobQueue
+
+        return RedisJobQueue
     if name in (
         "SQLSessionStore",
         "SQLCommandConfigStore",
@@ -139,6 +157,22 @@ def __getattr__(name: str) -> object:
 
         return getattr(sql, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+@asynccontextmanager
+async def _with_job_queue(
+    inner: AbstractAsyncContextManager[None], job_queue: JobQueue | None
+) -> AsyncIterator[None]:
+    if job_queue is None:
+        async with inner:
+            yield
+        return
+    await job_queue.start()
+    try:
+        async with inner:
+            yield
+    finally:
+        await job_queue.stop()
 
 
 class DiscordWebAPI:
@@ -184,6 +218,7 @@ class DiscordWebAPI:
         authz_store: AuthzStore | None = None,
         audit_store: AuditStore | None = None,
         consent_store: ConsentStore | None = None,
+        job_queue: JobQueue | None = None,
         member_cache_ttl_seconds: float = 45.0,
         channel_permission_cache_ttl_seconds: float = 30.0,
         sync_commands: bool = True,
@@ -192,6 +227,7 @@ class DiscordWebAPI:
         self.bot = bot
         self.transport = transport
         self.auth = auth
+        self.job_queue = job_queue
         self._sync_commands = sync_commands
         self._sync_guild_id = sync_guild_id
         self._commands_synced = False
@@ -257,6 +293,7 @@ class DiscordWebAPI:
         authz_store: AuthzStore | None = None,
         audit_store: AuditStore | None = None,
         consent_store: ConsentStore | None = None,
+        job_queue: JobQueue | None = None,
         member_cache_ttl_seconds: float = 45.0,
         channel_permission_cache_ttl_seconds: float = 30.0,
     ) -> DiscordWebAPI:
@@ -274,6 +311,7 @@ class DiscordWebAPI:
             authz_store=authz_store,
             audit_store=audit_store,
             consent_store=consent_store,
+            job_queue=job_queue,
             member_cache_ttl_seconds=member_cache_ttl_seconds,
             channel_permission_cache_ttl_seconds=channel_permission_cache_ttl_seconds,
         )
@@ -305,6 +343,7 @@ class DiscordWebAPI:
         enable_cookie_consent: bool = False,
         cookie_consent_message: str = DEFAULT_COOKIE_CONSENT_MESSAGE,
         cookie_consent_version: str = DEFAULT_COOKIE_CONSENT_VERSION,
+        enable_jobs: bool = False,
     ) -> None:
         if self.auth is None:
             raise RuntimeError(
@@ -337,6 +376,15 @@ class DiscordWebAPI:
         if enable_cookie_consent:
             app.state.discord_webapi_consent_store = self.consent_store
             app.include_router(build_consent_router())
+        if enable_jobs:
+            if self.job_queue is None:
+                raise RuntimeError(
+                    "enable_jobs=True needs job_queue=... passed to DiscordWebAPI(...) -- "
+                    "construct one (e.g. InProcessJobQueue()), register your job_type "
+                    "handlers on it with register_worker(), then pass it in"
+                )
+            app.state.discord_webapi_job_queue = self.job_queue
+            app.include_router(build_jobs_router())
 
     def lifespan(self, token: str) -> AbstractAsyncContextManager[None]:
         if self.bot is None:
@@ -346,13 +394,15 @@ class DiscordWebAPI:
                 "instead (or run_bot_process()/for_bot_process().lifespan(token) "
                 "in the separate bot process)."
             )
-        return single_process_lifespan(self.bot, self.transport, token)
+        return _with_job_queue(
+            single_process_lifespan(self.bot, self.transport, token), self.job_queue
+        )
 
     def web_lifespan(self) -> AbstractAsyncContextManager[None]:
         """FastAPI lifespan for a web-only process in a split bot/web
         deployment (see `for_web_process`) -- starts/stops this process's
         own connection to the shared Transport, with no bot involved."""
-        return web_only_lifespan(self.transport)
+        return _with_job_queue(web_only_lifespan(self.transport), self.job_queue)
 
     @classmethod
     def quickstart(

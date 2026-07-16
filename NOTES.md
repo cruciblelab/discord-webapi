@@ -1,6 +1,65 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Çoklu sunucu/makine deployment (bot ve web ayrı process, bu oturumda tamamlandı)
+## Kuyruk sistemi / background jobs (bu oturumda tamamlandı)
+
+Kullanıcının "sırada kuyruk sistemi var" talebiyle eklendi (çoklu sunucu
+işinden hemen sonra, çoklu bot hâlâ ertelenmiş durumda).
+
+**Mimari**: `Transport`'un aynı deseni tekrarlandı — `discord_webapi/jobs/`
+paketi, `JobQueue` Protocol'ü (`base.py`) + `InProcessJobQueue` (varsayılan,
+asyncio.Queue + N worker task, zaten competing-consumer semantiği veriyor
+tek process içinde) + `RedisJobQueue` (`redis.py`, `RPUSH`/`BLPOP` ile).
+
+**Önemli tasarım farkı — `RedisTransport`'tan bilinçli olarak farklı**:
+`RedisTransport`'un RPC'si "bir komuta tam olarak bir handler" kısıtlaması
+taşıyordu (plain pub/sub — iki process aynı komutu register ederse
+undefined davranış). Redis list'ler (`RPUSH`/`BLPOP`) bunun tam tersini,
+GERÇEK competing-consumer semantiğini bedavaya veriyor — kaç tane worker
+process aynı `job_type`'ı register edip `start()` çağırırsa çağırsın,
+Redis aynı job_id'yi iki worker'a birden vermemeyi garanti ediyor. Bu
+yüzden job queue, transport'tan farklı olarak GERÇEK yatay ölçekleme
+için tasarlandı (birden fazla worker process, ayrı makinelerde).
+
+**Yapılanlar**:
+1. `discord_webapi/jobs/base.py`: `JobStatus` (pydantic model) + `JobQueue`
+   Protocol (`start`/`stop`/`register_worker`/`enqueue`/`get_status`).
+2. `discord_webapi/jobs/memory.py`: `InProcessJobQueue`.
+3. `discord_webapi/jobs/redis.py`: `RedisJobQueue` — `discord_webapi:jobs:
+   queue:{job_type}` (RPUSH/BLPOP) + `discord_webapi:jobs:job:{job_id}`
+   (JSON status, TTL'li — varsayılan 24 saat, `result_ttl_seconds`).
+4. `discord_webapi/jobs/api.py`: `build_jobs_router()` —
+   `POST /api/guilds/{id}/jobs/{job_type}` (enqueue, rate-limited,
+   manage_guild gerektiriyor, 202+job_id döner) ve
+   `GET /api/guilds/{id}/jobs/{job_id}` (status poll — başka guild'in
+   job'ı 404, cross-guild leak yok).
+5. `discord_webapi/jobs/worker.py::run_worker(queue)` — FastAPI'siz
+   bağımsız worker process girişi (`run_bot_process` ile aynı desen).
+6. `DiscordWebAPI(job_queue=..., ...)` + `install(enable_jobs=True)` —
+   opt-in, `job_queue` verilmeden `enable_jobs=True` denenirse açık
+   RuntimeError. `for_web_process`'e de `job_queue` parametresi eklendi.
+7. `DiscordWebAPI.lifespan()`/`web_lifespan()` artık `job_queue`'yu da
+   otomatik start/stop ediyor (`_with_job_queue` helper) — tek-process
+   kurulumda consumer'ın elle `queue.start()/.stop()` çağırmasına gerek yok.
+8. `examples/split_deployment/worker_process.py` — üçüncü opsiyonel
+   process tipi, `web_process.py`'ye `enable_jobs=True` + `RedisJobQueue`
+   eklendi.
+9. Contract test suite `tests/jobs/` (Transport'un `tests/transport/`
+   deseniyle birebir aynı — her iki implementasyon da aynı testlerden
+   geçiyor) + `tests/integration/test_jobs_api.py` (dashboard API) +
+   `tests/integration/test_facade.py`'ye `enable_jobs` wiring testi.
+
+193 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
+**Not**: `tests/jobs/test_contract.py` ismi `test_transport`'un
+`test_contract.py`'siyle çakışıp pytest module-name collision hatası
+veriyordu (her iki `tests/*/` dizininde de `__init__.py` yok) —
+`tests/jobs/test_jobs_contract.py` olarak yeniden adlandırılarak çözüldü.
+
+**Sırada (kullanıcı isterse)**: çoklu bot hâlâ ertelenmiş durumda
+(guild_id→hangi bot routing'i gerektirir, disnake/pycord'u ertelerken
+kullanılan mantıkla aynı kategoride).
+
+## Çoklu sunucu/makine deployment (bot ve web ayrı process, tamamlandı)
 
 Kullanıcı "5-6 büyük sunucuda çalışan botlar için sağlam bir sistem"
 istedi — netleştirince asıl istenen: bot'un Discord Gateway bağlantısı bir

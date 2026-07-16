@@ -2,6 +2,7 @@ from urllib.parse import parse_qs, urlparse
 
 import discord
 import httpx
+import pytest
 import respx
 from cryptography.fernet import Fernet
 from discord.ext import commands as dpy_commands
@@ -9,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from discord_webapi import DiscordAuth, DiscordWebAPI, InProcessTransport
+from discord_webapi.jobs import InProcessJobQueue
 
 TOKEN_URL = "https://discord.com/api/v10/oauth2/token"
 ME_URL = "https://discord.com/api/v10/users/@me"
@@ -191,3 +193,31 @@ async def test_on_ready_only_syncs_once_across_multiple_calls() -> None:
     await api._on_ready()
 
     bot.tree.sync.assert_awaited_once_with()
+
+
+async def test_install_enable_jobs_without_job_queue_raises() -> None:
+    transport = InProcessTransport()
+    bot = _build_bot()
+    auth = DiscordAuth(
+        client_id="cid",
+        client_secret="csecret",
+        redirect_uri="http://testserver/auth/discord/callback",
+        encryption_keys=Fernet.generate_key(),
+        cookie_secure=False,
+    )
+    api = DiscordWebAPI(bot=bot, transport=transport, auth=auth, sync_commands=False)
+
+    with pytest.raises(RuntimeError, match="job_queue"):
+        api.install(FastAPI(), enable_jobs=True)
+
+    # sanity: passing a queue actually works (fresh bot/transport -- the
+    # ones above already registered handlers on `transport`, and
+    # InProcessTransport allows exactly one handler per command)
+    api2 = DiscordWebAPI(
+        bot=_build_bot(),
+        transport=InProcessTransport(),
+        auth=auth,
+        job_queue=InProcessJobQueue(),
+        sync_commands=False,
+    )
+    api2.install(FastAPI(), enable_jobs=True)

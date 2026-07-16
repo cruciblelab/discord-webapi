@@ -2,6 +2,18 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Kuyruk sistemi (background jobs)
+
+### Eklenenler
+
+- **`discord_webapi.jobs`**: dashboard'dan tetiklenen, request/response döngüsünde beklenemeyecek kadar uzun süren işler için (toplu moderasyon, export, zamanlanmış temizlik) yeni bir alt paket. `Transport`'la aynı mimari desende: `JobQueue` Protocol'ü + `InProcessJobQueue` (varsayılan, sıfır altyapı) + `RedisJobQueue` (`discord-webapi[redis]`, `RPUSH`/`BLPOP` ile gerçek dağıtık kuyruk — `RedisTransport`'un "bir komuta tek handler" kısıtlamasının aksine, kaç tane worker process çalıştırırsan çalıştır Redis aynı job'ı iki kere işletmemeyi garanti ediyor, gerçek yatay ölçekleme).
+- Dashboard API: `POST /api/guilds/{guild_id}/jobs/{job_type}` (enqueue, 202 + `job_id`), `GET /api/guilds/{guild_id}/jobs/{job_id}` (status poll — başka bir guild'in job'ı 404 dönüyor, 403 değil, job'ın var olup olmadığını sızdırmamak için). Opt-in: `DiscordWebAPI(job_queue=...)` + `install(enable_jobs=True)`.
+- `discord_webapi.jobs.run_worker(queue)`: bağımsız worker process için giriş noktası (FastAPI yok, `run_bot_process`/`web_only_lifespan` ile aynı desen) — `bot_process.py`/`web_process.py`'ye üçüncü bir opsiyonel process tipi olarak `examples/split_deployment/worker_process.py` eklendi.
+- `DiscordWebAPI.lifespan()`/`web_lifespan()` artık `job_queue` verildiyse onu da otomatik start/stop ediyor — tek-process kurulumda ekstra boilerplate gerekmiyor.
+- Contract test suite (`tests/jobs/`): her iki implementasyon da aynı testlerden geçiyor (Transport'un kendi contract test deseniyle birebir aynı).
+
+193 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — Çoklu sunucu/makine deployment (bot ve web ayrı process)
 
 ### Eklenenler
