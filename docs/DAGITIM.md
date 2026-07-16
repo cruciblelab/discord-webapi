@@ -167,6 +167,32 @@ hedefte olmayan bir tabloyu **oluşturamaz**, sadece atlayıp devam eder
 (hedefin botun en az bir kez çalışıp `create_all()`/`quickstart()` ile
 tabloları oluşturmuş olması gerekir).
 
+## 6. Health check (deployment sonrası / cron)
+
+`discord-webapi-healthcheck` (`discord_webapi.tools.healthcheck`) —
+veritabanının, (varsa) Redis'in ve (varsa) kendi HTTP endpoint'inin
+(dashboard'ın kendi health route'u, ya da bot sürecinin) gerçekten
+erişilebilir olduğunu kontrol eden bağımsız bir CLI. Cron/monitoring/
+container-orchestrator kullanımı için: tüm istenen kontroller geçerse
+`0`, herhangi biri başarısız olursa `1` ile çıkar.
+
+```bash
+discord-webapi-healthcheck \
+  --database-url sqlite+aiosqlite:///dashboard.sqlite3 \
+  --redis-url redis://localhost:6379/0 \
+  --http-url https://dashboard.example.com/health \
+  --json
+```
+
+- Her kontrol bağımsız ve opsiyonel — sadece elindeki URL'leri ver, hiç
+  bayrak verilmezse hiçbir şey kontrol edilmez (yapılacak bir şey yok).
+- `--timeout` (varsayılan 5sn) her kontrole ayrı ayrı uygulanır.
+- `--json` insan-okunur metin yerine satır başına bir JSON nesnesi basar
+  (log toplama/monitoring pipeline'ları için).
+- Redis kontrolü `discord-webapi[redis]` extra'sını gerektirir; onsuz
+  sadece `--redis-url` verilmezse çalışır (import lazy, sadece o kontrol
+  çağrıldığında yapılıyor).
+
 ## Özet tablo
 
 | Senaryo | Transport | Süreçler |

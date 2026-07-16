@@ -163,10 +163,16 @@ için restore, hedefte olmayan bir tabloyu oluşturamıyor — bilinçli bir
 sınır olarak dokümante edildi. Full/guild/date/birleşik kapsam ve restore
 gerçek SQLite dosyalarına karşı elle doğrulandı, 11 otomatik test yazıldı.
 
-Sırada (aynı talepten, henüz başlanmadı): **health check aracı** — kapsam
-kullanıcıyla tam netleşmedi, olası tasarım: DB bağlantı kontrolü,
-opsiyonel Redis `PING`, opsiyonel HTTP endpoint kontrolü, cron/monitoring
-için 0/1 exit code.
+**P2.6 — `discord_webapi.tools.healthcheck`** ✅ **TAMAMLANDI** (aynı
+talep zincirinin son parçası: "health check eklenebilir"). Veritabanının,
+opsiyonel Redis'in, opsiyonel bir HTTP endpoint'in erişilebilir olduğunu
+kontrol eden, cron/monitoring için 0/1 exit code veren bağımsız bir CLI.
+Üç kontrol tamamen bağımsız/opsiyonel, Redis import'u lazy (extra kurulu
+değilse ve kullanılmıyorsa sorun olmuyor). Gerçek SQLite dosyası, gerçek
+loopback HTTP sunucusu, ve (erişilebilirse) gerçek Redis'e karşı hem
+başarı hem hata yollarıyla doğrulandı.
+
+Bununla kullanıcının backup+health-check isteğinin tamamı teslim edildi.
 
 ---
 

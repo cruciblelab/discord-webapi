@@ -2,6 +2,31 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `discord_webapi.tools.healthcheck`: bağlantı sağlığı CLI'si
+
+### Eklenenler
+
+- **`discord-webapi-healthcheck`** (`discord_webapi.tools.healthcheck`):
+  veritabanının, (varsa) Redis'in, (varsa) bir HTTP endpoint'inin
+  erişilebilir olduğunu kontrol eden bağımsız bir CLI. Cron/monitoring/
+  container-orchestrator kullanımı için — tüm istenen kontroller geçerse
+  `0`, biri bile başarısız olursa `1` ile çıkar.
+  - `--database-url` (SQLAlchemy URL, `SELECT 1`), `--redis-url` (`PING`,
+    `discord-webapi[redis]` extra'sı gerektirir, lazy import), `--http-url`
+    (GET, 400 altı durum kodu = başarılı) — üçü de bağımsız ve opsiyonel,
+    hiçbiri verilmezse hiçbir kontrol yapılmaz.
+  - `--timeout` (varsayılan 5sn) her kontrole ayrı uygulanır.
+  - `--json` satır başına bir JSON nesnesi basar (log toplama/monitoring
+    pipeline'ları için); varsayılan insan-okunur metin çıktısı.
+
+Gerçek bir SQLite dosyasına, gerçek bir loopback HTTP sunucusuna, ve
+(erişilebilirse) gerçek bir Redis'e karşı hem başarı hem hata yollarıyla
+doğrulandı — mock yok. 11 yeni test
+(`tests/unit/test_tools_healthcheck.py`, Redis testi mevcut
+`tests/transport/conftest.py` deseniyle aynı şekilde Redis erişilemezse
+skip ediyor). 488 test yeşil (1 ortam-bağımlı Postgres testi hariç),
+ruff+mypy temiz.
+
 ## [Unreleased] — `discord_webapi.tools.backup`: yedek alma CLI'si
 
 ### Eklenenler

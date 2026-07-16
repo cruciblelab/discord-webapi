@@ -10,4 +10,7 @@ not a `setup(bot, ...)` call).
 - `discord_webapi.tools.backup`: create a standalone backup file (full,
   guild-scoped, and/or date-scoped) and restore from it later, independent
   of any migration.
+- `discord_webapi.tools.healthcheck`: check that the database (and,
+  optionally, Redis / an HTTP endpoint) are reachable -- exits 0/1 for
+  cron/monitoring use.
 """

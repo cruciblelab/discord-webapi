@@ -1,5 +1,47 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## `discord_webapi.tools.healthcheck`: bağlantı sağlığı CLI'si (bu oturumda)
+
+`backup` bittikten sonra kullanıcının "diğerleri boş olursa direkt başla"
+onayıyla eklenen ikinci parça (aynı orijinal istekteki "health check
+eklenebilir" kısmı). Kapsam kullanıcıyla ayrıca teyit edilmedi, en makul
+tasarımla ilerlendi: DB bağlantı kontrolü (`SELECT 1`), opsiyonel Redis
+`PING`, opsiyonel HTTP endpoint kontrolü, cron/monitoring için 0/1 exit
+code.
+
+**Tasarım**: üç kontrol de tamamen bağımsız ve opsiyonel — hangi
+URL'leri verirsen sadece onlar çalışır. `check_database`/`check_redis`/
+`check_http` ayrı ayrı `CheckResult` (`name`, `ok`, `detail`,
+`elapsed_ms`) döndürüyor, `run_checks` sadece verilenleri topluyor.
+Redis import'u fonksiyon içinde (lazy) — `redis` extra'sı kurulu
+değilse ve `--redis-url` hiç verilmezse hiç sorun olmuyor, tıpkı
+`transport/redis.py`'nin aksine burada modül importu shared değil.
+
+**Uçtan uca gerçek bağlantılarla doğrulandı** (mock yok): gerçek bir
+SQLite dosyasına karşı (`create_all` sonrası) başarı, var olmayan bir
+dizine karşı `OperationalError` ile başarısızlık; gerçek bir loopback
+`http.server` sunucusuna karşı `HTTP 200`, kapalı bir porta karşı
+bağlantı hatası; sandbox'ta gerçek bir `redis-server` başlatılıp `PING`
+başarısı, kapalı bir porta karşı `ConnectionError` başarısızlığı —
+hepsi elle (CLI çalıştırılarak) denendikten sonra otomatik testlere
+döküldü.
+
+Testler: `tests/unit/test_tools_healthcheck.py` (11 test). Redis testi,
+`tests/transport/conftest.py`'deki mevcut desenle birebir aynı şekilde
+(`DWA_TEST_REDIS_URL`, `RedisError` yakalanırsa `pytest.skip`) yazıldı —
+CI'da Redis service container'ı zaten var, yoksa sessizce atlanıyor.
+488 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
+`pyproject.toml`'a `discord-webapi-healthcheck` console script eklendi
+(Redis extra'sı zaten mevcuttu, yeni bir extra gerekmedi — `httpx` zaten
+çekirdek bağımlılık). `discord_webapi/tools/__init__.py` docstring'i,
+`docs/DAGITIM.md`'ye "6. Health check", `TESTING.md`'ye "25. Health
+check CLI'si" bölümleri eklendi.
+
+Bununla kullanıcının "Yedek alma komutu ekleyebiliriz tam yedek belli
+bir yere kadar yedek tarihe belli yerlerin yedeği health check
+eklenebilir" isteğinin tamamı (backup + health check) teslim edildi.
+
 ## `discord_webapi.tools.backup`: yedek alma CLI'si (bu oturumda)
 
 `migrate` bittikten sonra kullanıcının istediği takip: "Yedek alma komutu

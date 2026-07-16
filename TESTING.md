@@ -361,6 +361,15 @@ gerçek bir MariaDB/Postgres'e taşımak istersen:
 - [ ] Boş (ama tabloları `create_all`/`quickstart` ile oluşturulmuş) bir hedefe `discord-webapi-backup restore tam.json --to <hedef-url>` çalıştır → satırların yazıldığını doğrula.
 - [ ] Hiç tablosu olmayan bir hedefe restore dene → hata vermeden "tablo yok, atlanıyor" mesajıyla atladığını doğrula.
 
+## 25. Health check CLI'si (`discord-webapi-healthcheck`, v0.7)
+
+- [ ] `discord-webapi-healthcheck --database-url sqlite+aiosqlite:///examples/test_console/dashboard.sqlite3` → `[OK  ] database` çıktısını ve çıkış kodu `0`'ı doğrula (`echo $?`).
+- [ ] Var olmayan bir dizine işaret eden bir `--database-url` ile çalıştır → `[FAIL]` çıktısını ve çıkış kodu `1`'i doğrula.
+- [ ] Yerel bir Redis'e karşı `--redis-url redis://localhost:6379/0` ile çalıştır → `PING başarılı` doğrula; sonra Redis'i durdurup tekrar çalıştır → `FAIL` doğrula.
+- [ ] `--http-url` ile çalışan bir dashboard'a karşı çalıştır → `HTTP 200` doğrula; botu/dashboard'ı durdurup tekrar çalıştır → bağlantı hatasıyla `FAIL` doğrula.
+- [ ] Üçünü birden aynı komutta ver → hepsinin tek çalıştırmada raporlandığını, herhangi biri başarısızsa çıkış kodunun `1` olduğunu doğrula.
+- [ ] `--json` ile çalıştır → çıktının satır satır geçerli JSON olduğunu doğrula.
+
 ---
 
 Bir adım beklenmedik davranış gösterirse (özellikle WebSocket round-trip,

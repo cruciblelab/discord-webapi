@@ -61,6 +61,10 @@ discord-webapi-migrate = "discord_webapi.tools.migrate:main"
 # Create/list/restore a standalone (full, guild-scoped, or date-scoped)
 # backup file, independent of any migration.
 discord-webapi-backup = "discord_webapi.tools.backup:main"
+# Check that the database (and optionally Redis / an HTTP endpoint) are
+# reachable; exits 0/1 for cron/monitoring use. Redis check needs the
+# `redis` extra installed.
+discord-webapi-healthcheck = "discord_webapi.tools.healthcheck:main"
 
 [project.urls]
 Repository = "https://github.com/cruciblelab/discord-webapi"
