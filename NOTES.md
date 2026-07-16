@@ -13,26 +13,50 @@ koyarız, çeliği/iç mekanı siz yaparsınız" benzetmesi. Tamamen opsiyonel;
 hiç kullanmadan da düz discord.py yazılabilir.
 
 `discord_webapi/skeletons/` bu yüzden `builtins`'ten AYRI bir paket
-olarak açıldı (farklı bir sözleşme: `setup(bot, **kwargs)` yerine
-"handler'ı sen yazarsın, biz ona bir context/hook sağlarız"):
+olarak açıldı — ama ilk tasarımdan sonra kullanıcı netleştirdi:
+kendi `setup(bot, **kwargs)` fonksiyonumuzu çağırıp komutu BİZİM
+kaydetmemiz yerine, kullanıcı komutu discord.py'nin kendi
+`@bot.command(...)`/`@bot.tree.command(...)`/`@bot.hybrid_command(...)`
+decorator'ıyla NORMAL şekilde yazsın, biz sadece onun ALTINA istiflenen
+ince bir decorator verelim — hem klasik prefix komut hem slash komut aynı
+decorator'la çalışsın (discord.py'ye "@bot.command" ya da
+"@bot.tree.command" ile kaydedilen fonksiyona ilk argüman olarak ya
+`commands.Context` ya da `discord.Interaction` geliyor, decorator ikisini
+de otomatik ayırt ediyor):
 
-1. `skeletons/_shared.py::rate_limited_command_skeleton(bot, handler, *,
-   command_name, description, rate_limiter=None, rate_limit_key=None,
-   rate_limited_message=...)`: genel "demir" fabrikası — hybrid komutu
-   kaydeder, `rate_limiter` verilmişse (`GuildRateLimiter`) her kullanıcı
-   için `sub_key=str(ctx.author.id)` ile kontrol eder, DM'lerde (guild
-   yok) kontrolü tamamen atlar, `rate_limiter=None` ise hiç kontrol
-   yapmadan direkt `handler(ctx)`'i çağırır.
-2. `skeletons/ping.py::ping_skeleton`: ilk somut iskelet, yukarıdaki
-   fabrikanın ping'e özel varsayılanlarla (`command_name="ping"`,
-   `rate_limit_key="ping"`) ince bir sarmalayıcısı.
+1. `skeletons/_shared.py::rate_limited(key, *, rate_limiter=None,
+   rate_limited_message=...)`: genel "demir" decorator'ı — sarmaladığı
+   fonksiyonun ilk argümanı `Interaction` mı `Context` mi diye bakıp
+   guild_id/user_id çıkarır, `rate_limiter` verilmişse `GuildRateLimiter`'ı
+   her kullanıcı için `sub_key=str(user_id)` ile kontrol eder, DM'lerde
+   (guild yok) kontrolü tamamen atlar, `rate_limiter=None` ise hiç kontrol
+   yapmadan direkt fonksiyonu çağırır. Rate-limited olursa `Context` için
+   `ctx.reply(...)`, `Interaction` için `interaction.response.send_message(
+   ..., ephemeral=True)` (ya da interaction zaten yanıtlanmışsa
+   `interaction.followup.send(...)`) ile cevap verir.
+2. `skeletons/ping.py::ping(*, rate_limiter=None, rate_limit_key="ping",
+   ...)`: ilk somut iskelet, yukarıdaki decorator'ın ping'e özel
+   varsayılanlarla ince bir sarmalayıcısı.
+
+Kullanım:
+```python
+@bot.command(name="ping")
+@ping(rate_limiter=api.rate_limiter)
+async def ping_cmd(ctx): await ctx.reply("pong")
+
+@bot.tree.command(name="ping")
+@ping(rate_limiter=api.rate_limiter)
+async def ping_slash(interaction): await interaction.response.send_message("pong")
+```
 
 Gelecekteki her yeni iskelet aynı şekli takip edecek: paylaşılan bir
-"rebar" fabrikasının ince, isimli bir sarmalayıcısı, asla tam bir komut.
-Testler: `tests/unit/test_skeletons_ping.py` (7 test — handler çağrımı,
-rate-limit engelleme, kullanıcı bazlı bağımsız bucket, DM'de atlanma,
-varsayılan/özel `rate_limit_key`). 368 test yeşil (1 ortam-bağımlı
-Postgres testi hariç), ruff+mypy temiz.
+"rebar" decorator fabrikasının ince, isimli bir sarmalayıcısı, asla tam
+bir komut ya da bizim kendi kayıt fonksiyonumuz. Testler:
+`tests/unit/test_skeletons_ping.py` (10 test — hem `Context` hem
+`Interaction` üzerinden handler çağrımı, rate-limit engelleme, interaction
+zaten yanıtlanmışsa followup'a düşme, kullanıcı bazlı bağımsız bucket,
+DM'de atlanma, varsayılan/özel `rate_limit_key`). 371 test yeşil (1
+ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
 
 ## v0.6: `discord_webapi.escalation` — genel, tamamen kullanıcı-tanımlı eskalasyon motoru (bu oturumda tamamlandı)
 
