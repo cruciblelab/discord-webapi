@@ -1,5 +1,8 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+import discord_webapi.storage as storage_module
 from discord_webapi.storage import MemorySessionStore, Session
 
 
@@ -68,3 +71,16 @@ async def test_list_by_user_returns_only_that_users_sessions() -> None:
     sessions = await store.list_by_user(123)
 
     assert {s.session_id for s in sessions} == {"sess-1", "sess-2"}
+
+
+def test_lazy_getattr_resolves_sql_stores() -> None:
+    assert storage_module.SQLSessionStore is not None
+    assert storage_module.SQLCommandConfigStore is not None
+    assert storage_module.SQLAuthzStore is not None
+    assert storage_module.SQLAuditStore is not None
+    assert storage_module.SQLConsentStore is not None
+
+
+def test_lazy_getattr_raises_for_unknown_name() -> None:
+    with pytest.raises(AttributeError):
+        storage_module.__getattr__("NotARealStore")

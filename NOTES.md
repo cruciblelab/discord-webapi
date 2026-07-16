@@ -1,6 +1,31 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Harici inceleme geri bildirimi (bu oturumda tamamlandı)
+## Test coverage artırma (bu oturumda tamamlandı, fiziksel test beklerken)
+
+Kullanıcı fiziksel testleri akşama erteledi, bu arada "test coverage artır"
+ve "builtins genişlet" istedi (PyPI/repo taşıma işine hiç dokunmadık,
+o kullanıcının kendi işi). `pytest-cov` ile ölçüldü: %91 → %95.
+
+En değerli bulgu: **`require_role` fonksiyonu (public API, `discord_webapi`
+top-level'dan export ediliyor) hiç test edilmiyormuş** — sıfır coverage.
+Diğer önemli boşluklar: `bot/extension.py`'nin bot-tarafı wiring
+fonksiyonlarının hiçbiri (`install_member_lookup` vb.) doğrudan test
+edilmiyordu (sadece `DiscordWebAPI.__init__` üzerinden dolaylı), `single_process_lifespan`'ın
+bot-başlatma-hatası yolu hiç tetiklenmemişti, `CommandRegistry.command_meta`
+decorator'ı ve gerçek slash-command `interaction_check` gövdesi (sadece
+prefix/hybrid'in `global_check`'i test ediliyordu) hiç çağrılmamıştı.
+
+Eklenen test dosyaları: `tests/unit/test_bot_extension.py`,
+`tests/unit/test_bridge_not_found_paths.py`, `tests/unit/test_registry_misc.py`,
+`tests/integration/test_require_role.py`, ayrıca `test_storage.py`'ye
+lazy `__getattr__` testi eklendi.
+
+257 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+Kalan düşük-coverage alanlar (`discord_webapi/__init__.py` %82,
+`storage/sql.py` %87) çoğunlukla migration/hata-yolu kenar durumları —
+düşük öncelik, bilerek derinleştirilmedi.
+
+## Harici inceleme geri bildirimi (tamamlandı)
 
 Kullanıcı önceki iki denetim raporunu (auth/authz + jobs/çoklu-sunucu)
 harici birine incelettirmiş, üç nokta gelmiş:

@@ -2,6 +2,34 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Test coverage: %91 → %95
+
+Fiziksel test turu beklerken test coverage'ı `pytest-cov` ile ölçüp
+zayıf noktaları kapattık. Öne çıkanlar:
+
+- **`require_role`** (Discord-native rol id kontrolü) hiç test edilmiyordu
+  — sıfırdan `tests/integration/test_require_role.py` eklendi.
+- **`bot/extension.py`'nin tüm `install_*` fonksiyonları** (`install_member_lookup`,
+  `install_channel_permission_lookup`, `install_guild_listing`) ve
+  **`single_process_lifespan`/`web_only_lifespan`/`run_bot_process`**
+  (bot başlatma hata yolu dahil) hiç doğrudan test edilmiyordu — sadece
+  `DiscordWebAPI` üzerinden dolaylı olarak. `tests/unit/test_bot_extension.py`
+  eklendi (%54 → %96).
+- **`CommandRegistry.command_meta`** decorator'ı ve wrapped
+  `interaction_check`'in gerçek gövdesi (slash komut enforcement — sadece
+  `global_check` test ediliyordu) hiç test edilmiyordu —
+  `tests/unit/test_registry_misc.py` eklendi.
+- `commands/bridge.py`'nin "not found" guard clause'ları (guild/member/
+  channel bulunamadı) — `tests/unit/test_bridge_not_found_paths.py`.
+- `discord_webapi.storage`'ın lazy `__getattr__`'ı (SQL store'ların
+  gecikmeli import'u) hiç test edilmiyordu.
+- `discord_webapi.jobs.worker.run_worker` hiç test edilmiyordu.
+
+Genel coverage %91 → %95 (`discord_webapi/__init__.py:82%`,
+`storage/sql.py:87%` gibi kalanlar çoğunlukla migration/hata-yolu
+kenar durumları — düşük öncelik). 257 test yeşil (1 ortam-bağımlı
+Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — Harici inceleme geri bildirimi: rate limiter sınırı + Redis namespace izolasyonu
 
 Önceki iki denetimi (auth/authz ve jobs/çoklu-sunucu) harici olarak
