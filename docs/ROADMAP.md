@@ -1,0 +1,207 @@
+# discord-webapi — Yol Haritası (v0.7+)
+
+> Bu dosya, `NOTES.md` (oturumlar arası kalıcı geliştirici notu) ve
+> `CHANGELOG.md` (sürüm geçmişi) ile birlikte projenin canlı planlama
+> belgesidir. Mimari "neden"ler için `/root/.claude/plans/` altındaki
+> orijinal plan dosyasına bakılır; **güncel öncelik sırası burasıdır.**
+
+## 0. Konumlandırma (değişmez çekirdek ilke)
+
+**discord-webapi, Discord bot geliştirmenin FastAPI'sidir.** Amaç:
+discord.py'nin Gateway/REST'i soyutlaması gibi, "bot + web dashboard"
+ikilisinin arasındaki tekrar eden işi (OAuth2, guild-rol yetkilendirme,
+komut↔dashboard köprüsü, canlı config, transport) soyutlamak. FastAPI'ye
+ya da discord.py'ye rakip değil; ikisinin üstüne oturan dar, opinionated
+bir katman.
+
+**Kilitli kararlar (tekrar tartışılmayacak):**
+- **Backend odaklı. UI YOK.** Gömülü dashboard bilerek minimal bir demo
+  olarak kalır; gerçek panel tüketiciye ait. UI eklemek "ekstra yük" ve
+  amaçtan sapma. (v1.0'a kadar ertelendi, muhtemelen hiç yapılmayacak.)
+- **Dokümantasyon şimdilik Türkçe.** İngilizce çeviri, proje gerçekten
+  dışarı açılacağı gün yapılır — şu an adoption yok, erken yatırım.
+- **`extras` = "yan yemek", çekirdek değil.** Yeni özellik önceliği
+  altyapıya (auth/authz/transport/ratelimits/escalation) gider; yeni bir
+  hazır komut ancak altyapıda gerçek boşluk yoksa eklenir.
+- **Üçüncü-taraf = paylaşılabilir paket konvansiyonu, plugin VM DEĞİL.**
+  (Bkz. §4 — bu kararın gerekçesi kullanıcı tarafından net verildi.)
+
+## 1. Mevcut durum değerlendirmesi (bu oturumdaki kapsamlı inceleme)
+
+### Güçlü yönler (korunacak)
+- **Tutarlı mimari desen**: her alt sistem (commands, ratelimits,
+  escalation, jobs) aynı şablonu kullanıyor — Store Protocol + Memory/SQL
+  + Transport event ile restart'sız canlı invalidation. Bir kez öğrenilen
+  desen her yerde geçerli.
+- **`rate_limiter` ve `escalation_engine` her zaman construct ediliyor**
+  (dashboard API'si opt-in olsa bile), böylece bot-süreci kodundan direkt
+  kullanılabiliyor. Doğru karar.
+- **`skeletons` yaklaşımı** (tam komut yerine ince decorator) vizyonla
+  birebir uyumlu; `extras/` altında birleştirme temizledi.
+- **Tip güvenliği**: strict mypy temiz, 85 kaynak dosya.
+- **Test disiplini**: 395 test (1'i ortam-bağımlı Postgres hariç yeşil).
+- **Güvenlik**: her genişleme turundan sonra denetim yapılmış, gerçek
+  bug'lar bulunup düzeltilmiş (refresh-lock sızıntısı, Redis reconnect,
+  SQL upsert race, kaybolan pending job'lar, ve bu oturumda 4 `extras`
+  bug'ı + `required_app_role` ölü alanı + ratelimit isim çakışması).
+
+### Zaten çözülmüş (Grok'un değindiği ama artık geçerli olmayan)
+- **Magic string'ler**: RPC komutları zaten sabit (`COMMAND_GET_MEMBER`,
+  `COMMAND_LIST_COMMAND_STATUS` ...), `EscalationAction` zaten `StrEnum`.
+  Ek Enum/Literal çalışması gereksiz.
+- **`_commit_upsert` race'i**: Postgres+MySQL için çözülmüş ve test var
+  (sadece dokümantasyonda vurgulanacak — bkz. P1).
+- **Redis namespace**: multi-tenant izolasyon için eklendi (dokümantasyon
+  netleştirilecek — bkz. P1).
+
+### Açık boşluklar (bu yol haritasının konusu)
+Aşağıda önceliklendirildi.
+
+---
+
+## 2. Öncelik sıralı yol haritası
+
+### P0 — Kritik bug/eksik
+_Şu an boş._ Bilinen tüm gerçek bug'lar bu oturumda kapatıldı.
+
+### P1 — DX + eksikler (bir sonraki tur)
+
+**P1.1 — `extras` ergonomik export'ları.**
+Şu an `from discord_webapi.extras.ban import setup as setup_ban` gerekiyor.
+`extras/__init__.py`'ye kontrollü, yan-etkisiz export ekle: `from
+discord_webapi.extras import ban, automod, warn` (modül referansı, `setup`
+çağrısını yine kullanıcı yapar — "import registers nothing" ilkesi
+korunur). Tek dosyaya bağımlılık eklemeden, sadece isim erişimi.
+
+**P1.2 — Daha net hata rehberliği.**
+`enable_jobs=True` ama `job_queue=None` gibi durumlarda hata mesajı "ne
+yapmalıyım"ı söylesin (şu an `RuntimeError("job_queue")` — genişletilecek).
+Aynısı: `required_app_role` ayarlı ama `app_role_cache` yok (şu an sessiz
+fail-closed — bir uyarı log'u eklenebilir).
+
+**P1.3 — İki eksik örnek.**
+- `examples/skeleton_custom_command/`: `skeletons.rate_limited` ile kendi
+  `rate_limit_key`'ini kullanarak sıfırdan komut yazma (README'deki
+  senaryoların çalışan tek-dosya hâli).
+- `examples/hybrid_moderation/`: `automod` (`on_violation`) → `warn` +
+  `EscalationEngine` üçlüsünü bir arada kullanan tam hibrit moderasyon
+  örneği. (`full_featured_bot` bunu içeriyor ama odaklı bir örnek daha
+  öğretici.)
+
+**P1.4 — Audit log kapsamını genişlet (opt-in).**
+Şu an sadece `command.set_override`/`app_role.set`/`app_role.delete`
+loglanıyor. `warn`, `escalation` tetiklenmesi, `automod` ihlali gibi
+kritik moderasyon aksiyonları için de opsiyonel audit kaydı — "profesyonel
+bot" vizyonu için önemli. Her biri opt-in, `AuditLogger`'ı ilgili
+`setup()`/engine'e geçirerek (gizli bağımlılık yok).
+
+**P1.5 — Dokümantasyon netleştirmeleri (kod değişikliği yok).**
+- `docs/GUVENLIK.md`: Redis namespace "namespacing ≠ authentication;
+  gerçek mutually-untrusted-tenant izolasyonu için ayrı Redis DB/ACL şart"
+  uyarısını belirginleştir.
+- `docs/DAGITIM.md`: MySQL/MariaDB'nin `_commit_upsert` garantisinin
+  Postgres ile aynı olduğunu ve `DATETIME(fsp=6)` mikrosaniye çözümünü
+  vurgula.
+
+### P1.5 — Observability (opt-in, üretim için)
+Transport RPC'leri, job execution, escalation tetiklenmeleri, komut
+invocation'ları için **opsiyonel** metrik/tracing kancaları. Ağır bir
+bağımlılık dayatmadan: basit bir `MetricsSink` Protocol'ü (no-op default),
+isteyene `PrometheusMetricsSink` / OpenTelemetry adaptörü. "Kaç job
+çalıştı, kaç escalation tetiklendi, RPC latency" üretimde çok istenen
+şeyler. `discord-webapi[metrics]` extra'sı olarak. **Diğer her şey gibi:
+default kapalı, çekirdeğe bağımlılık eklemez.**
+
+### P2 — Teknik borç
+**P2.1 — `DiscordWebAPI.__init__` (179 satır) ve `quickstart` refactor.**
+Store kurulumunu (`_build_stores`), engine kurulumunu (`_create_engine`)
+yardımcı metodlara böl. Davranış değişmez, sadece okunabilirlik.
+
+**P2.2 — `SimpleNamespace` fake'lemesini prod kodundan ayıkla.**
+Çoğu zaten test'te (kabul edilebilir); prod kodunda kalan varsa gerçek
+tiplerle değiştir.
+
+**P2.3 — Sürüm numarasını gerçek olgunlukla senkronla.**
+`pyproject.toml` hâlâ `0.1.0` ama CHANGELOG "v0.6" vizyonunda. Bir `v1.0`
+API-stabilite hedefi belirle: hangi public API'lerin kırılmayacağını
+dokümante et (framework olarak adoption bunu gerektirir). **Not: bu, PyPI
+publish kararıyla birlikte kullanıcı tarafından ayrı repoda ele alınacak
+— şimdilik sadece "hangi API stabil" listesini hazırla.**
+
+---
+
+## 3. v0.7 — Üçüncü-taraf uyumlu paket ekosistemi (plugin DEĞİL)
+
+**Kullanıcının net vizyonu:** İnsanlar bizim `extras`'ta yaptığımız gibi
+tam kapasite bot altyapıları yazabilsin — bir "eğlence botu altyapısı",
+"genel bot altyapısı", profesyonel botlara kadar — ve bunları paylaşıp,
+başkaları komut satırıyla projesine yükleyip import edebilsin.
+
+**Kritik kısıt (kullanıcı kararı):** Bu bir **plugin VM / runtime izolasyon
+sistemi DEĞİL.** Üçüncü-taraf kod çekirdeğe (core internals'a) erişemez,
+özel bir runtime'a ihtiyaç duymaz, "ağır makineler/sistemler" gerektirmez.
+Bunun yerine:
+
+**Mimari içgörü — neden bu "bedava" geliyor:** Bizim kendi `extras`
+paketimiz zaten yalnızca **public API** kullanıyor (`setup(bot, **kwargs)`,
+`GuildRateLimiter`, `EscalationEngine`, Store Protocol'leri, `skeletons`
+decorator'ları). Yani üçüncü-taraf bir paket, mimari olarak birinci-taraf
+bir paketten **ayırt edilemez** — ikisi de aynı sözleşmeyi izler, ikisi de
+sadece dışa açık yüzeyi kullanır. Bu yüzden "plugin sistemi" diye ayrı bir
+runtime'a gerek yok: üçüncü-taraf paket sadece, dokümante edilmiş
+konvansiyonu izleyen **sıradan bir Python paketi**.
+
+**v0.7 kapsamı (aşamalı):**
+1. **Konvansiyonu resmîleştir** (`docs/PAKET_YAZMA.md`): "discord-webapi
+   uyumlu paket" nedir? Tek giriş noktası (`setup(bot, **kwargs)` ya da
+   decorator), gizli bağımlılık yok, kendi `Store` Protocol'ü + Memory/SQL,
+   bizim public API'mize karşı yazılır, kendi `create_all()`'ı çekirdek
+   şemadan bağımsız. (Bu kurallar zaten `extras`'ta uygulanıyor — sadece
+   dışa dönük belgelenecek.)
+2. **Scaffold CLI** (`python -m discord_webapi.scaffold new-extension
+   <isim>`): konvansiyona uygun bir iskelet paket üretir (setup fonksiyonu,
+   opsiyonel store, test şablonu, README). "Komut satırıyla import" DX'inin
+   yazma tarafı.
+3. **Hafif manifest (opsiyonel)**: paketin adı/sürümü/yazarı/uyumlu
+   discord-webapi aralığı için basit bir `discord_webapi_extension` entry
+   point ya da `pyproject` metadata konvansiyonu. Discovery için — kod
+   çalıştırma/izolasyon için DEĞİL. Kurulum sıradan `pip install <paket>`.
+4. **(Uzun vade, opsiyonel) Topluluk index'i**: paketleri listeleyen bir
+   dizin (bizim host etmediğimiz, kod çalıştırmayan — sadece "şu paketler
+   var" diyen bir metadata listesi). Güvenlik yüzeyi minimal çünkü biz kod
+   barındırmıyoruz; kurulum `pip`'in kendi güven modeliyle.
+
+**Bilinçli olarak KAPSAM DIŞI:**
+- Manifest'ten kod çalıştıran bir installer/resolver VM.
+- Çekirdek internals'a erişim veren bir plugin API'si.
+- Sandbox'lı üçüncü-taraf kod yürütme.
+Bunların hepsi "ağır sistem" — kullanıcı bunları istemiyor ve güvenlik
+maliyeti değeri aşıyor.
+
+---
+
+## 4. Uzun vade / bilinçli olarak ertelenen
+
+| Madde | Durum | Gerekçe |
+|---|---|---|
+| **Gömülü dashboard UI** (enable/disable + cooldown paneli) | Ertelendi (belki hiç) | Backend odak; UI ekstra bakım yükü, amaçtan sapma. |
+| **İngilizce dokümantasyon** | Ertelendi | Adoption yok; proje dışa açılınca yapılır. |
+| **Tam plugin/manifest VM** | Reddedildi | Güvenlik + karmaşıklık yüksek; §3'teki hafif konvansiyon yeterli. |
+| **Multi-bot routing** (tek dashboard'dan N farklı bot) | Ertelendi | Ayrı tasarım turu (guild_id→bot routing) gerektirir; gerçek talep yok. |
+| **Discord sharding** (`AutoShardedClient`) | Ertelendi | Henüz talep yok. |
+| **RedisTransport → Streams** (competing-consumer) | Ertelendi | Mevcut pub/sub yeterli; gerçek çoklu-instance ihtiyacı doğunca. |
+| **JWT/stateless bearer** (mobil/3rd-party) | Opsiyonel ek | Mevcut opak-session tek yol; talep olursa `auth/jwt.py`. |
+
+---
+
+## 5. Önerilen yürütme sırası (bir sonraki turlar)
+
+1. **P1.1 + P1.2** (extras export'ları + hata rehberliği) — ucuz, yüksek DX getirisi, düşük risk.
+2. **P1.3** (iki örnek) — vizyonu somutlaştırır, öğreticidir.
+3. **P1.4** (audit genişletme) — "profesyonel bot" yönü.
+4. **P1.5 + P1.5-obs** (docs + opsiyonel metrics) — üretim olgunluğu.
+5. **P2** (refactor + versiyon disiplini) — teknik borç.
+6. **v0.7** (üçüncü-taraf konvansiyon + scaffold CLI) — ekosistem tohumu.
+
+Her madde her zamanki gibi: tam test + ruff + mypy temiz, ayrı commit,
+CHANGELOG/NOTES güncel.

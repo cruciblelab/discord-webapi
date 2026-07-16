@@ -1,5 +1,35 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## Kapsamlı inceleme + uzun yol haritası: `docs/ROADMAP.md` (bu oturumda)
+
+Kullanıcının isteğiyle tam kapsamlı bir mimari/kod incelemesi yapıldı ve
+Grok'un önerileri değerlendirilip (doğru olanlar alındı, kullanıcının
+kısıtlarına aykırı olanlar reddedildi) önceliklendirilmiş uzun bir yol
+haritası **`docs/ROADMAP.md`** olarak repoya yazıldı. Bundan sonra güncel
+öncelik sırası için önce oraya bakılır.
+
+**Grok önerilerinden ALINANLAR**: extras ergonomik export'ları, daha net
+hata rehberliği, iki eksik örnek (skeleton-custom + automod/warn/escalation
+hibrit), audit log kapsamının genişletilmesi (opt-in), opsiyonel
+observability (metrics/tracing, `[metrics]` extra'sı), `__init__`/
+`quickstart` refactor'u, Redis-izolasyon + MySQL-upsert dokümantasyon
+vurguları, versiyon disiplini.
+
+**Grok önerilerinden REDDEDİLEN/ERTELENEN (kullanıcı kararıyla)**: gömülü
+dashboard UI (backend odak, UI ekstra yük), İngilizce docs (adoption yok,
+erken), tam plugin/manifest VM (güvenlik+karmaşıklık yüksek — kullanıcı
+"pluginler core'a etki etmesin, ağır sistem istemeyiz" dedi). Ayrıca
+Grok'un "magic string'leri Enum yap" önerisi zaten büyük ölçüde çözülmüş
+(RPC komutları sabit, `EscalationAction` zaten `StrEnum`) — ek iş yok.
+
+**Üçüncü-taraf vizyonu netleşti (v0.7)**: plugin VM değil, "discord-webapi
+uyumlu paket konvansiyonu". Kritik içgörü: bizim `extras`'ımız zaten
+yalnızca public API kullanıyor, dolayısıyla üçüncü-taraf bir paket
+birinci-taraftan mimari olarak ayırt edilemez — özel bir runtime/izolasyon
+gerekmiyor. Kapsam: konvansiyonu belgelemek + scaffold CLI + opsiyonel
+hafif manifest (discovery için, kod çalıştırma için değil). Detay:
+`docs/ROADMAP.md` §3.
+
 ## İki bilinen boşluk düzeltildi: `required_app_role` + ratelimit isim çakışması (bu oturumda)
 
 Önceki oturumun sonunda dış bir gözden geçirmenin işaret ettiği iki somut
