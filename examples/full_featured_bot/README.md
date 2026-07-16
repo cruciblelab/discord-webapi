@@ -14,7 +14,7 @@ checklist.
   every command-override and AppRole change.
 - `enable_cookie_consent=True` -- the bundled dashboard shows a
   cookie-consent banner with custom message text.
-- Every builtin from `discord_webapi.builtins`: `ban`, `kick`, `timeout`,
+- Every builtin from `discord_webapi.extras`: `ban`, `kick`, `timeout`,
   `warn` (with `auto_timeout_after=3` -- three warnings auto-mutes),
   `role_assign` (`/role-add`/`/role-remove`), `automod` (a whole
   subpackage of independent checks -- banned words, spam, mention-spam,
@@ -25,7 +25,7 @@ checklist.
 
 - `enable_ratelimits_api=True` -- `PUT/DELETE /api/guilds/{id}/ratelimits/{key}`
   dashboard endpoints. `main.py`'s hand-written `/ping` command
-  demonstrates the "hybrid" use case: it's not a `discord_webapi.builtins`
+  demonstrates the "hybrid" use case: it's not a `discord_webapi.extras`
   command and doesn't use `CommandRegistry`'s own per-command cooldown --
   it calls `GuildRateLimiter` directly (`app.state.discord_webapi_ratelimiter`),
   keyed as `"ping"`, per-server-configurable from the dashboard.

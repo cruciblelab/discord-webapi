@@ -1,6 +1,6 @@
 """`EscalationEngine` -- a generic "N violations -> do this" ladder,
-usable from any moderation surface (a hand-written command, `builtins.warn`,
-`builtins.automod`'s `on_violation` hook, ...) instead of each one
+usable from any moderation surface (a hand-written command, `extras.warn`,
+`extras.automod`'s `on_violation` hook, ...) instead of each one
 inventing its own hardcoded threshold/action.
 
 No thresholds or actions are ever built in. Every rung of every ladder is

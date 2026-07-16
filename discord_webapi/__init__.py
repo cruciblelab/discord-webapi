@@ -297,7 +297,7 @@ class DiscordWebAPI:
             default_per_seconds=default_rate_limit_per_seconds,
         )
         # Same reasoning: escalation actions (timeout/kick/ban) are usually
-        # applied from bot-process code (builtins.warn, builtins.automod's
+        # applied from bot-process code (extras.warn, extras.automod's
         # on_violation hook, your own commands), so this is always
         # constructed too -- enable_escalation_api only gates the
         # dashboard CRUD endpoints, not the object itself.

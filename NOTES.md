@@ -1,5 +1,57 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## `builtins` + `skeletons` → tek `discord_webapi.extras` paketi (bu oturumda yapıldı)
+
+Dış bir gözden geçirme (ChatGPT'ye sorulup kullanıcının paylaştığı geri
+bildirim) şunu vurguladı: kütüphane "discord.py'nin FastAPI'si" (dar,
+keskin bir bot↔dashboard köprüsü) hedefinden, `builtins`/`automod`/`jobs`/
+`audit`/`consent` gibi giderek genişleyen bir "hazır moderasyon botu"
+katmanına doğru kayıyor olabilir. Kullanıcı bunu tam olarak "amaçtan
+sapma" olarak görmedi (bu builtin'lerin çoğu kendi isteğiyle eklendi) ama
+paket sınırının bulanıklaştığını kabul etti: `builtins` ve `skeletons`
+aslında aynı şeyin ("çekirdek değil, opsiyonel") iki farklı derinliği
+olmasına rağmen, iki ayrı üst-seviye paket olarak duruyorlardı, isimleri
+de bu ilişkiyi yansıtmıyordu.
+
+Karar (kullanıcıyla netleştirildi, `AskUserQuestion` ile): tek bir
+`discord_webapi.extras` paketi açıldı, `builtins`'in tüm içeriği (ban,
+kick, timeout, warn, welcome, role_assign, automod/) doğrudan `extras/`
+altına, `skeletons`'ın tüm içeriği `extras/skeletons/` alt paketine
+taşındı — SADECE dosya taşıma + import path güncellemesi, hiçbir kod
+mantığı/davranış değişmedi. Kapsam bilinçli olarak dar tutuldu (kullanıcı
+"sadece klasör taşıma + import güncelleme" seçeneğini seçti) — README'lerin
+birleştirilmesi ve `pyproject.toml`'a ayrı bir `[extras]` extra'sı
+eklenmesi ayrı seçenekler olarak sunuldu ama seçilmedi (extras paketinin
+şu an kendine özgü bir bağımlılığı yok, eklemenin şu an katacağı değer
+yok).
+
+`builtins/README.md` + `skeletons/README.md` yine de tek bir
+`extras/README.md`'de birleştirildi (üst seviye "tam komutlar vs
+iskeletler" ayrımını açıklayan bir üst-yazı ile), `skeletons/README.md`
+kendi 10-senaryolu derinlemesine bölümüyle `extras/skeletons/README.md`
+olarak aynen korundu.
+
+Test dosyaları da aynı yapıyı yansıtacak şekilde taşındı:
+`tests/unit/test_builtins_*.py` → `tests/unit/extras/test_*.py`,
+`tests/unit/test_automod_*.py` → `tests/unit/extras/automod/test_*.py`,
+`tests/unit/test_skeletons_ping.py` → `tests/unit/extras/skeletons/test_ping.py`,
+`tests/integration/test_skeletons_deep_dive.py` →
+`tests/integration/extras/test_skeletons_deep_dive.py`. 381 test yeşil
+(1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz — taşıma
+sırasında hiçbir test bozulmadı.
+
+**Henüz yapılmayan, gözden geçirmenin işaret ettiği diğer maddeler**
+(kullanıcıyla konuşulacak, bu oturumda ele alınmadı): `ratelimit.py`
+(eski `TokenBucketLimiter`, `commands/`'ın cooldown rate-limit'i) ile
+`ratelimits/` (yeni `GuildRateLimiter` paketi) arasındaki isim çakışması
+kafa karıştırıcı bulundu; `CommandOverride.required_app_role` modelde
+tanımlı+persist ediliyor ama hiçbir zaman PATCH edilemiyor/enforce
+edilmiyor (ölü alan); `pyproject.toml` hâlâ `0.1.0` diyor ama CHANGELOG
+"v0.6" vizyonundan bahsediyor. İngilizce dokümantasyon (README/docs/
+dashboard HTML hâlâ tamamen Türkçe) kullanıcı tarafından bilinçli olarak
+şimdilik ertelendi ("adoption henüz yok, projeyi gerçekten dışarı
+açacağım gün yaparım").
+
 ## Strateji netleşmesi: `discord_webapi.skeletons` — "demir/rebar", tam komut değil (bu oturumda eklendi)
 
 Kullanıcının yönlendirdiği strateji: bundan sonra öncelik, Discord'da

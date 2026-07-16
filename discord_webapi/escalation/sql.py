@@ -3,7 +3,7 @@
 Requires the `discord-webapi[sql]` extra. **Own independent tables**, not
 bolted onto `discord_webapi.storage.sql`'s shared schema -- importing this
 module never creates a table for someone who only uses the in-memory
-stores, same principle as `discord_webapi.builtins.warn.SQLWarnStore`.
+stores, same principle as `discord_webapi.extras.warn.SQLWarnStore`.
 """
 
 from __future__ import annotations

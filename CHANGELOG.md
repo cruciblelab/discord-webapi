@@ -2,6 +2,37 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `discord_webapi.builtins` + `discord_webapi.skeletons` → tek `discord_webapi.extras` paketi
+
+### Değişenler (BREAKING — henüz yayınlanmamış sürüm, migration gerekmiyor)
+
+Kütüphanenin "çekirdek" (auth/authz/commands/transport/storage/
+ratelimits/escalation — dashboard↔bot köprüsü) ile "opsiyonel eklenti"
+(hazır komutlar, iskeletler) arasındaki paket sınırı bulanıklaşmıştı: iki
+ayrı üst-seviye paket (`builtins`, `skeletons`) aynı kavramın (çekirdek
+değil, opsiyonel) iki farklı derinliğini temsil ediyordu ama isimleri bu
+ilişkiyi göstermiyordu. İkisi tek bir pakette birleştirildi:
+
+- `discord_webapi.builtins` → `discord_webapi.extras` (ban/kick/timeout/
+  warn/welcome/role_assign/automod — "tam" hazır komutlar, aynı davranış).
+- `discord_webapi.skeletons` → `discord_webapi.extras.skeletons` (rate-limit
+  decorator'ı — "iskelet", aynı davranış), artık `extras`'ın bir alt
+  paketi olarak, "aynı çatı altında farklı derinlik" ilişkisini
+  isimlendirmede de netleştiriyor.
+- `builtins/README.md` + `skeletons/README.md` → tek `extras/README.md`
+  (üst seviye, "tam vs iskelet" ayrımını açıklıyor) + `extras/skeletons/README.md`
+  (iskelet-özel convention ve 10 senaryo, olduğu gibi korundu).
+- Sadece dosya taşıma + import path güncellemesi — hiçbir davranış,
+  fonksiyon imzası, ya da test mantığı değişmedi. Tüm testler taşınan
+  konumlarında (`tests/unit/extras/`, `tests/unit/extras/automod/`,
+  `tests/unit/extras/skeletons/`, `tests/integration/extras/`) aynı
+  şekilde geçiyor.
+- Henüz PyPI'da yayınlanmamış bir sürüm olduğu için bu, dışarıdan kimseyi
+  etkilemeyen bir iç yeniden adlandırma — "breaking change" notu ileride
+  bir sürüm numarasıyla yayınlanırsa diye kayıt altında.
+
+381 test yeşil (1 ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — `discord_webapi.skeletons` — "demir/rebar" komut altyapısı, tam komut değil
 
 ### Eklenenler

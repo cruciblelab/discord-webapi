@@ -27,13 +27,13 @@ from fastapi.responses import HTMLResponse
 from discord_webapi import DiscordWebAPI
 from discord_webapi.authz import ChannelContext, require_channel_permission
 from discord_webapi.bot import default_intents
-from discord_webapi.builtins.automod import setup as setup_automod
-from discord_webapi.builtins.ban import setup as setup_ban
-from discord_webapi.builtins.kick import setup as setup_kick
-from discord_webapi.builtins.role_assign import setup as setup_role_assign
-from discord_webapi.builtins.timeout import setup as setup_timeout
-from discord_webapi.builtins.warn import setup as setup_warn
-from discord_webapi.builtins.welcome import setup as setup_welcome
+from discord_webapi.extras.automod import setup as setup_automod
+from discord_webapi.extras.ban import setup as setup_ban
+from discord_webapi.extras.kick import setup as setup_kick
+from discord_webapi.extras.role_assign import setup as setup_role_assign
+from discord_webapi.extras.timeout import setup as setup_timeout
+from discord_webapi.extras.warn import setup as setup_warn
+from discord_webapi.extras.welcome import setup as setup_welcome
 
 bot = commands.Bot(command_prefix="!", intents=default_intents(), help_command=None)
 
@@ -41,7 +41,7 @@ bot = commands.Bot(command_prefix="!", intents=default_intents(), help_command=N
 @bot.hybrid_command(name="ping", description="Replies with pong")
 async def ping(ctx: commands.Context) -> None:
     # Demonstrates the "hybrid" use case: a hand-written command (not a
-    # discord_webapi.builtins command, not CommandRegistry's own cooldown
+    # discord_webapi.extras command, not CommandRegistry's own cooldown
     # system) using our GuildRateLimiter infrastructure directly, keyed
     # independently ("ping", not tied to CommandRegistry at all) and
     # configurable per-server from the dashboard:
@@ -64,7 +64,7 @@ async def say(ctx: commands.Context, message: str) -> None:
     await ctx.reply(message)
 
 
-# Every builtin, wired with its defaults -- see discord_webapi/builtins/
+# Every builtin, wired with its defaults -- see discord_webapi/extras/
 # README.md for what each keyword argument changes. Feel free to comment
 # any of these out or pass different kwargs while testing.
 setup_ban(bot)
@@ -75,7 +75,7 @@ setup_role_assign(bot)
 # banned_words_list=[] means the word filter does nothing yet -- add real
 # words to see it in action. Spam and mention-spam filters are on by
 # default (5 messages/10s, 5 mentions); invite/link/caps/emoji filters
-# are off by default -- see discord_webapi/builtins/README.md for all of
+# are off by default -- see discord_webapi/extras/README.md for all of
 # them.
 async def _escalate_automod_violation(message: discord.Message, reason: str) -> None:
     # Demonstrates the other hybrid use case: automod.setup()'s

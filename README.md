@@ -90,7 +90,7 @@ otomatik senkronizasyonunu kurar. Detaylar ve tam bir örnek için
 - **Oturum yönetimi** — aktif oturumları listele/iptal et ("her yerden
   çıkış yap").
 - **Audit log ve cookie-consent kaydı** — opt-in, isteğe bağlı.
-- **`discord_webapi.builtins`** — hazır ban/kick/timeout/warn/welcome
+- **`discord_webapi.extras`** — hazır ban/kick/timeout/warn/welcome
   komutları, serbestçe import edilebilir ya da sıfırdan yazılabilir.
 - **WebSocket canlı relay** — dashboard'a anlık command-config güncellemesi.
 - **Çoklu sunucu/makine deployment** — bot ve web dashboard'ı ayrı

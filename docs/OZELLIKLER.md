@@ -135,7 +135,7 @@ api.install(app, enable_cookie_consent=True, cookie_consent_message="...")
 kaydı. Notice'ın metni/tasarımı tamamen tüketiciye ait; kütüphane sadece
 kaydı tutuyor, davranış dayatmıyor.
 
-## Hazır komutlar (`discord_webapi.builtins`)
+## Hazır komutlar (`discord_webapi.extras`)
 
 Serbestçe import edilebilir, opsiyonel, `setup(bot, **kwargs)` ile açıkça
 çağrılan komutlar — otomatik yükleme yok:
