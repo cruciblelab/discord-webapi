@@ -35,9 +35,11 @@ def check_role_hierarchy(
     """
     me = ctx.guild.me if ctx.guild is not None else None
     if me is not None and member.top_role >= me.top_role:
-        return "I can't do that -- their highest role outranks mine."
+        return "I can't do that -- their highest role outranks mine (or matches it)."
     if isinstance(ctx.author, discord.Member) and member.top_role >= ctx.author.top_role:
-        return "You can't do that -- their highest role outranks yours."
+        if member.id == ctx.author.id:
+            return "You can't do that to yourself -- your own role can't outrank (or match) itself."
+        return "You can't do that -- their highest role outranks yours (or matches it)."
     return None
 
 

@@ -13,17 +13,19 @@ from discord_webapi.extras._shared import (
 )
 
 
-def _fake_ctx(*, author_top_role: int = 5, bot_top_role: int = 10) -> MagicMock:
+def _fake_ctx(*, author_top_role: int = 5, bot_top_role: int = 10, author_id: int = 1) -> MagicMock:
     ctx = MagicMock()
     ctx.author = MagicMock(spec=discord.Member)
     ctx.author.top_role = author_top_role
+    ctx.author.id = author_id
     ctx.guild.me.top_role = bot_top_role
     return ctx
 
 
-def _fake_member(*, top_role: int = 1) -> MagicMock:
+def _fake_member(*, top_role: int = 1, member_id: int = 2) -> MagicMock:
     member = MagicMock(spec=discord.Member)
     member.top_role = top_role
+    member.id = member_id
     member.send = AsyncMock()
     return member
 
@@ -51,6 +53,20 @@ def test_check_role_hierarchy_rejects_target_outranking_the_moderator() -> None:
     error = check_role_hierarchy(ctx, member)
 
     assert error is not None and "outranks yours" in error
+
+
+def test_check_role_hierarchy_rejects_targeting_yourself_with_a_clear_message() -> None:
+    """Regression: a moderator's own role is always == their own role, so
+    the equal-rank branch used to fire with a generic "outranks yours"
+    message even for a self-target -- misleading, since it isn't actually
+    higher. Self-targeting gets its own clearer message instead."""
+    ctx = _fake_ctx(author_top_role=5, bot_top_role=100, author_id=42)
+    member = _fake_member(top_role=5, member_id=42)
+
+    error = check_role_hierarchy(ctx, member)
+
+    assert error is not None
+    assert "yourself" in error
 
 
 def test_check_role_assignable_allows_a_role_below_both() -> None:
