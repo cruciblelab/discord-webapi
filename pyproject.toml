@@ -55,6 +55,9 @@ dev = [
 [project.scripts]
 # Scaffold a new third-party extension package skeleton.
 discord-webapi-scaffold = "discord_webapi.extensions.scaffold:main"
+# Move discord-webapi's SQL data from one database to another (needs the
+# `sql` extra installed for whichever DBAPI driver(s) --from/--to require).
+discord-webapi-migrate = "discord_webapi.tools.migrate:main"
 
 [project.urls]
 Repository = "https://github.com/cruciblelab/discord-webapi"

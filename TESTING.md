@@ -336,6 +336,22 @@ maddelerin (1-21) çoğunu bu konsoldan curl'süz tekrarlayabilirsin.
 - [ ] "Çıkış" butonuna tıkla → oturum durumunun kırmızıya döndüğünü, bir sonraki API çağrısının 401 döndüğünü doğrula.
 - [ ] (7 sunucun varsa) Guild ID kutusunu değiştirip aynı konsolu farklı bir sunucuya karşı kullan — restart gerekmediğini, her sunucunun kendi komut/rate-limit/escalation ayarlarının bağımsız olduğunu doğrula.
 
+## 23. Veritabanı taşıma CLI'si (`discord-webapi-migrate`, v0.7)
+
+Test sırasında biriken SQLite verisini (session'lar, kurallar, uyarılar)
+gerçek bir MariaDB/Postgres'e taşımak istersen:
+
+- [ ] Hedef veritabanını (boş) hazırla, `pip install -e ".[sql-mysql]"` (ya da `sql-postgres`).
+- [ ] Onaysız/dry-run hissi almak için önce `--yes` VERMEDEN çalıştır:
+  ```
+  discord-webapi-migrate run --from sqlite+aiosqlite:///examples/test_console/dashboard.sqlite3 --to mysql+aiomysql://kullanici:sifre@host/db
+  ```
+  → tabloların/satır sayılarının listelendiğini, `y/N` onayı istediğini doğrula. `N` (ya da Enter) ile iptal et → hiçbir şey yazılmadığını doğrula.
+- [ ] Tekrar çalıştır, bu sefer onayla (`y`) → checkpoint dosyasının oluşturulduğunu (`dwa_migrate_checkpoint_*.json`), satırların hedefe yazıldığını doğrula.
+- [ ] Hedefteki bir tabloyu (ör. bir MySQL client'ıyla) elle boz/sil → `discord-webapi-migrate restore <checkpoint-dosyası> --to <hedef-url>` çalıştır → hedefin migration öncesi haline döndüğünü doğrula.
+- [ ] `--no-checkpoint` ile tekrar çalıştır → checkpoint dosyası oluşturulmadığını doğrula.
+- [ ] Kaynak SQLite dosyasının **hiç değişmediğini** (checksum/dosya boyutu aynı) doğrula — araç sadece okuyor.
+
 ---
 
 Bir adım beklenmedik davranış gösterirse (özellikle WebSocket round-trip,

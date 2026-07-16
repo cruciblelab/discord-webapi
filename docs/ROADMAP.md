@@ -135,6 +135,22 @@ dokümante et (framework olarak adoption bunu gerektirir). **Not: bu, PyPI
 publish kararıyla birlikte kullanıcı tarafından ayrı repoda ele alınacak
 — şimdilik sadece "hangi API stabil" listesini hazırla.**
 
+**P2.4 — `discord_webapi.tools.migrate`** ✅ **TAMAMLANDI** (fiziksel test
+turunda kullanıcı talebiyle eklendi). SQLite'tan MariaDB/Postgres'e (ya da
+herhangi iki SQLAlchemy URL'i arasında) veri taşıyan, şema/tablo bilgisini
+hiç hardcode etmeyen (SQLAlchemy introspection ile kaynaktaki her tabloyu
+bulup kopyalayan) bir CLI. Onay ister (`--yes` olmadan), **checkpoint
+varsayılan açık** (hedefin ön-durumunu yerel JSON'a kaydeder,
+`discord-webapi-migrate restore` ile geri dönülebilir), `--no-checkpoint`
+ile kapatılabilir. `discord_webapi/tools/` — terminal-bazlı operatör
+araçları için ayrı, yeni bir alt paket (bot davranışı olan `extras`'tan ve
+çekirdek altyapıdan ayrı; gelecekteki başka CLI araçları da buraya
+eklenecek). Gerçek SQLite↔SQLite round-trip testiyle doğrulandı (migrate
+→ checkpoint → simüle edilmiş kötü yazma → restore → temiz geri dönüş) —
+bu süreçte checkpoint'in kendi bir gerçek bug'ı bulundu (datetime'lar
+JSON'a string olarak yazılıyordu ama restore'da tekrar `datetime`
+nesnesine çevrilmiyordu, SQLite bunu reddediyordu) ve düzeltildi.
+
 ---
 
 ## 3. v0.7 — Üçüncü-taraf uyumlu paket ekosistemi (plugin DEĞİL)

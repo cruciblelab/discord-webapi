@@ -85,6 +85,45 @@ gerekmiyor.
 `register_worker()` çağırmak `RuntimeError` fırlatır), çünkü worker'ların
 dinlediği kuyruk listesi `start()` anında sabitleniyor.
 
+## 4. Veritabanı taşıma (ör. SQLite → MariaDB/Postgres)
+
+`discord-webapi-migrate` (`discord_webapi.tools.migrate`) — geliştirme
+sırasında kullandığın SQLite dosyasından üretim veritabanına (MariaDB,
+MySQL, Postgres) tek seferlik veri taşıması için. Şema/tablo bilgisini
+hardcode etmez — kaynak veritabanında ne varsa (çekirdek store'lar,
+`escalation`, `extras.warn`'ın `SQLWarnStore`'u, hatta üçüncü-taraf bir
+extension'ın kendi tablosu) SQLAlchemy'nin kendi introspection'ıyla
+bulur ve kopyalar.
+
+```bash
+pip install "discord-webapi[sql-mysql]"   # hedefin sürücüsü
+discord-webapi-migrate run \
+  --from sqlite+aiosqlite:///dashboard.sqlite3 \
+  --to mysql+aiomysql://kullanici:sifre@host/veritabani
+```
+
+Güvenlik tasarımı:
+- **Kaynağa asla yazmaz**, sadece okur.
+- `--yes` verilmedikçe **onay ister** (satır sayılarını gösterip sorar).
+- **Checkpoint varsayılan olarak açık**: yazmadan önce hedefte o an ne
+  varsa (yeniden çalıştırıyorsan boş olmayabilir) yerel bir JSON dosyasına
+  kaydeder. Bir şeyler ters giderse:
+  ```bash
+  discord-webapi-migrate restore dwa_migrate_checkpoint_....json --to <hedef-url>
+  ```
+  ile hedefi tam o ana geri döndürürsün. Tekrarlanan/zararsız çalıştırmalar
+  için `--no-checkpoint` ile kapatılabilir.
+- **Checkpoint, genel bir veritabanı yedeği DEĞİL** — sadece
+  discord-webapi'nin kendi tablolarını kapsar. Kritik bir taşımadan önce
+  yine de veritabanının kendi yedekleme aracıyla (`mysqldump`/`pg_dump`/
+  dosya kopyası) tam bir yedek al.
+
+Kendi veritabanı sistemini (MongoDB, kendi API'n, ne istersen) kullanmak
+istersen bu araca hiç ihtiyacın yok — her `Store` bir `Protocol`
+(`discord_webapi/storage/base.py`), miras almadan aynı metodları
+uygulayan bir sınıf yazıp constructor'a (`session_store=`, `rate_limit_store=`,
+...) geçmen yeterli; kütüphanenin geri kalanı hiç fark etmez.
+
 ## Özet tablo
 
 | Senaryo | Transport | Süreçler |

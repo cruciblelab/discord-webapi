@@ -2,6 +2,43 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `discord_webapi.tools.migrate`: veritabanı taşıma CLI'si + `tools/` alt paketi
+
+### Eklenenler
+
+- **`discord_webapi/tools/`**: terminal-bazlı operatör araçları için yeni
+  bir alt paket — bot davranışı olan `extras`'tan ve çekirdek altyapıdan
+  ayrı (farklı kullanım şekli: `setup(bot, ...)` çağrısı değil, tek
+  seferlik bir CLI komutu). Gelecekteki benzer araçlar buraya eklenecek.
+- **`discord-webapi-migrate`** (`discord_webapi.tools.migrate`): bir
+  SQLAlchemy URL'inden diğerine (ör. yerel SQLite'tan MariaDB/Postgres'e)
+  tüm verileri taşıyan CLI. Şema/tablo bilgisini hiç hardcode etmiyor —
+  kaynak veritabanında ne varsa (çekirdek store'lar, `escalation`,
+  `extras.warn`'ın `SQLWarnStore`'u, üçüncü-taraf bir extension'ın kendi
+  tablosu) SQLAlchemy introspection'ıyla bulup kopyalıyor.
+  - `discord-webapi-migrate run --from <url> --to <url>`: `--yes`
+    verilmedikçe onay ister, satır sayılarını gösterir.
+  - **Checkpoint varsayılan olarak açık**: yazmadan önce hedefin o anki
+    durumunu (varsa) yerel bir JSON dosyasına kaydeder. `--no-checkpoint`
+    ile kapatılabilir.
+  - `discord-webapi-migrate restore <checkpoint-dosyası> --to <url>`:
+    hedefi checkpoint anındaki haline geri döndürür.
+  - Kaynağa asla yazmaz, sadece okur. Şifreler terminale/log'a
+    yazdırılmadan önce URL'lerden gizleniyor (`_redact`).
+  - Bu bir genel veritabanı yedeği DEĞİL, sadece discord-webapi'nin kendi
+    tablolarını kapsıyor — dokümantasyonda bu net şekilde vurgulanıyor.
+
+Gerçek SQLite↔SQLite round-trip testiyle uçtan uca doğrulandı (migrate →
+checkpoint → simüle edilmiş "kötü" bir yazma → restore → temiz geri
+dönüş) — bu süreçte checkpoint mekanizmasının kendi gerçek bir bug'ı
+bulundu ve düzeltildi: `datetime` değerleri JSON'a string olarak
+yazılıyordu ama restore sırasında tekrar `datetime` nesnesine
+çevrilmiyordu, SQLite bunu reddediyordu (`_json_object_hook`'a
+`__datetime_iso__` etiketi eklenerek düzeltildi).
+
+10 yeni test (`tests/unit/test_tools_migrate.py`). 438 test yeşil (1
+ortam-bağımlı Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — `examples/test_console`: tıklanabilir fiziksel test aracı
 
 ### Eklenenler

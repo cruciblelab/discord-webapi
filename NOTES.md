@@ -1,5 +1,62 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## `discord_webapi.tools.migrate`: veritabanı taşıma CLI'si (bu oturumda)
+
+Fiziksel test turunda kullanıcının sorduğu "SQLite'tan MariaDB'ye geçebilir
+miyim" sorusundan doğdu. Kullanıcının netleştirdiği gereksinimler: tam
+config edilebilir bir komut, onay istemeli, uyarı vermeli ("yedek alın"),
+**checkpoint (geri dönüş) varsayılan açık olmalı**, komut normal
+kullanımda checkpoint'i kapatabilmeli. Ayrıca kullanıcı "terminal bazlı
+araçlar ayrı bir klasörde olsun mu" diye sordu — evet dedim ve
+`discord_webapi/tools/` diye yeni bir alt paket açtım (bot davranışı olan
+`extras`'tan, çekirdek altyapıdan ayrı — farklı kullanım şekli: CLI
+komutu, `setup(bot,...)` değil).
+
+**Tasarım kararı — şema-agnostik, hardcode yok**: `discord_webapi/tools/
+migrate.py` hiçbir ORM sınıfını (`storage.sql.SessionRow` vb.) import
+etmiyor. Bunun yerine SQLAlchemy'nin kendi `MetaData().reflect()`'ini
+kullanarak kaynak veritabanında GERÇEKTEN ne varsa onu buluyor, hedefte
+karşılığını `Table.create(checkfirst=True)` ile oluşturuyor, satırları
+`select`/`insert` ile kopyalıyor. Bu sayede çekirdek store'lar +
+`escalation` + `extras.warn`'ın `SQLWarnStore`'u + gelecekteki HERHANGİ
+bir üçüncü-taraf extension'ın kendi tablosu otomatik olarak destekleniyor,
+hiçbir liste güncellenmesi gerekmiyor.
+
+**Checkpoint/restore mekanizması**: `run` komutu, yazmadan ÖNCE hedefin o
+anki durumunu (kaynaktaki tablolarla eşleşen, hedefte varsa) bir JSON
+dosyasına dump ediyor (`_write_checkpoint`). `restore` komutu bu dosyayı
+okuyup hedefteki ilgili tabloların içeriğini SİLİP checkpoint'tekiyle
+DEĞİŞTİRİYOR (`_delete_rows` + `_write_rows`) — yani "migration öncesi
+duruma dön" tam olarak bunu yapıyor. `--no-checkpoint` bu adımı atlıyor
+(hedefin boş/önemsiz olduğunu bildiğin tekrar çalıştırmalar için).
+
+**Bulunan gerçek bug (kendi round-trip testimde)**: `datetime` değerleri
+checkpoint JSON'ına `.isoformat()` string'i olarak yazılıyordu ama
+`restore` sırasında geri okunurken hâlâ düz string kalıyordu — SQLite
+sürücüsü `INSERT`'e düz string yerine gerçek bir `datetime` nesnesi
+bekliyor, `TypeError` fırlatıyordu. Fix: `_json_default`/`_json_object_hook`
+hem `bytes` hem `datetime` için ayrı bir etiketli-dict formatı kullanıyor
+artık (`{"__bytes_hex__": ...}` / `{"__datetime_iso__": ...}`), restore
+her ikisini de doğru tipe geri çeviriyor.
+
+**Uçtan uca doğrulandı** (sandbox'ta, gerçek SQLite dosyalarıyla): bir
+kaynak DB'ye gerçek bir `SessionRow` yazıldı → `migrate run` çağrıldı →
+hedefte satırın (bytes/JSON alanları dahil) doğru geldiği `SQLSessionStore`
+üzerinden okunarak doğrulandı → hedefe "kötü" bir satır elle eklendi →
+`migrate restore` çağrıldı → hem migrate edilen satırın hem "kötü"
+satırın gittiği, checkpoint'in doğru şekilde "önceden hiçbir şey yoktu"
+durumunu geri getirdiği doğrulandı.
+
+Testler: `tests/unit/test_tools_migrate.py` (10 test — kopyalama,
+checkpoint dosyası oluşturma, `--no-checkpoint`, restore/boş-durum
+senaryosu, restore/önceden-veri-vardı senaryosu, boş kaynak no-op,
+şifre gizleme, CLI argüman doğrulama). 438 test yeşil, ruff+mypy temiz.
+
+`pyproject.toml`: `discord-webapi-migrate` console script + `tools/`
+paketi zaten `discord_webapi`'nin bir parçası olduğu için ayrıca extra
+gerekmedi (mevcut `[sql-*]` extra'ları DBAPI sürücüsünü sağlıyor).
+`docs/DAGITIM.md`'ye "4. Veritabanı taşıma" bölümü eklendi.
+
 ## `examples/test_console`: tıklanabilir fiziksel test aracı (bu oturumda)
 
 Kullanıcı 7 sunucuda gerçek botunu çalıştıracak, 2-3'ünü kendi test
