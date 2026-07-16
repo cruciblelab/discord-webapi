@@ -12,3 +12,4 @@ dist/
 examples/*/.env
 *.sqlite3
 *.rdb
+.coverage
