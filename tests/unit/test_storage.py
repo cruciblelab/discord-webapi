@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 import discord_webapi.storage as storage_module
+from discord_webapi.exceptions import SessionExpiredError
 from discord_webapi.storage import MemorySessionStore, Session
 
 
@@ -47,6 +48,24 @@ async def test_update_overwrites_existing_session() -> None:
     fetched = await store.get(session.session_id)
     assert fetched is not None
     assert fetched.encrypted_access_token == b"new-access"
+
+
+async def test_update_of_a_deleted_session_raises_instead_of_resurrecting_it() -> None:
+    """A concurrent delete() (e.g. logout from another tab) between a
+    caller's read and its update() must not silently recreate the row --
+    matches SQLSessionStore, and is what lets `_ensure_fresh_discord_token`
+    treat this the same as an already-expired session instead of either
+    reviving a logged-out session (the old Memory behavior) or crashing
+    with an uncaught error (the old SQL behavior, wrong exception type)."""
+    store = MemorySessionStore()
+    session = _make_session()
+    await store.create(session)
+    await store.delete(session.session_id)
+
+    with pytest.raises(SessionExpiredError, match="does not exist"):
+        await store.update(session)
+
+    assert await store.get(session.session_id) is None
 
 
 async def test_delete_removes_session() -> None:

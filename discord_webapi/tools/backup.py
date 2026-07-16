@@ -37,15 +37,16 @@ from sqlalchemy import and_
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from discord_webapi.tools._sql_dump import (
+    DumpFileError,
     confirm,
     delete_rows,
+    load_dump_file,
     read_rows,
     redact,
     reflect,
     write_rows,
 )
 from discord_webapi.tools._sql_dump import dumps as dump_json
-from discord_webapi.tools._sql_dump import loads as load_json
 
 _TIMESTAMP_COLUMN_CANDIDATES = ("created_at", "updated_at", "given_at", "expires_at")
 
@@ -121,7 +122,7 @@ async def create_backup(
 
 
 def list_backup(*, backup_path: Path) -> None:
-    snapshot = load_json(backup_path.read_text(encoding="utf-8"))
+    snapshot = load_dump_file(backup_path)
     print(f"Yedek: {backup_path}")
     for name, rows in snapshot.items():
         print(f"  - {name}: {len(rows)} satır")
@@ -129,7 +130,7 @@ def list_backup(*, backup_path: Path) -> None:
 
 
 async def restore_backup(*, backup_path: Path, dest_url: str, assume_yes: bool) -> None:
-    snapshot = load_json(backup_path.read_text(encoding="utf-8"))
+    snapshot = load_dump_file(backup_path)
     dest_engine = create_async_engine(dest_url)
     metadata = await reflect(dest_engine)
 
@@ -204,29 +205,33 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if args.command == "create":
-        asyncio.run(
-            create_backup(
-                source_url=args.source_url,
-                out_path=Path(args.out),
-                guild_id=args.guild_id,
-                since=_parse_iso(args.since) if args.since else None,
-                until=_parse_iso(args.until) if args.until else None,
-                tables_filter=args.tables.split(",") if args.tables else None,
-                assume_yes=args.yes,
+    try:
+        if args.command == "create":
+            asyncio.run(
+                create_backup(
+                    source_url=args.source_url,
+                    out_path=Path(args.out),
+                    guild_id=args.guild_id,
+                    since=_parse_iso(args.since) if args.since else None,
+                    until=_parse_iso(args.until) if args.until else None,
+                    tables_filter=args.tables.split(",") if args.tables else None,
+                    assume_yes=args.yes,
+                )
             )
-        )
-        return 0
-    if args.command == "list":
-        list_backup(backup_path=Path(args.backup_file))
-        return 0
-    if args.command == "restore":
-        asyncio.run(
-            restore_backup(
-                backup_path=Path(args.backup_file), dest_url=args.dest_url, assume_yes=args.yes
+            return 0
+        if args.command == "list":
+            list_backup(backup_path=Path(args.backup_file))
+            return 0
+        if args.command == "restore":
+            asyncio.run(
+                restore_backup(
+                    backup_path=Path(args.backup_file), dest_url=args.dest_url, assume_yes=args.yes
+                )
             )
-        )
-        return 0
+            return 0
+    except DumpFileError as exc:
+        print(f"Hata: {exc}")
+        return 1
     return 2
 
 

@@ -1,5 +1,7 @@
 import asyncio
 
+import pytest
+
 from discord_webapi.ratelimits import GuildRateLimiter
 from discord_webapi.storage.memory import MemoryRateLimitStore
 from discord_webapi.transport import InProcessTransport
@@ -99,6 +101,41 @@ async def test_list_rules_returns_only_that_guilds_rules() -> None:
     rules = await limiter.list_rules(1)
 
     assert {r.key for r in rules} == {"a", "b"}
+
+
+async def test_set_rule_rejects_zero_or_negative_max_calls() -> None:
+    """`check()`'s token-bucket math divides by per_seconds -- a 0/negative
+    max_calls or per_seconds would either make the limiter always block or
+    raise ZeroDivisionError on every future call for this (guild, key)."""
+    limiter = _make_limiter()
+
+    with pytest.raises(ValueError, match="max_calls"):
+        await limiter.set_rule(GUILD_ID, KEY, max_calls=0, per_seconds=60.0)
+
+
+async def test_set_rule_rejects_zero_or_negative_per_seconds() -> None:
+    limiter = _make_limiter()
+
+    with pytest.raises(ValueError, match="per_seconds"):
+        await limiter.set_rule(GUILD_ID, KEY, max_calls=5, per_seconds=0.0)
+
+
+async def test_idle_buckets_are_swept_to_bound_memory() -> None:
+    """`sub_key` gives one bucket per (guild, key, user) ever seen -- without
+    eviction, that's an unbounded memory leak for the life of the process."""
+    limiter = _make_limiter(
+        default_max_calls=1,
+        default_per_seconds=60.0,
+        bucket_idle_ttl_seconds=0.05,
+        bucket_sweep_interval=2,
+    )
+
+    await limiter.check(GUILD_ID, KEY, sub_key="user-1")
+    await asyncio.sleep(0.15)  # user-1's bucket is now idle past the ttl
+    await limiter.check(GUILD_ID, KEY, sub_key="user-2")  # 2nd call triggers the sweep
+
+    assert (GUILD_ID, KEY, "user-1") not in limiter._buckets
+    assert (GUILD_ID, KEY, "user-2") in limiter._buckets
 
 
 async def test_a_second_limiter_sharing_the_same_transport_sees_live_updates() -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, Response, status
 
+from discord_webapi.audit.logger import AuditLogger
 from discord_webapi.authz.dependencies import GuildContext, require_guild_permission
 from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 from discord_webapi.dashboard_ratelimit_dependency import rate_limit_dependency
@@ -14,6 +15,11 @@ _DEFAULT_WRITE_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
 def _get_engine(request: Request) -> EscalationEngine:
     engine: EscalationEngine = request.app.state.discord_webapi_escalation_engine
     return engine
+
+
+def _get_audit_logger(request: Request) -> AuditLogger | None:
+    # Only present when enable_audit_log=True -- see DiscordWebAPI.install.
+    return getattr(request.app.state, "discord_webapi_audit_logger", None)
 
 
 def build_escalation_router(*, write_rate_limiter: TokenBucketLimiter | None = None) -> APIRouter:
@@ -52,7 +58,7 @@ def build_escalation_router(*, write_rate_limiter: TokenBucketLimiter | None = N
         ctx: GuildContext = Depends(require_guild_permission("manage_guild")),
         _rate_limited: None = Depends(rate_limit_dependency(limiter_dep)),
     ) -> EscalationRule:
-        return await _get_engine(request).set_rule(
+        rule = await _get_engine(request).set_rule(
             guild_id,
             key,
             threshold,
@@ -62,16 +68,36 @@ def build_escalation_router(*, write_rate_limiter: TokenBucketLimiter | None = N
             updated_by_user_id=ctx.user.id,
         )
 
+        audit = _get_audit_logger(request)
+        if audit is not None:
+            await audit.record(
+                guild_id=guild_id,
+                actor_user_id=ctx.user.id,
+                action="escalation.set_rule",
+                target=f"{key}/{threshold}",
+                detail=body.model_dump(),
+            )
+        return rule
+
     @router.delete("/{key}/{threshold}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_rule(
         guild_id: int,
         key: str,
         threshold: int,
         request: Request,
-        _ctx: GuildContext = Depends(require_guild_permission("manage_guild")),
+        ctx: GuildContext = Depends(require_guild_permission("manage_guild")),
         _rate_limited: None = Depends(rate_limit_dependency(limiter_dep)),
     ) -> Response:
         await _get_engine(request).delete_rule(guild_id, key, threshold)
+
+        audit = _get_audit_logger(request)
+        if audit is not None:
+            await audit.record(
+                guild_id=guild_id,
+                actor_user_id=ctx.user.id,
+                action="escalation.delete_rule",
+                target=f"{key}/{threshold}",
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     return router

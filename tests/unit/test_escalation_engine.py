@@ -1,5 +1,8 @@
 import asyncio
 from dataclasses import dataclass, field
+from unittest.mock import MagicMock
+
+import discord
 
 from discord_webapi.escalation import EscalationAction, EscalationEngine
 from discord_webapi.escalation.memory import MemoryEscalationRuleStore, MemoryViolationStore
@@ -10,15 +13,37 @@ KEY = "warn"
 
 
 @dataclass
+class _FakeRole:
+    position: int
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, _FakeRole):
+            return NotImplemented
+        return self.position >= other.position
+
+
+@dataclass
+class _FakeBotMember:
+    top_role: _FakeRole = field(default_factory=lambda: _FakeRole(10))
+
+
+@dataclass
 class _FakeGuild:
     id: int = GUILD_ID
+    me: _FakeBotMember = field(default_factory=_FakeBotMember)
     kicked: list[object] = field(default_factory=list)
     banned: list[object] = field(default_factory=list)
+    kick_error: BaseException | None = None
+    ban_error: BaseException | None = None
 
     async def kick(self, member: object, *, reason: str | None = None) -> None:
+        if self.kick_error is not None:
+            raise self.kick_error
         self.kicked.append((member, reason))
 
     async def ban(self, member: object, *, reason: str | None = None) -> None:
+        if self.ban_error is not None:
+            raise self.ban_error
         self.banned.append((member, reason))
 
 
@@ -26,9 +51,13 @@ class _FakeGuild:
 class _FakeMember:
     id: int
     guild: _FakeGuild
+    top_role: _FakeRole = field(default_factory=lambda: _FakeRole(1))
     timed_out: list[tuple[object, str | None]] = field(default_factory=list)
+    timeout_error: BaseException | None = None
 
     async def timeout(self, until: object, *, reason: str | None = None) -> None:
+        if self.timeout_error is not None:
+            raise self.timeout_error
         self.timed_out.append((until, reason))
 
 
@@ -102,6 +131,38 @@ async def test_ban_action_calls_guild_ban() -> None:
 
     assert len(member.guild.banned) == 1
     assert member.guild.banned[0][0] is member
+
+
+async def test_apply_action_skips_when_member_outranks_the_bot() -> None:
+    """Unlike extras.ban/kick/timeout (which have a human moderator to
+    reply an error to), an auto-triggered escalation has no one to hand an
+    exception to -- outranking the bot must be logged and skipped, not
+    raised (which would crash whatever loop called record_violation(),
+    e.g. automod's on_message handler)."""
+    engine = _make_engine()
+    member = _make_member()
+    member.top_role = _FakeRole(position=99)  # outranks the bot's top_role (10)
+    await engine.set_rule(GUILD_ID, KEY, 1, action=EscalationAction.KICK)
+
+    outcome = await engine.record_violation(member, KEY)
+
+    assert outcome.triggered_rule is not None  # the rung still fired...
+    assert member.guild.kicked == []  # ...but the kick itself was skipped
+
+
+async def test_apply_action_handles_forbidden_without_crashing() -> None:
+    """A Discord API error (e.g. the member holds Administrator, which
+    Discord blocks regardless of role position) must be logged and
+    swallowed, not propagate out of record_violation()."""
+    engine = _make_engine()
+    member = _make_member()
+    member.guild.kick_error = discord.Forbidden(MagicMock(status=403), "missing permissions")
+    await engine.set_rule(GUILD_ID, KEY, 1, action=EscalationAction.KICK)
+
+    outcome = await engine.record_violation(member, KEY)
+
+    assert outcome.triggered_rule is not None
+    assert member.guild.kicked == []
 
 
 async def test_skipping_past_a_threshold_does_not_retroactively_fire() -> None:

@@ -33,7 +33,7 @@ def _build_bot() -> dpy_commands.Bot:
 @dataclass
 class _FakeGuild:
     id: int = GUILD_ID
-    me: SimpleNamespace = field(default_factory=lambda: SimpleNamespace(id=777))
+    me: SimpleNamespace = field(default_factory=lambda: SimpleNamespace(id=777, top_role=10))
 
     async def kick(self, member: object, *, reason: str | None = None) -> None: ...
     async def ban(self, member: object, *, reason: str | None = None) -> None: ...
@@ -43,6 +43,7 @@ class _FakeGuild:
 class _FakeMember:
     id: int
     guild: _FakeGuild = field(default_factory=_FakeGuild)
+    top_role: int = 1  # below the bot's (10) by default -- doesn't outrank it
 
     async def timeout(self, until: object, *, reason: str | None = None) -> None: ...
 

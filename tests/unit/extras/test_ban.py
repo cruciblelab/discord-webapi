@@ -124,3 +124,63 @@ async def test_delete_message_seconds_is_clamped_to_discords_ceiling() -> None:
 
     _, kwargs = ctx.guild.ban.call_args
     assert kwargs["delete_message_seconds"] == 7 * 24 * 3600
+
+
+async def test_forbidden_from_discord_replies_cleanly_instead_of_crashing() -> None:
+    """The bot can lack ban_members in practice even though the decorator
+    checked at invocation time (permission revoked mid-session, guild-level
+    quirks) -- Discord's own 403 must not propagate as an unhandled crash."""
+    bot = _build_bot()
+    command = setup_ban(bot, dm_before_ban=False)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    ctx.guild.ban.side_effect = discord.Forbidden(MagicMock(status=403), "missing permissions")
+
+    await command.callback(ctx, member, "spamming", 0)
+
+    assert "permission" in ctx.reply.call_args.args[0].lower()
+
+
+async def test_not_found_from_discord_replies_cleanly_instead_of_crashing() -> None:
+    """The target can leave the server between the hierarchy check and the
+    API call -- Discord's own 404 must not propagate as an unhandled crash."""
+    bot = _build_bot()
+    command = setup_ban(bot, dm_before_ban=False)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    ctx.guild.ban.side_effect = discord.NotFound(MagicMock(status=404), "unknown member")
+
+    await command.callback(ctx, member, "spamming", 0)
+
+    assert "no longer in the server" in ctx.reply.call_args.args[0].lower()
+
+
+async def test_audit_logger_records_the_ban_when_configured() -> None:
+    bot = _build_bot()
+    audit_logger = MagicMock()
+    audit_logger.record = AsyncMock()
+    command = setup_ban(bot, dm_before_ban=False, audit_logger=audit_logger)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.id = 12345
+
+    await command.callback(ctx, member, "spamming", 0)
+
+    audit_logger.record.assert_called_once()
+    _, kwargs = audit_logger.record.call_args
+    assert kwargs["action"] == "ban"
+    assert kwargs["target"] == "12345"
+    assert kwargs["detail"]["reason"] == "spamming"
+
+
+async def test_no_audit_logger_means_no_audit_call() -> None:
+    """Opt-in, same as extras.warn -- omitting audit_logger must not crash
+    and must not silently create one."""
+    bot = _build_bot()
+    command = setup_ban(bot, dm_before_ban=False)
+    ctx = _fake_ctx()
+    member = _fake_member()
+
+    await command.callback(ctx, member, "spamming", 0)
+
+    ctx.guild.ban.assert_called_once()

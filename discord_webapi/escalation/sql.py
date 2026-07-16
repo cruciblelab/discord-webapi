@@ -8,10 +8,12 @@ stores, same principle as `discord_webapi.extras.warn.SQLWarnStore`.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from sqlalchemy import BigInteger, DateTime, Integer, String, func, select
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from discord_webapi.escalation.models import EscalationAction, EscalationRule, ViolationRecord
@@ -52,6 +54,35 @@ def _as_utc(value: datetime) -> datetime:
     # SQLite doesn't preserve tzinfo across a round-trip -- see the same
     # normalization in discord_webapi/storage/sql.py.
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+async def _commit_upsert(
+    db: AsyncSession,
+    *,
+    is_new: bool,
+    get_existing: Callable[[], Awaitable[EscalationRuleRow | None]],
+    apply_fields: Callable[[EscalationRuleRow], None],
+) -> None:
+    """Same race `storage/sql.py`'s `_commit_upsert` protects every other
+    "new row" writer against (two requests racing to create the same
+    brand-new rule for the first time, e.g. both `PUT
+    /api/guilds/{id}/escalation-rules/{key}/{threshold}`) -- kept as its own
+    small copy here rather than importing that module's private helper,
+    matching this module's own "independent tables, not bolted onto
+    storage.sql" stance. Without this, the loser's commit raises an
+    unhandled IntegrityError instead of applying its update to the row the
+    winner just created."""
+    if not is_new:
+        await db.commit()
+        return
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await get_existing()
+        assert existing is not None, "IntegrityError implies the row now exists"
+        apply_fields(existing)
+        await db.commit()
 
 
 def _row_to_rule(row: EscalationRuleRow) -> EscalationRule:
@@ -98,20 +129,29 @@ class SQLEscalationRuleStore:
             return [_row_to_rule(row) for row in result.scalars()]
 
     async def set_rule(self, rule: EscalationRule) -> None:
-        key = (rule.guild_id, rule.key, rule.threshold)
-        async with self._sessionmaker() as db:
-            row = await db.get(EscalationRuleRow, key)
-            if row is None:
-                row = EscalationRuleRow(
-                    guild_id=rule.guild_id, key=rule.key, threshold=rule.threshold
-                )
-                db.add(row)
+        def _apply(row: EscalationRuleRow) -> None:
             row.action = rule.action.value
             row.action_minutes = rule.action_minutes
             row.reason = rule.reason
             row.updated_at = rule.updated_at
             row.updated_by_user_id = rule.updated_by_user_id
-            await db.commit()
+
+        key = (rule.guild_id, rule.key, rule.threshold)
+        async with self._sessionmaker() as db:
+            row = await db.get(EscalationRuleRow, key)
+            is_new = row is None
+            if row is None:
+                row = EscalationRuleRow(
+                    guild_id=rule.guild_id, key=rule.key, threshold=rule.threshold
+                )
+                db.add(row)
+            _apply(row)
+            await _commit_upsert(
+                db,
+                is_new=is_new,
+                get_existing=lambda: db.get(EscalationRuleRow, key),
+                apply_fields=_apply,
+            )
 
     async def delete_rule(self, guild_id: int, key: str, threshold: int) -> None:
         async with self._sessionmaker() as db:

@@ -30,6 +30,7 @@ from discord_webapi.audit.models import AuditLogEntry
 from discord_webapi.authz.models import AppRole
 from discord_webapi.commands.models import CommandOverride
 from discord_webapi.consent.models import ConsentRecord
+from discord_webapi.exceptions import SessionExpiredError
 from discord_webapi.ratelimits.models import RateLimitRule
 from discord_webapi.storage.base import Session
 
@@ -270,7 +271,13 @@ class SQLSessionStore:
         async with self._sessionmaker() as db:
             row = await db.get(SessionRow, session.session_id)
             if row is None:
-                raise ValueError(f"Session {session.session_id!r} does not exist")
+                # Matches MemorySessionStore: a concurrent delete() (e.g.
+                # logout from another tab/device) between a caller's read and
+                # this write must not silently resurrect the session -- see
+                # `_ensure_fresh_discord_token` in auth/oauth.py, which
+                # catches this specifically and treats it the same as an
+                # expired session.
+                raise SessionExpiredError(f"Session {session.session_id!r} does not exist")
             row.user_id = session.user_id
             row.username = session.username
             row.global_name = session.global_name

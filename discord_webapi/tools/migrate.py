@@ -40,9 +40,11 @@ from sqlalchemy import Table
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from discord_webapi.tools._sql_dump import (
+    DumpFileError,
     confirm,
     delete_rows,
     ensure_table,
+    load_dump_file,
     read_rows,
     redact,
     reflect,
@@ -50,7 +52,6 @@ from discord_webapi.tools._sql_dump import (
     write_rows,
 )
 from discord_webapi.tools._sql_dump import dumps as dump_json
-from discord_webapi.tools._sql_dump import loads as load_json
 
 
 async def _write_checkpoint(dest_engine: AsyncEngine, tables: list[Table], path: Path) -> None:
@@ -70,6 +71,7 @@ async def run_migration(
     assume_yes: bool,
     checkpoint: bool,
     checkpoint_dir: Path,
+    tables_filter: list[str] | None = None,
 ) -> None:
     source_engine = create_async_engine(source_url)
     dest_engine = create_async_engine(dest_url)
@@ -79,8 +81,13 @@ async def run_migration(
 
     metadata = await reflect(source_engine)
     tables = list(metadata.tables.values())
+    if tables_filter is not None:
+        tables = [t for t in tables if t.name in tables_filter]
     if not tables:
-        print("Kaynak veritabanında hiç tablo bulunamadı -- yapılacak bir şey yok.")
+        print(
+            "Kaynak veritabanında (verilen filtreyle) hiç tablo bulunamadı -- "
+            "yapılacak bir şey yok."
+        )
         await source_engine.dispose()
         await dest_engine.dispose()
         return
@@ -138,7 +145,7 @@ async def run_migration(
 
 
 async def restore_checkpoint(*, checkpoint_path: Path, dest_url: str, assume_yes: bool) -> None:
-    snapshot = load_json(checkpoint_path.read_text(encoding="utf-8"))
+    snapshot = load_dump_file(checkpoint_path)
     dest_engine = create_async_engine(dest_url)
     metadata = await reflect(dest_engine)
 
@@ -197,6 +204,11 @@ def main(argv: list[str] | None = None) -> int:
         default=".",
         help="Directory to write the checkpoint file into (default: current directory).",
     )
+    run.add_argument(
+        "--tables",
+        default=None,
+        help="Comma-separated table names to migrate (default: all tables found in --from).",
+    )
 
     restore = sub.add_parser(
         "restore", help="Restore a destination database from a checkpoint file."
@@ -207,26 +219,31 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    if args.command == "run":
-        asyncio.run(
-            run_migration(
-                source_url=args.source_url,
-                dest_url=args.dest_url,
-                assume_yes=args.yes,
-                checkpoint=not args.no_checkpoint,
-                checkpoint_dir=Path(args.checkpoint_dir),
+    try:
+        if args.command == "run":
+            asyncio.run(
+                run_migration(
+                    source_url=args.source_url,
+                    dest_url=args.dest_url,
+                    assume_yes=args.yes,
+                    checkpoint=not args.no_checkpoint,
+                    checkpoint_dir=Path(args.checkpoint_dir),
+                    tables_filter=args.tables.split(",") if args.tables else None,
+                )
             )
-        )
-        return 0
-    if args.command == "restore":
-        asyncio.run(
-            restore_checkpoint(
-                checkpoint_path=Path(args.checkpoint_file),
-                dest_url=args.dest_url,
-                assume_yes=args.yes,
+            return 0
+        if args.command == "restore":
+            asyncio.run(
+                restore_checkpoint(
+                    checkpoint_path=Path(args.checkpoint_file),
+                    dest_url=args.dest_url,
+                    assume_yes=args.yes,
+                )
             )
-        )
-        return 0
+            return 0
+    except DumpFileError as exc:
+        print(f"Hata: {exc}")
+        return 1
     return 2
 
 

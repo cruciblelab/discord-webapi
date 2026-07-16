@@ -132,3 +132,72 @@ async def test_no_auto_timeout_when_not_configured() -> None:
         await command.callback(ctx, member, "spam")
 
     member.timeout.assert_not_called()
+
+
+async def test_reason_required_by_default_blocks_without_one() -> None:
+    bot = _build_bot()
+    store = MemoryWarnStore()
+    command = setup_warn(bot, store=store)
+    ctx = _fake_ctx()
+    member = _fake_member()
+
+    await command.callback(ctx, member, None)
+
+    assert await store.list_for_user(999, 42) == []
+
+
+async def test_require_reason_false_allows_warning_without_one() -> None:
+    bot = _build_bot()
+    store = MemoryWarnStore()
+    command = setup_warn(bot, store=store, require_reason=False)
+    ctx = _fake_ctx()
+    member = _fake_member()
+
+    await command.callback(ctx, member, None)
+
+    assert len(await store.list_for_user(999, 42)) == 1
+
+
+async def test_dm_before_warn_is_best_effort_and_never_blocks_the_warning() -> None:
+    bot = _build_bot()
+    store = MemoryWarnStore()
+    command = setup_warn(bot, store=store, dm_before_warn=True)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.send = AsyncMock(side_effect=discord.Forbidden(MagicMock(status=403), "blocked"))
+
+    await command.callback(ctx, member, "spam")
+
+    member.send.assert_called_once()
+    assert len(await store.list_for_user(999, 42)) == 1
+
+
+async def test_auto_timeout_not_found_is_reported_without_crashing() -> None:
+    bot = _build_bot()
+    store = MemoryWarnStore()
+    command = setup_warn(bot, store=store, auto_timeout_after=1)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.timeout.side_effect = discord.NotFound(MagicMock(status=404), "unknown member")
+
+    await command.callback(ctx, member, "first")
+
+    assert len(await store.list_for_user(999, 42)) == 1
+    assert "no longer in the server" in ctx.reply.call_args.args[0]
+
+
+async def test_audit_logger_records_the_warning_when_configured() -> None:
+    bot = _build_bot()
+    store = MemoryWarnStore()
+    audit_logger = MagicMock()
+    audit_logger.record = AsyncMock()
+    command = setup_warn(bot, store=store, audit_logger=audit_logger)
+    ctx = _fake_ctx()
+    member = _fake_member()
+
+    await command.callback(ctx, member, "spam")
+
+    audit_logger.record.assert_called_once()
+    _, kwargs = audit_logger.record.call_args
+    assert kwargs["action"] == "warn"
+    assert kwargs["target"] == "42"

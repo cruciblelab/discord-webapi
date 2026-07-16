@@ -13,6 +13,7 @@ memory.
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import aiosqlite
 import discord
@@ -171,6 +172,7 @@ async def test_skeleton_combined_with_escalation_engine_in_one_command() -> None
         def __init__(self, guild_id: int) -> None:
             self.id = guild_id
             self.kicked: list[object] = []
+            self.me = SimpleNamespace(top_role=10)
 
         async def kick(self, member: object, *, reason: str | None = None) -> None:
             self.kicked.append(member)
@@ -179,6 +181,7 @@ async def test_skeleton_combined_with_escalation_engine_in_one_command() -> None
         def __init__(self, user_id: int, guild_id: int) -> None:
             self.id = user_id
             self.guild = _FakeGuild(guild_id)
+            self.top_role = 1  # below the bot's (10) -- doesn't outrank it
 
     @bot.hybrid_command(name="report")
     @rate_limited("report", rate_limiter=limiter)

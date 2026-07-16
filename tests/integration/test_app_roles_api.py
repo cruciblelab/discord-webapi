@@ -34,7 +34,7 @@ def _build_app(
     app = FastAPI()
     transport = InProcessTransport()
     authz_store = MemoryAuthzStore()
-    app_role_cache = AppRoleCache(authz_store)
+    app_role_cache = AppRoleCache(transport, authz_store)
 
     auth = DiscordAuth(
         client_id="cid",

@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 
 from discord_webapi.extras._shared import (
+    build_audit_reason,
     check_role_assignable,
     check_role_hierarchy,
     notify_member_best_effort,
@@ -114,3 +115,27 @@ async def test_notify_member_best_effort_delivers_when_possible() -> None:
     await notify_member_best_effort(member, "hi")
 
     member.send.assert_called_once_with("hi")
+
+
+def test_build_audit_reason_includes_actor_and_reason() -> None:
+    reason = build_audit_reason("mod#0001", "spamming")
+
+    assert reason == "mod#0001 (via discord-webapi): spamming"
+
+
+def test_build_audit_reason_without_a_reason_still_names_the_actor() -> None:
+    reason = build_audit_reason("mod#0001", None)
+
+    assert reason == "mod#0001 (via discord-webapi)"
+
+
+def test_build_audit_reason_truncates_to_discords_512_char_ceiling() -> None:
+    """A long, boundary-input `reason` (plus the "actor (via discord-
+    webapi): " prefix) must never push the final string over Discord's own
+    audit-log-reason limit -- Discord rejects an over-limit reason with an
+    unhandled 400 Bad Request otherwise."""
+    reason = build_audit_reason("mod#0001", "x" * 1000)
+
+    assert len(reason) == 512
+    assert reason.startswith("mod#0001 (via discord-webapi): ")
+    assert reason.endswith("...")

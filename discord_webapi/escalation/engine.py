@@ -12,6 +12,7 @@ counted, but nothing is ever done about them.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -32,6 +33,8 @@ from discord_webapi.transport.base import Event, Transport
 
 if TYPE_CHECKING:
     from discord_webapi.audit.logger import AuditLogger
+
+logger = logging.getLogger("discord_webapi.escalation")
 
 
 class EscalationEngine:
@@ -98,18 +101,23 @@ class EscalationEngine:
         if triggered is None:
             return EscalationOutcome(count=count, triggered_rule=None)
 
-        await self._apply_action(member, triggered)
-        await self._audit_trigger(member, key, count, triggered)
+        applied = await self._apply_action(member, triggered)
+        await self._audit_trigger(member, key, count, triggered, applied=applied)
         return EscalationOutcome(count=count, triggered_rule=triggered)
 
     async def _audit_trigger(
-        self, member: discord.Member, key: str, count: int, rule: EscalationRule
+        self, member: discord.Member, key: str, count: int, rule: EscalationRule, *, applied: bool
     ) -> None:
         if self.audit_logger is None:
             return
         # actor_user_id=0 marks an automatic/system action (there's no human
         # dashboard actor behind an auto-escalation) -- the human who
         # configured the rung is captured separately as rule.updated_by_user_id.
+        # "action_applied": False means the rung fired but the actual
+        # timeout/kick/ban couldn't be carried out (role hierarchy or a
+        # Discord API error) -- see _apply_action. Recorded honestly rather
+        # than implying the action succeeded just because the threshold was
+        # reached.
         await self.audit_logger.record(
             guild_id=member.guild.id,
             actor_user_id=0,
@@ -121,6 +129,7 @@ class EscalationEngine:
                 "count": count,
                 "reason": rule.reason,
                 "configured_by": rule.updated_by_user_id,
+                "action_applied": applied,
             },
         )
 
@@ -164,20 +173,57 @@ class EscalationEngine:
         self._invalidate(guild_id, key)
         await self._publish_changed(guild_id, key)
 
-    async def _apply_action(self, member: discord.Member, rule: EscalationRule) -> None:
+    async def _apply_action(self, member: discord.Member, rule: EscalationRule) -> bool:
+        """Returns whether the configured action was actually applied.
+        Never raises: unlike `extras.ban`/`kick`/`timeout` (which can reply
+        a clean error to the moderator who ran the command), this is called
+        from a fully automatic path (automod's `on_violation`, a bare
+        `record_violation()` call) with no one to hand an exception to --
+        a role-hierarchy conflict or a Discord API error (403/404) is
+        logged and treated as "couldn't apply", not a crash of whatever
+        loop triggered the violation.
+        """
         reason = rule.reason or (
             f"Automatic escalation: {rule.threshold} violation(s) for {rule.key!r}"
         )
         if rule.action == EscalationAction.NONE:
-            return
-        if rule.action == EscalationAction.TIMEOUT:
-            minutes = rule.action_minutes or 10
-            until = discord.utils.utcnow() + timedelta(minutes=minutes)
-            await member.timeout(until, reason=reason)
-        elif rule.action == EscalationAction.KICK:
-            await member.guild.kick(member, reason=reason)
-        elif rule.action == EscalationAction.BAN:
-            await member.guild.ban(member, reason=reason)
+            return True
+
+        me = member.guild.me
+        if me is not None and member.top_role >= me.top_role:
+            logger.warning(
+                "Escalation rule (guild=%s, key=%r, threshold=%s) triggered %s for member "
+                "%s, but their highest role outranks the bot's -- skipping.",
+                member.guild.id,
+                rule.key,
+                rule.threshold,
+                rule.action.value,
+                member.id,
+            )
+            return False
+
+        try:
+            if rule.action == EscalationAction.TIMEOUT:
+                minutes = rule.action_minutes or 10
+                until = discord.utils.utcnow() + timedelta(minutes=minutes)
+                await member.timeout(until, reason=reason)
+            elif rule.action == EscalationAction.KICK:
+                await member.guild.kick(member, reason=reason)
+            elif rule.action == EscalationAction.BAN:
+                await member.guild.ban(member, reason=reason)
+        except (discord.Forbidden, discord.NotFound):
+            logger.warning(
+                "Escalation rule (guild=%s, key=%r, threshold=%s) tried to %s member %s, "
+                "but the Discord API call failed (missing permission, or member already left).",
+                member.guild.id,
+                rule.key,
+                rule.threshold,
+                rule.action.value,
+                member.id,
+                exc_info=True,
+            )
+            return False
+        return True
 
     async def _get_rules(self, guild_id: int, key: str) -> list[EscalationRule]:
         cache_key = (guild_id, key)

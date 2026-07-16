@@ -22,6 +22,7 @@ class _FakeRole:
     def __init__(self, position: int, name: str = "Verified") -> None:
         self.position = position
         self.name = name
+        self.id = position
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, _FakeRole) and self.position == other.position
@@ -147,3 +148,44 @@ async def test_role_remove_skips_if_member_does_not_have_the_role() -> None:
 
     member.remove_roles.assert_not_called()
     assert "doesn't have" in ctx.reply.call_args.args[0]
+
+
+async def test_role_add_forbidden_from_discord_replies_cleanly() -> None:
+    bot = _build_bot()
+    role_add, _remove = setup_role_assign(bot)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.add_roles.side_effect = discord.Forbidden(MagicMock(status=403), "missing permissions")
+    role = _FakeRole(1)
+
+    await role_add.callback(ctx, member, role, None)
+
+    assert "permission" in ctx.reply.call_args.args[0].lower()
+
+
+async def test_role_remove_not_found_from_discord_replies_cleanly() -> None:
+    bot = _build_bot()
+    _add, role_remove = setup_role_assign(bot)
+    ctx = _fake_ctx()
+    role = _FakeRole(1)
+    member = _fake_member(roles=[role])
+    member.remove_roles.side_effect = discord.NotFound(MagicMock(status=404), "unknown member")
+
+    await role_remove.callback(ctx, member, role, "cleanup")
+
+    assert "no longer in the server" in ctx.reply.call_args.args[0].lower()
+
+
+async def test_audit_logger_records_role_add_and_remove_with_distinct_actions() -> None:
+    bot = _build_bot()
+    audit_logger = MagicMock()
+    audit_logger.record = AsyncMock()
+    role_add, role_remove = setup_role_assign(bot, audit_logger=audit_logger)
+    ctx = _fake_ctx()
+    role = _FakeRole(1)
+
+    await role_add.callback(ctx, _fake_member(), role, None)
+    await role_remove.callback(ctx, _fake_member(roles=[role]), role, None)
+
+    actions = [call.kwargs["action"] for call in audit_logger.record.call_args_list]
+    assert actions == ["role_assign.add", "role_assign.remove"]

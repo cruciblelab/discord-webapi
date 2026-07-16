@@ -53,7 +53,7 @@ async def test_full_backup_includes_all_rows(tmp_path: Path) -> None:
         assume_yes=True,
     )
 
-    snapshot = backup.load_json(out_path.read_text())
+    snapshot = backup.load_dump_file(out_path)
     assert len(snapshot["dwa_command_overrides"]) == 3
 
 
@@ -72,7 +72,7 @@ async def test_guild_scoped_backup_filters_by_guild_id(tmp_path: Path) -> None:
         assume_yes=True,
     )
 
-    snapshot = backup.load_json(out_path.read_text())
+    snapshot = backup.load_dump_file(out_path)
     rows = snapshot["dwa_command_overrides"]
     assert len(rows) == 2
     assert all(r["guild_id"] == 111 for r in rows)
@@ -94,7 +94,7 @@ async def test_date_scoped_backup_filters_by_updated_at(tmp_path: Path) -> None:
         assume_yes=True,
     )
 
-    snapshot = backup.load_json(out_path.read_text())
+    snapshot = backup.load_dump_file(out_path)
     # the row from 10 days ago must be excluded, the two recent ones kept
     assert len(snapshot["dwa_command_overrides"]) == 2
 
@@ -115,7 +115,7 @@ async def test_guild_and_date_scope_combine(tmp_path: Path) -> None:
         assume_yes=True,
     )
 
-    snapshot = backup.load_json(out_path.read_text())
+    snapshot = backup.load_dump_file(out_path)
     rows = snapshot["dwa_command_overrides"]
     assert len(rows) == 1
     assert rows[0]["command_name"] == "warn"
@@ -136,7 +136,7 @@ async def test_tables_filter_restricts_to_named_tables(tmp_path: Path) -> None:
         assume_yes=True,
     )
 
-    snapshot = backup.load_json(out_path.read_text())
+    snapshot = backup.load_dump_file(out_path)
     assert set(snapshot.keys()) == {"dwa_command_overrides"}
 
 

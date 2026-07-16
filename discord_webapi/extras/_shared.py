@@ -43,6 +43,25 @@ def check_role_hierarchy(
     return None
 
 
+_AUDIT_REASON_MAX_LENGTH = 512  # Discord's own audit-log reason ceiling
+
+
+def build_audit_reason(
+    actor: object, reason: str | None, *, max_length: int = _AUDIT_REASON_MAX_LENGTH
+) -> str:
+    """Builds the `reason=` string passed to Discord's ban/kick/timeout/
+    role APIs, prefixed with who invoked the action through this bot.
+    Discord rejects an audit-log reason over 512 characters with an
+    unhandled `400 Bad Request` -- truncates instead of letting a
+    caller-supplied `reason` (plus this prefix) push it over that ceiling.
+    """
+    prefix = f"{actor} (via discord-webapi)"
+    text = f"{prefix}: {reason}" if reason else prefix
+    if len(text) > max_length:
+        text = text[: max_length - 3] + "..."
+    return text
+
+
 async def notify_member_best_effort(member: discord.Member, message: str) -> None:
     """Sends `member` a DM, swallowing the near-universal "DMs are closed
     or the bot is blocked" failure. Never raises -- a notification is a

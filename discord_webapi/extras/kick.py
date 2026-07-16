@@ -5,13 +5,20 @@ from `discord_webapi.extras._shared` rather than duplicating them.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from discord_webapi.extras._shared import check_role_hierarchy, notify_member_best_effort
+from discord_webapi.extras._shared import (
+    build_audit_reason,
+    check_role_hierarchy,
+    notify_member_best_effort,
+)
+
+if TYPE_CHECKING:
+    from discord_webapi.audit.logger import AuditLogger
 
 
 def setup(
@@ -20,13 +27,15 @@ def setup(
     command_name: str = "kick",
     require_reason: bool = True,
     dm_before_kick: bool = True,
+    audit_logger: AuditLogger | None = None,
 ) -> Any:
     """Registers a kick command on `bot` and returns it.
 
     Same role-hierarchy protection as `extras.ban` (refuses if the
     target outranks the bot or the invoking moderator), an optional
     heads-up DM before the kick lands (best-effort, never blocks the
-    kick), and an optional required reason for Discord's own audit log.
+    kick), an optional required reason for Discord's own audit log, and
+    an opt-in `audit_logger` (same convention as `extras.warn`).
     """
 
     @bot.hybrid_command(  # type: ignore[arg-type]
@@ -59,8 +68,26 @@ def setup(
                 notice += f"\nReason: {reason}"
             await notify_member_best_effort(member, notice)
 
-        audit_reason = f"{ctx.author} (via discord-webapi): {reason}" if reason else str(ctx.author)
-        await ctx.guild.kick(member, reason=audit_reason)
+        audit_reason = build_audit_reason(ctx.author, reason)
+        try:
+            await ctx.guild.kick(member, reason=audit_reason)
+        except discord.Forbidden:
+            await ctx.reply(
+                "I don't have permission to kick that member.", ephemeral=True
+            )
+            return
+        except discord.NotFound:
+            await ctx.reply("That member is no longer in the server.", ephemeral=True)
+            return
+
+        if audit_logger is not None:
+            await audit_logger.record(
+                guild_id=ctx.guild.id,
+                actor_user_id=ctx.author.id,
+                action="kick",
+                target=str(member.id),
+                detail={"reason": reason},
+            )
 
         confirmation = f"Kicked **{member}**."
         if reason:

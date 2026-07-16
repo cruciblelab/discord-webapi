@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING
 
+from discord_webapi.exceptions import SessionExpiredError
 from discord_webapi.storage.base import Session
 
 if TYPE_CHECKING:
@@ -26,6 +27,13 @@ class MemorySessionStore:
         return self._sessions.get(session_id)
 
     async def update(self, session: Session) -> None:
+        if session.session_id not in self._sessions:
+            # Matches SQLSessionStore: a concurrent delete() (e.g. logout
+            # from another tab/device) between a caller's read and this
+            # write must not silently resurrect the session -- see
+            # `_ensure_fresh_discord_token` in auth/oauth.py, which catches
+            # this specifically and treats it the same as an expired session.
+            raise SessionExpiredError(f"Session {session.session_id!r} does not exist")
         self._sessions[session.session_id] = session
 
     async def delete(self, session_id: str) -> None:

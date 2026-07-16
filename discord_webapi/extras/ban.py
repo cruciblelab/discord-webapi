@@ -13,13 +13,20 @@ follows and why it looks the way it does.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from discord_webapi.extras._shared import check_role_hierarchy, notify_member_best_effort
+from discord_webapi.extras._shared import (
+    build_audit_reason,
+    check_role_hierarchy,
+    notify_member_best_effort,
+)
+
+if TYPE_CHECKING:
+    from discord_webapi.audit.logger import AuditLogger
 
 DEFAULT_DELETE_MESSAGE_SECONDS = 0
 MAX_DELETE_MESSAGE_SECONDS = 7 * 24 * 3600  # Discord's own API ceiling
@@ -32,6 +39,7 @@ def setup(
     require_reason: bool = True,
     dm_before_ban: bool = True,
     default_delete_message_seconds: int = DEFAULT_DELETE_MESSAGE_SECONDS,
+    audit_logger: AuditLogger | None = None,
 ) -> Any:
     """Registers a ban command on `bot` and returns it.
 
@@ -50,6 +58,10 @@ def setup(
     - **Configurable message-deletion window** in seconds (Discord's own
       unit as of the `delete_message_seconds` ban API), clamped to
       Discord's own 7-day ceiling.
+    - **`audit_logger`**: opt-in, same convention as `extras.warn` -- pass
+      an `AuditLogger` (e.g. `api.audit_logger`, non-None only when
+      `enable_audit_log=True`) to record each ban to the audit trail; omit
+      it and nothing is audited.
     """
 
     @bot.hybrid_command(  # type: ignore[arg-type]
@@ -87,10 +99,28 @@ def setup(
                 notice += f"\nReason: {reason}"
             await notify_member_best_effort(member, notice)
 
-        audit_reason = f"{ctx.author} (via discord-webapi): {reason}" if reason else str(ctx.author)
-        await ctx.guild.ban(
-            member, reason=audit_reason, delete_message_seconds=delete_message_seconds
-        )
+        audit_reason = build_audit_reason(ctx.author, reason)
+        try:
+            await ctx.guild.ban(
+                member, reason=audit_reason, delete_message_seconds=delete_message_seconds
+            )
+        except discord.Forbidden:
+            await ctx.reply(
+                "I don't have permission to ban that member.", ephemeral=True
+            )
+            return
+        except discord.NotFound:
+            await ctx.reply("That member is no longer in the server.", ephemeral=True)
+            return
+
+        if audit_logger is not None:
+            await audit_logger.record(
+                guild_id=ctx.guild.id,
+                actor_user_id=ctx.author.id,
+                action="ban",
+                target=str(member.id),
+                detail={"reason": reason},
+            )
 
         confirmation = f"Banned **{member}**."
         if reason:

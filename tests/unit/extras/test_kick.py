@@ -73,3 +73,44 @@ async def test_successful_kick_sends_dm_and_confirmation() -> None:
     member.send.assert_called_once()
     ctx.guild.kick.assert_called_once()
     ctx.reply.assert_called_once()
+
+
+async def test_forbidden_from_discord_replies_cleanly_instead_of_crashing() -> None:
+    bot = _build_bot()
+    command = setup_kick(bot, dm_before_kick=False)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    ctx.guild.kick.side_effect = discord.Forbidden(MagicMock(status=403), "missing permissions")
+
+    await command.callback(ctx, member, "spamming")
+
+    assert "permission" in ctx.reply.call_args.args[0].lower()
+
+
+async def test_not_found_from_discord_replies_cleanly_instead_of_crashing() -> None:
+    bot = _build_bot()
+    command = setup_kick(bot, dm_before_kick=False)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    ctx.guild.kick.side_effect = discord.NotFound(MagicMock(status=404), "unknown member")
+
+    await command.callback(ctx, member, "spamming")
+
+    assert "no longer in the server" in ctx.reply.call_args.args[0].lower()
+
+
+async def test_audit_logger_records_the_kick_when_configured() -> None:
+    bot = _build_bot()
+    audit_logger = MagicMock()
+    audit_logger.record = AsyncMock()
+    command = setup_kick(bot, dm_before_kick=False, audit_logger=audit_logger)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.id = 12345
+
+    await command.callback(ctx, member, "spamming")
+
+    audit_logger.record.assert_called_once()
+    _, kwargs = audit_logger.record.call_args
+    assert kwargs["action"] == "kick"
+    assert kwargs["target"] == "12345"

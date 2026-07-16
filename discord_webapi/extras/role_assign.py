@@ -5,13 +5,16 @@ without needing the dashboard or the Discord role-management UI.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-from discord_webapi.extras._shared import check_role_assignable
+from discord_webapi.extras._shared import build_audit_reason, check_role_assignable
+
+if TYPE_CHECKING:
+    from discord_webapi.audit.logger import AuditLogger
 
 
 def setup(
@@ -20,6 +23,7 @@ def setup(
     add_command_name: str = "role-add",
     remove_command_name: str = "role-remove",
     require_reason: bool = False,
+    audit_logger: AuditLogger | None = None,
 ) -> tuple[Any, Any]:
     """Registers `/role-add` and `/role-remove` commands and returns both.
 
@@ -28,7 +32,8 @@ def setup(
     granted/removed outranks either of them -- see
     `extras._shared.check_role_assignable` for why Discord's own
     hierarchy enforcement alone isn't enough here (it checks the bot's
-    hierarchy, not the invoking human's).
+    hierarchy, not the invoking human's). Opt-in `audit_logger`, same
+    convention as `extras.warn`/`ban`/`kick`/`timeout`.
     """
 
     @bot.hybrid_command(  # type: ignore[arg-type]
@@ -60,8 +65,25 @@ def setup(
             await ctx.reply(f"{member} already has **{role.name}**.", ephemeral=True)
             return
 
-        audit_reason = f"{ctx.author} (via discord-webapi): {reason}" if reason else str(ctx.author)
-        await member.add_roles(role, reason=audit_reason)
+        audit_reason = build_audit_reason(ctx.author, reason)
+        try:
+            await member.add_roles(role, reason=audit_reason)
+        except discord.Forbidden:
+            await ctx.reply("I don't have permission to manage that role.", ephemeral=True)
+            return
+        except discord.NotFound:
+            await ctx.reply("That member is no longer in the server.", ephemeral=True)
+            return
+
+        if audit_logger is not None and ctx.guild is not None:
+            await audit_logger.record(
+                guild_id=ctx.guild.id,
+                actor_user_id=ctx.author.id,
+                action="role_assign.add",
+                target=str(member.id),
+                detail={"role_id": role.id, "reason": reason},
+            )
+
         await ctx.reply(f"Gave **{role.name}** to {member}.")
 
     @bot.hybrid_command(  # type: ignore[arg-type]
@@ -93,8 +115,25 @@ def setup(
             await ctx.reply(f"{member} doesn't have **{role.name}**.", ephemeral=True)
             return
 
-        audit_reason = f"{ctx.author} (via discord-webapi): {reason}" if reason else str(ctx.author)
-        await member.remove_roles(role, reason=audit_reason)
+        audit_reason = build_audit_reason(ctx.author, reason)
+        try:
+            await member.remove_roles(role, reason=audit_reason)
+        except discord.Forbidden:
+            await ctx.reply("I don't have permission to manage that role.", ephemeral=True)
+            return
+        except discord.NotFound:
+            await ctx.reply("That member is no longer in the server.", ephemeral=True)
+            return
+
+        if audit_logger is not None and ctx.guild is not None:
+            await audit_logger.record(
+                guild_id=ctx.guild.id,
+                actor_user_id=ctx.author.id,
+                action="role_assign.remove",
+                target=str(member.id),
+                detail={"role_id": role.id, "reason": reason},
+            )
+
         await ctx.reply(f"Removed **{role.name}** from {member}.")
 
     return role_add, role_remove

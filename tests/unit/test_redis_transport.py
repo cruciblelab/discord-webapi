@@ -111,6 +111,76 @@ async def test_remote_handler_exception_is_relayed_as_transport_error(two_transp
         await web_side.request("broken", {})
 
 
+async def test_command_named_reply_prefixed_is_not_misclassified(two_transports) -> None:
+    """Regression: the request-channel prefix ("{ns}:rpc:") used to be a
+    literal string-prefix of the reply-channel prefix ("{ns}:rpc:reply:"),
+    so a command named "reply:something" produced a request channel that
+    _read_loop_once's `startswith` checks misclassified as a reply channel
+    -- the request was silently dropped (handed to _resolve_reply, which
+    no-ops on an unknown channel) and the caller just timed out with no
+    indication why. The prefixes no longer nest, so this must now work."""
+    bot_side, web_side = two_transports
+
+    async def handle_it(payload: dict) -> dict:
+        return {"ok": True}
+
+    bot_side.register_handler("reply:something", handle_it)
+    await asyncio.sleep(0.1)
+
+    response = await web_side.request("reply:something", {})
+
+    assert response == {"ok": True}
+
+
+async def test_create_tracked_task_logs_instead_of_silently_swallowing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A fire-and-forget task (e.g. handling an incoming RPC request) whose
+    coroutine raises must not vanish as a bare "Task exception was never
+    retrieved" warning at GC time -- it should be logged clearly, with
+    enough context to know what failed."""
+    transport = RedisTransport("redis://unused")
+
+    async def _boom() -> None:
+        raise ValueError("boom")
+
+    with caplog.at_level("ERROR", logger="discord_webapi.transport.redis"):
+        transport._create_tracked_task(_boom(), description="test task")
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if caplog.records:
+                break
+
+    assert any("test task" in r.message for r in caplog.records)
+
+
+async def test_many_concurrent_requests_never_cross_wires(two_transports) -> None:
+    """`request()`'s subscribe/publish/unsubscribe on the shared `PubSub`
+    object runs concurrently with the background reader's `listen()` loop
+    on that same object whenever more than one request() call is in
+    flight -- the ordinary case under real dashboard load, not an edge
+    case. Empirically verified here rather than just reasoned about: many
+    concurrent in-flight requests, each with a distinct payload, must each
+    get back exactly its own reply, never another call's."""
+    bot_side, web_side = two_transports
+
+    async def handler(payload: dict) -> dict:
+        await asyncio.sleep(0.01)
+        return {"echo": payload["n"]}
+
+    bot_side.register_handler("echo", handler)
+    await asyncio.sleep(0.1)
+
+    async def one(n: int) -> int:
+        response = await web_side.request("echo", {"n": n}, timeout=5.0)
+        assert response["echo"] == n
+        return n
+
+    for _ in range(3):
+        results = await asyncio.gather(*(one(n) for n in range(20)))
+        assert sorted(results) == list(range(20))
+
+
 async def test_reader_loop_reconnects_after_a_dropped_connection() -> None:
     """Regression test: a dropped Redis connection used to kill the
     reader task forever -- no more events/RPC replies would ever be

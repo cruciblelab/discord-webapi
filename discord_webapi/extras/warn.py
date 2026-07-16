@@ -23,7 +23,7 @@ from discord import app_commands
 from discord.ext import commands
 from pydantic import BaseModel
 
-from discord_webapi.extras._shared import check_role_hierarchy
+from discord_webapi.extras._shared import check_role_hierarchy, notify_member_best_effort
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -35,7 +35,7 @@ class WarnRecord(BaseModel):
     guild_id: int
     user_id: int
     moderator_id: int
-    reason: str
+    reason: str | None
     created_at: datetime
 
 
@@ -67,6 +67,8 @@ def setup(
     *,
     store: WarnStore | None = None,
     command_name: str = "warn",
+    require_reason: bool = True,
+    dm_before_warn: bool = False,
     auto_timeout_after: int | None = None,
     auto_timeout_minutes: int = 10,
     audit_logger: AuditLogger | None = None,
@@ -78,9 +80,25 @@ def setup(
     `discord_webapi.extras.warn.SQLWarnStore`, needs `discord-webapi[sql]`)
     or your own `WarnStore` implementation.
 
+    `require_reason` (default `True`, same as `extras.ban`/`kick`/`timeout`)
+    -- warn's entire purpose is behavioral correction, so a reason is
+    required unless you opt out.
+
+    `dm_before_warn` (default `False`, unlike `ban`/`kick`'s `True` -- a
+    warning is common/low-stakes enough that many bots don't want an
+    automatic DM for every one): best-effort heads-up DM, same as
+    `notify_member_best_effort` everywhere else in this package.
+
     `auto_timeout_after`: if set, a member's `N`th warning in this guild
     automatically applies a `Member.timeout` of `auto_timeout_minutes` --
-    escalation is opt-in, never assumed.
+    escalation is opt-in, never assumed. This is its own independent
+    counter (`WarnStore.list_for_user`'s length), separate from
+    `discord_webapi.escalation.EscalationEngine`'s violation counts. If you
+    ALSO wire `automod`'s `on_violation` hook (or your own code) into
+    `EscalationEngine.record_violation(member, key)` for a `key` that
+    overlaps conceptually with "warnings", the two thresholds don't share
+    a count and can trigger independently of each other -- pick one
+    mechanism per concept, or be deliberate about running both.
 
     `audit_logger`: opt-in. Pass an `AuditLogger` (e.g. `api.audit_logger`,
     non-None only when `enable_audit_log=True`) to record each warning to
@@ -94,8 +112,11 @@ def setup(
     @app_commands.describe(member="The member to warn", reason="Why this member is being warned")
     @commands.has_permissions(moderate_members=True)
     async def warn(
-        ctx: commands.Context[commands.Bot], member: discord.Member, reason: str
+        ctx: commands.Context[commands.Bot], member: discord.Member, reason: str | None = None
     ) -> None:
+        if require_reason and not reason:
+            await ctx.reply("A reason is required to warn this member.", ephemeral=True)
+            return
         if ctx.guild is None:
             return
 
@@ -103,6 +124,12 @@ def setup(
         if hierarchy_error is not None:
             await ctx.reply(hierarchy_error, ephemeral=True)
             return
+
+        if dm_before_warn:
+            notice = f"You have been warned in **{ctx.guild.name}**."
+            if reason:
+                notice += f"\nReason: {reason}"
+            await notify_member_best_effort(member, notice)
 
         await warn_store.add(
             WarnRecord(
@@ -124,7 +151,9 @@ def setup(
                 detail={"reason": reason, "count": count},
             )
 
-        confirmation = f"Warned **{member}** ({count} total warning(s)).\nReason: {reason}"
+        confirmation = f"Warned **{member}** ({count} total warning(s))."
+        if reason:
+            confirmation += f"\nReason: {reason}"
 
         if auto_timeout_after is not None and count == auto_timeout_after:
             # Bot-permission check is deliberately runtime/best-effort, not
@@ -140,6 +169,11 @@ def setup(
                 confirmation += (
                     "\nReached the auto-timeout threshold, but I don't have permission "
                     "to time this member out."
+                )
+            except discord.NotFound:
+                confirmation += (
+                    "\nReached the auto-timeout threshold, but that member is no "
+                    "longer in the server."
                 )
 
         await ctx.reply(confirmation)

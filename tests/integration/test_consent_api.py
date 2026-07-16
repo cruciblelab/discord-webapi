@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from discord_webapi.auth import DiscordAuth
 from discord_webapi.consent import build_consent_router
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 from discord_webapi.storage import MemoryConsentStore
 from discord_webapi.web import build_default_dashboard_router
 
@@ -16,7 +17,7 @@ ME_URL = "https://discord.com/api/v10/users/@me"
 GUILDS_URL = "https://discord.com/api/v10/users/@me/guilds"
 
 
-def _build_app() -> FastAPI:
+def _build_app(*, write_rate_limiter: TokenBucketLimiter | None = None) -> FastAPI:
     app = FastAPI()
     auth = DiscordAuth(
         client_id="cid",
@@ -27,7 +28,7 @@ def _build_app() -> FastAPI:
     )
     auth.install(app)
     app.state.discord_webapi_consent_store = MemoryConsentStore()
-    app.include_router(build_consent_router())
+    app.include_router(build_consent_router(write_rate_limiter=write_rate_limiter))
     return app
 
 
@@ -85,6 +86,23 @@ def test_consent_requires_authentication() -> None:
     with TestClient(app) as client:
         resp = client.get("/api/consent")
         assert resp.status_code == 401
+
+
+def test_post_consent_rate_limit_returns_429_when_exceeded() -> None:
+    """POST /api/consent is reachable with just a session cookie, no
+    permission check beyond authentication -- same threat model as
+    /auth/discord/logout and the commands/app-roles PATCH/PUT/DELETE
+    endpoints, so it must be rate-limited the same way, not left as the
+    one unthrottled write endpoint in the library."""
+    app = _build_app(write_rate_limiter=TokenBucketLimiter(1, 60.0))
+    with TestClient(app) as client:
+        _log_in(client)
+
+        first = client.post("/api/consent", json={"consent_version": "1"})
+        second = client.post("/api/consent", json={"consent_version": "2"})
+
+        assert first.status_code == 200
+        assert second.status_code == 429
 
 
 def test_dashboard_banner_and_consent_api_share_the_same_version() -> None:

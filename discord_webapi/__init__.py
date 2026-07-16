@@ -293,7 +293,7 @@ class DiscordWebAPI:
         self.channel_permission_cache = ChannelPermissionCache(
             transport, ttl_seconds=channel_permission_cache_ttl_seconds
         )
-        self.app_role_cache = AppRoleCache(self.authz_store)
+        self.app_role_cache = AppRoleCache(transport, self.authz_store)
         # Usable in any process (bot-side, e.g. from an automod check;
         # web-side, e.g. protecting a dashboard endpoint) -- unlike the
         # CommandRegistry's RPC handlers, subscribing to a Transport event

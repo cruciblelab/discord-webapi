@@ -50,6 +50,8 @@ class GuildRateLimiter:
         *,
         default_max_calls: int = 5,
         default_per_seconds: float = 10.0,
+        bucket_idle_ttl_seconds: float = 3600.0,
+        bucket_sweep_interval: int = 2000,
     ) -> None:
         self.transport = transport
         self.store = store
@@ -58,6 +60,17 @@ class GuildRateLimiter:
         self._rules: dict[tuple[int, str], RateLimitRule] = {}
         self._loaded: set[tuple[int, str]] = set()
         self._buckets: dict[tuple[int, str, str], tuple[float, float]] = {}
+        # `sub_key` is documented for per-member buckets (module docstring),
+        # which means one dict entry per distinct (guild_id, key, user_id)
+        # ever seen -- with no eviction, that's an unbounded leak for the
+        # lifetime of the process. A bucket idle longer than
+        # `bucket_idle_ttl_seconds` is always fully refilled anyway (capped
+        # at max_calls), so dropping it is behaviorally identical to keeping
+        # it -- just frees memory. Swept every `bucket_sweep_interval` calls
+        # rather than every call, to keep the hot path O(1) amortized.
+        self._bucket_idle_ttl_seconds = bucket_idle_ttl_seconds
+        self._bucket_sweep_interval = bucket_sweep_interval
+        self._checks_since_sweep = 0
 
         transport.subscribe(EVENT_TYPE_RATELIMIT_CONFIG_CHANGED, self._on_config_changed)
 
@@ -72,10 +85,23 @@ class GuildRateLimiter:
 
         if tokens < 1:
             self._buckets[bucket_key] = (tokens, now)
-            return False
+            allowed = False
+        else:
+            self._buckets[bucket_key] = (tokens - 1, now)
+            allowed = True
 
-        self._buckets[bucket_key] = (tokens - 1, now)
-        return True
+        self._checks_since_sweep += 1
+        if self._checks_since_sweep >= self._bucket_sweep_interval:
+            self._sweep_idle_buckets(now)
+
+        return allowed
+
+    def _sweep_idle_buckets(self, now: float) -> None:
+        self._checks_since_sweep = 0
+        stale_cutoff = now - self._bucket_idle_ttl_seconds
+        for bucket_key, (_tokens, last_refill) in list(self._buckets.items()):
+            if last_refill < stale_cutoff:
+                del self._buckets[bucket_key]
 
     async def get_rule(self, guild_id: int, key: str) -> RateLimitRule | None:
         return await self._get_cached_rule(guild_id, key)
@@ -92,6 +118,16 @@ class GuildRateLimiter:
         per_seconds: float,
         updated_by_user_id: int | None = None,
     ) -> RateLimitRule:
+        # Belt-and-suspenders: the dashboard API validates this too
+        # (`RateLimitRulePatch`'s `Field(gt=0)`), but `set_rule()` is public
+        # and callable directly (automod, a skeleton, your own code) without
+        # going through the API layer -- and `check()`'s token-bucket math
+        # divides by `per_seconds`, so a 0 here is a `ZeroDivisionError` on
+        # every future call for this (guild_id, key) until fixed by hand.
+        if max_calls <= 0:
+            raise ValueError(f"max_calls must be > 0, got {max_calls!r}")
+        if per_seconds <= 0:
+            raise ValueError(f"per_seconds must be > 0, got {per_seconds!r}")
         rule = RateLimitRule(
             guild_id=guild_id,
             key=key,

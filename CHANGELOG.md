@@ -2,6 +2,112 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Kapsamlı güvenlik/sağlamlık taraması (4 paralel denetim ajanı)
+
+Kullanıcının "sağlam bir tarama yap, bugları fixle, sunduğumuz şeylerde
+basit/kolaya kaçılan yerleri sağlamlaştır" talebiyle yapıldı. 4 alanı
+paralel tarayan araştırma turu + bulunan gerçek hataların düzeltilmesi.
+Ayrıntılar için `NOTES.md`'ye bakın.
+
+### Düzeltilenler
+
+- **`storage`**: `SessionStore.update()` artık her iki implementasyonda da
+  (Memory/SQL) tutarlı — satır silinmişse (ör. başka bir sekmeden çıkış
+  yapılmışsa) sessizce yeniden yaratmak (Memory'nin eski davranışı) ya da
+  yakalanmayan bir `ValueError` fırlatmak (SQL'in eski davranışı) yerine
+  ikisi de `SessionExpiredError` fırlatıyor -- `get_current_user`'ın zaten
+  yakaladığı, temiz 401'e dönüşen hata.
+- **`escalation/sql.py`**: `set_rule` artık `storage/sql.py`'deki diğer
+  tüm "yeni satır" yazıcılarıyla aynı `IntegrityError`-toleranslı upsert
+  desenini kullanıyor -- iki isteğin aynı yeni kuralı aynı anda oluşturma
+  yarışı artık 500 yerine düzgün sonuçlanıyor.
+- **`ratelimits/limiter.py`**: `set_rule` artık `max_calls`/`per_seconds`
+  için `<= 0` değerleri reddediyor (hem Pydantic modelinde hem doğrudan
+  çağrılara karşı) -- `per_seconds=0` önceden `check()`'in her çağrısında
+  `ZeroDivisionError` fırlatan, kuralı elle düzeltilene kadar süren bir
+  DoS'a yol açıyordu. Ayrıca `sub_key` (üye bazlı) kullanan bucket'lar artık
+  periyodik olarak süpürülüyor -- önceden süresiz büyüyen bir bellek sızıntısıydı.
+- **`escalation/engine.py`**: `_apply_action` artık gerçek moderasyon
+  komutlarıyla (ban/kick/timeout) aynı rol-hiyerarşisi kontrolünü yapıyor
+  ve Discord API hatalarını (`Forbidden`/`NotFound`) yakalıyor -- önceden
+  hedef botu outrank ediyorsa ya da yetki yoksa `automod`'un `on_message`
+  handler'ından fırlayan yakalanmamış bir hataydı. Audit kaydı artık
+  aksiyonun gerçekten uygulanıp uygulanmadığını (`action_applied`) da tutuyor.
+- **`extras/ban.py`/`kick.py`/`timeout.py`/`role_assign.py`**: hepsi artık
+  `discord.Forbidden`/`discord.NotFound`'u yakalayıp temiz bir mesajla
+  yanıtlıyor (önceden sadece `warn.py`'de vardı), opsiyonel `audit_logger`
+  destekliyor (önceden sadece `warn`/`automod`'da vardı), ve audit-log
+  reason'ı Discord'un 512 karakter sınırına göre kırpan ortak
+  `build_audit_reason` helper'ını kullanıyor (`_shared.py`). `timeout.py`
+  artık `ban`/`kick` gibi opsiyonel `dm_before_timeout` destekliyor;
+  `warn.py` artık `require_reason` (varsayılan `True`, diğerleriyle
+  tutarlı) ve `dm_before_warn` destekliyor.
+- **`authz/app_roles.py`**: `AppRoleCache` artık `GuildRateLimiter`/
+  `EscalationEngine`/`GuildMemberCache` ile aynı desende bir Transport
+  event'i (`app_role_changed`) yayınlıyor -- önceden sadece yazan process'in
+  kendi in-memory cache'ini temizliyordu, `for_bot_process`/`for_web_process`
+  kurulumunda bir replica'da yapılan rol iptali diğer replica'larda
+  `ttl_seconds`e kadar (varsayılan 30sn) hâlâ geçerli görünüyordu.
+- **Audit log kapsam boşluğu**: `ratelimits/api.py`, `escalation/api.py`
+  (kural CRUD'u), `jobs/api.py` artık diğer state-changing endpoint'lerle
+  (`commands/api.py`, `authz/api.py`) aynı şekilde audit kaydı tutuyor --
+  önceden bir rate-limit/escalation kuralını kim ayarladığı ya da bir job'ı
+  kim kuyruğa aldığı hiç loglanmıyordu.
+- **`consent/api.py`**: `POST /api/consent` artık diğer tüm state-changing
+  endpoint'lerle aynı dashboard rate-limit korumasına sahip -- önceden
+  sadece kimlik doğrulama gerektiren, korumasız bırakılmış tek yazma
+  endpoint'iydi.
+- **`discord_webapi/transport/redis.py`**: request/reply kanal önekleri
+  artık birbirinin öneki DEĞİL (`rpc-cmd:`/`rpc-reply:`) -- önceden
+  `"reply:..."` ile başlayan bir komut adı yanlışlıkla reply kanalı
+  sanılıp isteği sessizce düşürüyordu. Her fire-and-forget task artık
+  istisnasını loglayan bir done-callback'e sahip (önceden bir hata sessizce
+  "Task exception was never retrieved" uyarısına dönüşüyordu). RPC reply
+  publish'i artık kendi try/except'inde -- publish başarısız olursa en
+  azından loglanıyor, sessizce kaybolmuyor.
+- **`discord_webapi/jobs/redis.py`**: çıplak `assert self._redis is not
+  None` ifadeleri (`python -O` altında kırpılabilir) yerine açık
+  `RuntimeError` fırlatan `_require_redis()`. Yeni
+  **`reclaim_stale_jobs(max_age_seconds=...)`**: bir worker process'i işin
+  ortasında çökerse (BLPOP zaten job'ı kuyruktan atomik olarak çıkardığı
+  için) job sonsuza kadar "running" durumunda takılı kalıyordu -- bu metod
+  bu tür job'ları bulup "failed" yapıyor (otomatik yeniden kuyruğa almıyor,
+  çünkü bazı job'lar -- toplu DM/ban gibi -- güvenli şekilde otomatik
+  tekrar çalıştırılamaz).
+- **`discord_webapi/tools/`**: `confirm()` artık interaktif olmayan
+  stdin'de (`EOFError`) çökmek yerine "hayır" kabul ediyor, Türkçe tek harf
+  "e" yanıtını da onay olarak kabul ediyor. `discord-webapi-migrate run`
+  artık `discord-webapi-backup create` ile aynı `--tables` filtresine
+  sahip. Eksik/bozuk checkpoint/yedek dosyaları artık ham bir traceback
+  yerine temiz bir hata mesajıyla (`DumpFileError`) sonuçlanıyor.
+
+### Kontrol edilip gerçek bir hata bulunmayan (doğrulandı, düzeltme gerekmedi)
+
+- `RedisTransport.request()`'in paylaşılan `PubSub` nesnesi üzerinde
+  subscribe/publish/unsubscribe'ın arka plan okuyucusunun `listen()`
+  döngüsüyle eşzamanlı çalışması teorik bir yarış durumu gibi görünüyordu
+  -- gerçek bir Redis'e karşı 160 eşzamanlı RPC round-trip'i (aynı anda 20,
+  8 tur) hiçbir cevap karışması olmadan doğru sonuçlandı, kalıcı bir
+  regresyon testi olarak eklendi. redis-py'nin bu deseni zaten güvenli
+  şekilde ele aldığı anlaşılıyor.
+- `commands/registry.py`'nin `global_check` çift-çağrı koruması, kurulu
+  discord.py'nin `HybridAppCommand._check_can_run`'ına karşı doğrulandı --
+  doğru.
+
+### Bilinçli olarak düzeltilmeyen (dokümante edildi)
+
+- `warn.py`'nin `auto_timeout_after` sayacı ile
+  `EscalationEngine`'in ihlal sayaçları birbirinden bağımsız --
+  ikisi aynı anda "uyarı" kavramı için kullanılırsa paylaşılan bir sayaç
+  olmadan bağımsız tetiklenebilirler. Bu, `warn.py`'nin docstring'inde
+  bir uyarı olarak not edildi; birleştirmek daha büyük bir yeniden tasarım
+  gerektirir, bu turun kapsamı dışında bırakıldı.
+
+Tüm düzeltmeler gerçek testlerle (gerçek SQLite/Redis'e karşı, mock değil)
+doğrulandı -- birkaç yeni regresyon testi eklendi (storage, ratelimits,
+escalation, extras, transport, jobs). 528 test yeşil (1 ortam-bağımlı
+Postgres testi hariç), ruff+mypy temiz.
+
 ## [Unreleased] — `discord_webapi.tools.healthcheck`: bağlantı sağlığı CLI'si
 
 ### Eklenenler

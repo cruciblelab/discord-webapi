@@ -89,7 +89,7 @@ async def test_user_with_matching_discord_role_is_allowed() -> None:
     await store.set_app_role(
         AppRole(name="moderator", guild_id=GUILD_ID, discord_role_ids=[MOD_ROLE_ID], user_ids=[])
     )
-    cache = AppRoleCache(store)
+    cache = AppRoleCache(InProcessTransport(), store)
     registry = await _build_registry(app_role_cache=cache)
     _set_required_app_role(registry, "moderator")
 
@@ -102,7 +102,7 @@ async def test_user_without_matching_role_is_denied() -> None:
     await store.set_app_role(
         AppRole(name="moderator", guild_id=GUILD_ID, discord_role_ids=[MOD_ROLE_ID], user_ids=[])
     )
-    cache = AppRoleCache(store)
+    cache = AppRoleCache(InProcessTransport(), store)
     registry = await _build_registry(app_role_cache=cache)
     _set_required_app_role(registry, "moderator")
 
@@ -115,7 +115,7 @@ async def test_user_granted_by_explicit_user_id_is_allowed() -> None:
     await store.set_app_role(
         AppRole(name="moderator", guild_id=GUILD_ID, discord_role_ids=[], user_ids=[42])
     )
-    cache = AppRoleCache(store)
+    cache = AppRoleCache(InProcessTransport(), store)
     registry = await _build_registry(app_role_cache=cache)
     _set_required_app_role(registry, "moderator")
 
@@ -130,7 +130,7 @@ async def test_app_role_check_short_circuits_before_cooldown() -> None:
     await store.set_app_role(
         AppRole(name="moderator", guild_id=GUILD_ID, discord_role_ids=[MOD_ROLE_ID], user_ids=[])
     )
-    cache = AppRoleCache(store)
+    cache = AppRoleCache(InProcessTransport(), store)
     registry = await _build_registry(app_role_cache=cache)
     registry._override_cache[(GUILD_ID, COMMAND_NAME)] = CommandOverride(
         guild_id=GUILD_ID,
@@ -165,7 +165,7 @@ async def test_slash_interaction_check_also_enforces_required_app_role() -> None
     await store.set_app_role(
         AppRole(name="moderator", guild_id=GUILD_ID, discord_role_ids=[MOD_ROLE_ID], user_ids=[])
     )
-    cache = AppRoleCache(store)
+    cache = AppRoleCache(InProcessTransport(), store)
     registry = await _build_registry(app_role_cache=cache)
     _set_required_app_role(registry, "moderator")
 

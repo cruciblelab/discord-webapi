@@ -5,6 +5,7 @@ import contextlib
 import json
 import logging
 import uuid
+from collections.abc import Coroutine
 from typing import Any
 
 from redis.asyncio import Redis
@@ -69,6 +70,15 @@ class RedisTransport:
     instance for cost/ops reasons. For real isolation between mutually
     untrusted tenants, use separate Redis databases/ACL users, not just
     separate namespaces.
+
+    **Connection pool sizing under heavy concurrent RPC traffic**: each
+    `request()` call briefly holds a connection for its
+    subscribe/publish/unsubscribe sequence. redis-py's default connection
+    pool caps at 100 connections -- a dashboard issuing many dozens of
+    concurrent `request()` calls at once can hit `MaxConnectionsError`.
+    Pass `max_connections=` (forwarded via `**redis_kwargs` to
+    `Redis.from_url`) if your deployment's concurrent RPC volume needs
+    more headroom than that default.
     """
 
     def __init__(
@@ -82,8 +92,15 @@ class RedisTransport:
         self._redis_kwargs = redis_kwargs
         self._namespace = namespace
         self._events_channel = f"{namespace}:events"
-        self._rpc_request_prefix = f"{namespace}:rpc:"
-        self._rpc_reply_prefix = f"{namespace}:rpc:reply:"
+        # Sibling prefixes (neither a prefix of the other) on purpose --
+        # `rpc:` used to be a prefix of `rpc:reply:`, so a command literally
+        # named "reply:whatever" produced a request channel
+        # (f"{namespace}:rpc:reply:whatever") that _read_loop_once's
+        # startswith checks misclassified as a reply channel, silently
+        # dropping every request for that command name. Not reachable by
+        # construction anymore.
+        self._rpc_request_prefix = f"{namespace}:rpc-cmd:"
+        self._rpc_reply_prefix = f"{namespace}:rpc-reply:"
         self._redis: Redis | None = None
         self._pubsub: PubSub | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -164,7 +181,10 @@ class RedisTransport:
             elif channel.startswith(self._rpc_reply_prefix):
                 self._resolve_reply(channel, envelope)
             elif channel.startswith(self._rpc_request_prefix):
-                asyncio.create_task(self._handle_rpc_request(channel, envelope))
+                self._create_tracked_task(
+                    self._handle_rpc_request(channel, envelope),
+                    description=f"RPC request handler for channel {channel!r}",
+                )
 
     async def _resubscribe_all(self) -> None:
         # Re-establishes every channel this instance cares about after a
@@ -204,6 +224,26 @@ class RedisTransport:
         if future is not None and not future.done():
             future.set_result(envelope)
 
+    def _create_tracked_task(self, coro: Coroutine[Any, Any, None], *, description: str) -> None:
+        """`asyncio.create_task` without keeping the returned task anywhere
+        silently swallows any exception it raises (it only ever surfaces as
+        an "exception was never retrieved" warning at GC time) -- used for
+        every fire-and-forget task this class creates so a failure is at
+        least logged, not lost. In particular, a caller waiting on
+        `request()` for this exact RPC would otherwise see a plain timeout
+        with no indication the handler actually ran (or why its reply never
+        arrived)."""
+        task = asyncio.create_task(coro)
+        task.add_done_callback(lambda t: self._log_task_exception(t, description=description))
+
+    @staticmethod
+    def _log_task_exception(task: asyncio.Task[None], *, description: str) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error("Unhandled error in %s", description, exc_info=exc)
+
     async def _handle_rpc_request(self, channel: str, envelope: dict[str, Any]) -> None:
         command = channel.removeprefix(self._rpc_request_prefix)
         handler = self._handlers.get(command)
@@ -218,11 +258,25 @@ class RedisTransport:
             response = {}
             error = str(exc)
 
-        redis = self._require_redis()
-        await redis.publish(
-            self._rpc_reply_channel(request_id),
-            json.dumps({"response": response, "error": error}),
-        )
+        try:
+            redis = self._require_redis()
+            await redis.publish(
+                self._rpc_reply_channel(request_id),
+                json.dumps({"response": response, "error": error}),
+            )
+        except RedisError:
+            # The handler ran (successfully or not, per `error` above) but
+            # the reply never made it back -- without this the caller just
+            # sees a bare TransportTimeoutError with nothing in the logs to
+            # explain that the command actually executed.
+            logger.exception(
+                "Failed to publish RPC reply for command %r (request_id=%s); the "
+                "handler's own result (error=%r) is now unreachable, and the "
+                "caller of request() will see a timeout instead.",
+                command,
+                request_id,
+                error,
+            )
 
     async def publish(self, event: Event) -> None:
         redis = self._require_redis()
@@ -252,14 +306,17 @@ class RedisTransport:
             return  # picked up in one batch by start()
 
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
             raise TransportError(
                 f"register_handler({command!r}) was called after start() but outside a running "
                 "event loop, so the Redis channel subscription can't be scheduled. Register "
                 "handlers before start(), or from within an async context."
             ) from None
-        loop.create_task(self._pubsub.subscribe(self._rpc_request_channel(command)))
+        self._create_tracked_task(
+            self._pubsub.subscribe(self._rpc_request_channel(command)),
+            description=f"post-start subscribe for command {command!r}",
+        )
 
     async def request(
         self, command: str, payload: dict[str, Any], *, timeout: float = 5.0

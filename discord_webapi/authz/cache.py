@@ -70,12 +70,12 @@ class ChannelPermissionCache:
     permissions folded together with that channel's own overwrites --
     see `commands.bridge.get_channel_permissions`).
 
-    Deliberately TTL-only, no push invalidation (unlike `GuildMemberCache`):
-    channel overwrites change far less often than guild membership/roles,
-    and reacting to every `on_guild_channel_update` across every channel
-    isn't worth the complexity for something that's already eventually
-    consistent within `ttl_seconds` -- same tradeoff `AppRoleCache` already
-    makes for its own, even-less-frequently-changing data.
+    Deliberately TTL-only, no push invalidation (unlike `GuildMemberCache`
+    or `AppRoleCache`): channel overwrites change far less often than guild
+    membership/roles or dashboard-assigned app roles, and reacting to every
+    `on_guild_channel_update` across every channel isn't worth the
+    complexity for something that's already eventually consistent within
+    `ttl_seconds`.
     """
 
     def __init__(self, transport: Transport, *, ttl_seconds: float = 30.0) -> None:

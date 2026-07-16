@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
+from discord_webapi.audit.logger import AuditLogger
 from discord_webapi.authz.dependencies import GuildContext, require_guild_permission
 from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 from discord_webapi.dashboard_ratelimit_dependency import rate_limit_dependency
@@ -22,6 +23,11 @@ def _get_job_queue(request: Request) -> JobQueue:
     return queue
 
 
+def _get_audit_logger(request: Request) -> AuditLogger | None:
+    # Only present when enable_audit_log=True -- see DiscordWebAPI.install.
+    return getattr(request.app.state, "discord_webapi_audit_logger", None)
+
+
 def build_jobs_router(*, enqueue_rate_limiter: TokenBucketLimiter | None = None) -> APIRouter:
     """Dashboard-facing API for background jobs (see `jobs.base.JobQueue`):
     enqueue a long-running operation and poll its status, instead of
@@ -36,10 +42,21 @@ def build_jobs_router(*, enqueue_rate_limiter: TokenBucketLimiter | None = None)
         job_type: str,
         body: EnqueueJobRequest,
         request: Request,
-        _ctx: GuildContext = Depends(require_guild_permission("manage_guild")),
+        ctx: GuildContext = Depends(require_guild_permission("manage_guild")),
         _rate_limited: None = Depends(rate_limit_dependency(limiter)),
     ) -> JobStatus:
-        return await _get_job_queue(request).enqueue(job_type, body.payload, guild_id=guild_id)
+        job = await _get_job_queue(request).enqueue(job_type, body.payload, guild_id=guild_id)
+
+        audit = _get_audit_logger(request)
+        if audit is not None:
+            await audit.record(
+                guild_id=guild_id,
+                actor_user_id=ctx.user.id,
+                action="job.enqueue",
+                target=job_type,
+                detail={"job_id": job.job_id, "payload": body.payload},
+            )
+        return job
 
     @router.get("/{job_id}")
     async def get_job(

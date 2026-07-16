@@ -10,10 +10,18 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import MetaData, Table, insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+
+class DumpFileError(Exception):
+    """A checkpoint/backup JSON file is missing or unreadable. Callers catch
+    this in their CLI `main()` to print a clean one-line error and exit 1,
+    instead of letting a raw FileNotFoundError/JSONDecodeError traceback
+    reach the terminal."""
 
 
 async def reflect(engine: AsyncEngine) -> MetaData:
@@ -81,6 +89,19 @@ def loads(text: str) -> dict[str, list[dict[str, Any]]]:
     return result
 
 
+def load_dump_file(path: Path) -> dict[str, list[dict[str, Any]]]:
+    """Reads and parses a checkpoint/backup JSON file, raising `DumpFileError`
+    (a clean, catchable error) instead of a raw FileNotFoundError/
+    JSONDecodeError traceback for the common CLI mistakes: wrong path, or a
+    file that was never fully written (e.g. an interrupted `create`)."""
+    if not path.exists():
+        raise DumpFileError(f"Dosya bulunamadı: {path}")
+    try:
+        return loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise DumpFileError(f"'{path}' geçerli bir JSON dosyası değil: {exc}") from exc
+
+
 def redact(url: str) -> str:
     """Hides a password embedded in a DB URL (scheme://user:PASSWORD@host/db)
     before printing it to the terminal/logs."""
@@ -97,5 +118,12 @@ def redact(url: str) -> str:
 def confirm(prompt: str, *, assume_yes: bool) -> bool:
     if assume_yes:
         return True
-    answer = input(prompt)
-    return answer.strip().lower() in ("y", "yes", "evet")
+    try:
+        answer = input(prompt)
+    except EOFError:
+        # No interactive stdin (cron/CI/piped input) and --yes wasn't passed --
+        # treat it as a declined confirmation rather than crashing with a
+        # traceback. A destructive command should refuse by default, not fail
+        # open.
+        return False
+    return answer.strip().lower() in ("y", "yes", "e", "evet")

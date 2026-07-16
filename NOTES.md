@@ -1,5 +1,103 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## Kapsamlı güvenlik/sağlamlık taraması: 4 paralel denetim ajanı (bu oturumda)
+
+Kullanıcının backup/healthcheck teslim edildikten sonraki isteği:
+"fiziksel testler aksadı, biraz daha aksatalım, sağlam bir tarama yap,
+bugları fixle, 'bu varken bu neden yok' dedirtecek yerleri ve kolaya
+kaçılan yerleri sağlamlaştırıp genişletelim." Yani: gerçek hata avı +
+paralel implementasyonlar arası asimetri avı (Memory vs SQL store'lar,
+sibling moderasyon komutları arasında feature parity) + sertleştirme.
+
+**Yöntem**: 4 general-purpose ajan paralel olarak (Explore değil -- bu
+görev "cross-file consistency check" gerektiriyordu, Explore'un kapsamı
+dışında) 4 kümeyi taradı: (1) storage/audit/consent/ratelimits/escalation,
+(2) transport/jobs, (3) extras (moderasyon komutları), (4) commands/
+authz/dashboard API. Her biri file:line + somut başarısızlık senaryosu
+istendi, spekülasyon değil doğrulanmış bulgu. Toplam 19 bulgu geldi,
+neredeyse tamamı gerçek ve düzeltildi.
+
+### Düzeltilenler (özet -- detaylar CHANGELOG.md'de)
+
+1. **`SessionStore.update()` yarışı**: Memory sessizce silinen session'ı
+   diriltirken SQL yakalanmayan `ValueError` fırlatıyordu -- ikisi de artık
+   `SessionExpiredError` (zaten `get_current_user`'ın yakaladığı tip).
+2. **`escalation/sql.py`**: eksik `IntegrityError`-toleranslı upsert
+   (storage/sql.py'deki `_commit_upsert` deseninin kendi küçük kopyası).
+3. **`GuildRateLimiter`**: `per_seconds=0` → `ZeroDivisionError` DoS'u
+   (artık `set_rule`'da reddediliyor); `sub_key` bucket'ları artık
+   periyodik süpürülüyor (önceden süresiz bellek sızıntısı).
+4. **`EscalationEngine._apply_action`**: rol-hiyerarşisi kontrolü + 
+   `Forbidden`/`NotFound` yakalama eklendi (önceden `automod`'un
+   `on_message`'ından fırlayan yakalanmamış hataydı); audit kaydı artık
+   `action_applied: bool` tutuyor (rung tetiklendi ama aksiyon
+   uygulanamadıysa bunu dürüstçe kaydediyor).
+5. **`extras/ban.py`/`kick.py`/`timeout.py`/`role_assign.py`**: hepsine
+   `Forbidden`/`NotFound` yakalama, opsiyonel `audit_logger`, ortak
+   `build_audit_reason()` (Discord'un 512 karakter audit-reason limitine
+   göre kırpıyor) eklendi. `timeout.py`'ye `dm_before_timeout`, `warn.py`'ye
+   `require_reason`/`dm_before_warn` eklendi (asimetri giderme).
+6. **`AppRoleCache`**: artık `GuildRateLimiter`/`EscalationEngine`/
+   `GuildMemberCache` ile aynı Transport-event cross-process invalidation
+   desenini kullanıyor (`app_role_changed`) -- önceden SADECE bu cache
+   bu deseni kullanmıyordu, `for_bot_process`/`for_web_process`
+   kurulumunda bir replica'daki rol iptali diğerlerinde 30sn'ye kadar hâlâ
+   geçerli görünüyordu. `AppRoleCache(store)` → `AppRoleCache(transport,
+   store)` imza değişikliği, tüm çağıran yerler güncellendi.
+7. **Audit kapsam boşluğu**: `ratelimits/api.py`, `escalation/api.py`
+   (kural CRUD), `jobs/api.py` audit hiç yazmıyordu -- artık
+   `commands/api.py`/`authz/api.py` ile aynı desende yazıyor.
+8. **`consent/api.py`**: `POST /api/consent` artık diğer tüm
+   state-changing endpoint'lerle aynı dashboard rate-limit'ine sahip.
+9. **`RedisTransport`**: request/reply kanal önekleri artık birbirinin
+   öneki değil (`rpc-cmd:`/`rpc-reply:` -- `reply:` ile başlayan bir komut
+   adının yanlış sınıflandırılmasını by-construction imkansız kıldı).
+   Her fire-and-forget task artık `_create_tracked_task` ile
+   istisna-loglayan bir done-callback'e sahip. RPC reply publish kendi
+   try/except'inde (publish başarısız olursa loglanıyor, sessizce kaybolmuyor).
+10. **`RedisJobQueue`**: çıplak `assert`'ler → `_require_redis()` (açık
+    `RuntimeError`). Yeni **`reclaim_stale_jobs(max_age_seconds=...)`**:
+    worker çökmesi/kill edilmesi durumunda sonsuza kadar "running" kalan
+    job'ları bulup "failed" yapıyor -- bilinçli olarak otomatik yeniden
+    kuyruğa almıyor (toplu DM/ban gibi bazı job'lar güvenli şekilde
+    otomatik tekrar çalıştırılamaz, karar operatöre bırakıldı).
+11. **`discord_webapi/tools/`**: `confirm()` artık `EOFError`'da (interaktif
+    olmayan stdin) çökmüyor, "hayır" kabul ediyor; Türkçe tek harf "e" de
+    kabul ediliyor. `migrate run`'a `backup create` ile parite için
+    `--tables` eklendi. Eksik/bozuk dosyalar artık `DumpFileError` ile
+    temiz hata veriyor (ham traceback yerine).
+
+### Kontrol edilip bulunmayan (gerçek doğrulamayla, spekülasyonla değil)
+
+- **`RedisTransport.request()`'in paylaşılan `PubSub`'ı**: ajan bunu
+  teorik bir yarış durumu olarak işaretlemişti (subscribe/publish/
+  unsubscribe, arka plan `listen()` döngüsüyle eşzamanlı). Gerçek bir
+  Redis'e karşı 8 tur × 20 eşzamanlı RPC (160 toplam) hiçbir cevap
+  karışması olmadan doğru sonuçlandı -- kalıcı regresyon testi olarak
+  eklendi (`test_many_concurrent_requests_never_cross_wires`). Bu
+  deneyde ayrı bir gerçek bulgu ortaya çıktı: redis-py'nin varsayılan
+  connection pool'u 100 bağlantıyla sınırlı, çok yüksek eşzamanlı RPC
+  hacminde `MaxConnectionsError` verebiliyor -- zaten `**redis_kwargs`
+  üzerinden `max_connections=` ile ayarlanabiliyordu, sadece
+  docstring'e not düşüldü.
+- `commands/registry.py`'nin çift-invocation koruması kurulu discord.py
+  sürümüne karşı doğrulandı, doğru.
+
+### Bilinçli olarak düzeltilmeyen
+
+- `warn.py`'nin `auto_timeout_after` sayacı ile `EscalationEngine`'in
+  ihlal sayaçları birbirinden habersiz -- ikisi birden "uyarı" kavramı
+  için kullanılırsa paylaşılan bir sayaç yok. Birleştirmek `warn.py`'yi
+  `EscalationEngine`'in üzerine yeniden yazmak demek -- daha büyük bir
+  mimari değişiklik, davranış değiştirme riski taşıyor, bu turun kapsamı
+  dışında bırakıldı. `warn.py`'nin docstring'inde bu net şekilde uyarı
+  olarak yazılı.
+
+Tüm düzeltmeler gerçek testlerle doğrulandı (gerçek SQLite/Redis'e karşı,
+mock değil) -- storage/ratelimits/escalation/extras/transport/jobs'a
+yeni regresyon testleri eklendi. 528 test yeşil (1 ortam-bağımlı Postgres
+testi hariç), ruff+mypy temiz.
+
 ## `discord_webapi.tools.healthcheck`: bağlantı sağlığı CLI'si (bu oturumda)
 
 `backup` bittikten sonra kullanıcının "diğerleri boş olursa direkt başla"

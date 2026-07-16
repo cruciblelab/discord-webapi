@@ -45,7 +45,14 @@ class SessionStore(Protocol):
 
     async def get(self, session_id: str) -> Session | None: ...
 
-    async def update(self, session: Session) -> None: ...
+    async def update(self, session: Session) -> None:
+        """Raises `discord_webapi.exceptions.SessionExpiredError` if the
+        session no longer exists (e.g. deleted by a concurrent logout
+        between the caller's read and this write) -- must NOT silently
+        recreate it. `auth.oauth.DiscordAuth._ensure_fresh_discord_token`
+        specifically relies on this to treat a session that disappeared
+        mid-refresh the same as an already-expired one."""
+        ...
 
     async def delete(self, session_id: str) -> None: ...
 

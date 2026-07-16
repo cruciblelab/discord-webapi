@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class RateLimitRule(BaseModel):
@@ -15,8 +15,8 @@ class RateLimitRule(BaseModel):
 
     guild_id: int
     key: str
-    max_calls: int
-    per_seconds: float
+    max_calls: int = Field(gt=0)
+    per_seconds: float = Field(gt=0)
     updated_at: datetime
     updated_by_user_id: int | None = None
 
@@ -24,5 +24,5 @@ class RateLimitRule(BaseModel):
 class RateLimitRulePatch(BaseModel):
     """Request body for `PUT /api/guilds/{guild_id}/ratelimits/{key}`."""
 
-    max_calls: int
-    per_seconds: float
+    max_calls: int = Field(gt=0)
+    per_seconds: float = Field(gt=0)

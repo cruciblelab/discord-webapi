@@ -16,7 +16,20 @@ from discord_webapi.commands import (
     build_commands_router,
     install_command_registry_bridge,
 )
-from discord_webapi.storage import MemoryAuditStore, MemoryAuthzStore, MemoryCommandConfigStore
+from discord_webapi.escalation import (
+    EscalationEngine,
+    MemoryEscalationRuleStore,
+    MemoryViolationStore,
+    build_escalation_router,
+)
+from discord_webapi.jobs import InProcessJobQueue, build_jobs_router
+from discord_webapi.ratelimits import GuildRateLimiter, build_ratelimits_router
+from discord_webapi.storage import (
+    MemoryAuditStore,
+    MemoryAuthzStore,
+    MemoryCommandConfigStore,
+    MemoryRateLimitStore,
+)
 from discord_webapi.transport import InProcessTransport
 
 TOKEN_URL = "https://discord.com/api/v10/oauth2/token"
@@ -60,11 +73,19 @@ async def _build_app() -> FastAPI:
 
     app.state.discord_webapi_member_cache = GuildMemberCache(transport)
     app.state.discord_webapi_transport = transport
-    app.state.discord_webapi_app_role_cache = AppRoleCache(authz_store)
+    app.state.discord_webapi_app_role_cache = AppRoleCache(transport, authz_store)
+    app.state.discord_webapi_ratelimiter = GuildRateLimiter(transport, MemoryRateLimitStore())
+    app.state.discord_webapi_escalation_engine = EscalationEngine(
+        transport, MemoryEscalationRuleStore(), MemoryViolationStore()
+    )
+    app.state.discord_webapi_job_queue = InProcessJobQueue()
     app.state.discord_webapi_audit_store = audit_store
     app.state.discord_webapi_audit_logger = AuditLogger(audit_store)
     app.include_router(build_commands_router())
     app.include_router(build_app_roles_router())
+    app.include_router(build_ratelimits_router())
+    app.include_router(build_escalation_router())
+    app.include_router(build_jobs_router())
     app.include_router(build_audit_log_router())
 
     return app
@@ -126,3 +147,56 @@ async def test_app_role_writes_are_audited() -> None:
         log_resp = client.get(f"/api/guilds/{GUILD_ID}/audit-log")
         actions = [e["action"] for e in log_resp.json()]
         assert actions == ["app_role.delete", "app_role.set"]  # newest first
+
+
+async def test_ratelimit_rule_writes_are_audited() -> None:
+    """Regression: ratelimits/api.py used to write rules straight to the
+    store with no audit call at all -- the human who configured a
+    reckless rate limit was invisible in the audit trail."""
+    app = await _build_app()
+    with TestClient(app) as client:
+        _log_in(client)
+
+        client.put(
+            f"/api/guilds/{GUILD_ID}/ratelimits/automod.spam",
+            json={"max_calls": 5, "per_seconds": 10.0},
+        )
+        client.delete(f"/api/guilds/{GUILD_ID}/ratelimits/automod.spam")
+
+        log_resp = client.get(f"/api/guilds/{GUILD_ID}/audit-log")
+        actions = [e["action"] for e in log_resp.json()]
+        assert actions == ["ratelimit.delete_rule", "ratelimit.set_rule"]  # newest first
+
+
+async def test_escalation_rule_writes_are_audited() -> None:
+    """Regression: only the *triggered* rung was audited
+    (escalation.<action>, actor_user_id=0) -- the human who *configured*
+    the rule via the dashboard was never logged."""
+    app = await _build_app()
+    with TestClient(app) as client:
+        _log_in(client)
+
+        client.put(
+            f"/api/guilds/{GUILD_ID}/escalation-rules/automod/1",
+            json={"action": "kick"},
+        )
+        client.delete(f"/api/guilds/{GUILD_ID}/escalation-rules/automod/1")
+
+        log_resp = client.get(f"/api/guilds/{GUILD_ID}/audit-log")
+        actions = [e["action"] for e in log_resp.json()]
+        assert actions == ["escalation.delete_rule", "escalation.set_rule"]  # newest first
+
+
+async def test_job_enqueue_is_audited() -> None:
+    app = await _build_app()
+    with TestClient(app) as client:
+        _log_in(client)
+
+        resp = client.post(f"/api/guilds/{GUILD_ID}/jobs/bulk-dm", json={"payload": {"n": 1}})
+        assert resp.status_code == 202
+
+        log_resp = client.get(f"/api/guilds/{GUILD_ID}/audit-log")
+        entries = log_resp.json()
+        assert len(entries) == 1
+        assert entries[0]["action"] == "job.enqueue"
+        assert entries[0]["target"] == "bulk-dm"

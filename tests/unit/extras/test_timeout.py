@@ -71,7 +71,7 @@ async def test_zero_duration_clears_an_existing_timeout() -> None:
 
     await command.callback(ctx, member, 0, None)
 
-    member.timeout.assert_called_once_with(None, reason=str(ctx.author))
+    member.timeout.assert_called_once_with(None, reason=f"{ctx.author} (via discord-webapi)")
 
 
 async def test_refuses_to_timeout_a_member_who_outranks_the_moderator() -> None:
@@ -84,3 +84,59 @@ async def test_refuses_to_timeout_a_member_who_outranks_the_moderator() -> None:
 
     member.timeout.assert_not_called()
     assert "outranks yours" in ctx.reply.call_args.args[0]
+
+
+async def test_forbidden_from_discord_replies_cleanly_instead_of_crashing() -> None:
+    bot = _build_bot()
+    command = setup_timeout(bot, dm_before_timeout=False)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.timeout.side_effect = discord.Forbidden(MagicMock(status=403), "missing permissions")
+
+    await command.callback(ctx, member, 10, "spamming")
+
+    assert "permission" in ctx.reply.call_args.args[0].lower()
+
+
+async def test_not_found_from_discord_replies_cleanly_instead_of_crashing() -> None:
+    bot = _build_bot()
+    command = setup_timeout(bot, dm_before_timeout=False)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.timeout.side_effect = discord.NotFound(MagicMock(status=404), "unknown member")
+
+    await command.callback(ctx, member, 10, "spamming")
+
+    assert "no longer in the server" in ctx.reply.call_args.args[0].lower()
+
+
+async def test_audit_logger_records_the_timeout_when_configured() -> None:
+    bot = _build_bot()
+    audit_logger = MagicMock()
+    audit_logger.record = AsyncMock()
+    command = setup_timeout(bot, dm_before_timeout=False, audit_logger=audit_logger)
+    ctx = _fake_ctx()
+    member = _fake_member()
+    member.id = 12345
+
+    await command.callback(ctx, member, 10, "spamming")
+
+    audit_logger.record.assert_called_once()
+    _, kwargs = audit_logger.record.call_args
+    assert kwargs["action"] == "timeout"
+    assert kwargs["target"] == "12345"
+
+
+async def test_audit_logger_records_a_clear_with_a_different_action_name() -> None:
+    bot = _build_bot()
+    audit_logger = MagicMock()
+    audit_logger.record = AsyncMock()
+    command = setup_timeout(bot, require_reason=False, audit_logger=audit_logger)
+    ctx = _fake_ctx()
+    member = _fake_member()
+
+    await command.callback(ctx, member, 0, None)
+
+    audit_logger.record.assert_called_once()
+    _, kwargs = audit_logger.record.call_args
+    assert kwargs["action"] == "timeout.clear"

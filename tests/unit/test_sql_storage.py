@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 
 from discord_webapi.authz.models import AppRole
 from discord_webapi.commands.models import CommandOverride
+from discord_webapi.exceptions import SessionExpiredError
 from discord_webapi.storage.base import Session
 from discord_webapi.storage.sql import SQLAuthzStore, SQLCommandConfigStore, SQLSessionStore
 
@@ -75,7 +76,7 @@ async def test_sql_session_store_update_missing_raises(engine: AsyncEngine) -> N
     store = SQLSessionStore(engine)
     await store.create_all()
 
-    with pytest.raises(ValueError, match="does not exist"):
+    with pytest.raises(SessionExpiredError, match="does not exist"):
         await store.update(_make_session("nonexistent"))
 
 
