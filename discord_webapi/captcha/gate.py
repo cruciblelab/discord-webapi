@@ -156,13 +156,17 @@ class CaptchaGate:
         *,
         authenticated_user_id: int | None = None,
         signals: dict[str, Any] | None = None,
+        client_ip: str | None = None,
     ) -> CheckResult:
         """Runs every configured check; the verification passes only if
         they *all* pass. `response` is the captcha answer (ignored by a
         gate with no `CaptchaCheck`); `authenticated_user_id` is the
         currently-signed-in Discord user id (the web layer resolves this
         from the OAuth session -- `AccountMatchCheck` needs it); `signals`
-        is passed straight to your own checks.
+        is passed straight to your own checks; `client_ip` is the
+        server's own observation of the connecting IP (unlike `signals`,
+        not client-forgeable) -- see `VerificationContext.client_ip` for
+        why this exists (writing your own IP-reputation check).
 
         Idempotent: verifying an already-verified token returns success
         without re-running the checks (a page refresh re-posting the same
@@ -180,6 +184,7 @@ class CaptchaGate:
             authenticated_user_id=authenticated_user_id,
             captcha_response=response,
             signals=signals or {},
+            client_ip=client_ip,
         )
         passed: list[str] = []
         for check in self.checks:

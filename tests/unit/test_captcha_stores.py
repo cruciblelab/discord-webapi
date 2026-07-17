@@ -159,6 +159,29 @@ async def test_sql_captcha_store_increment_attempts(engine: AsyncEngine) -> None
     assert fetched.attempts == 1
 
 
+async def test_sql_captcha_store_increment_attempts_is_atomic_under_concurrency(
+    engine: AsyncEngine,
+) -> None:
+    """The real bug this guards against: increment_attempts used to be a
+    SELECT-then-mutate-then-commit, which loses updates under concurrent
+    calls (two transactions both read the same pre-increment count before
+    either commits) -- exactly the race a captcha attempt-limit needs to
+    be immune to. Firing many concurrent increments at the same
+    challenge_id and checking the final count matches the number of
+    calls (no lost updates) proves the atomic UPDATE closes it."""
+    import asyncio
+
+    store = SQLCaptchaStore(engine)
+    await store.create_all()
+    await store.create(_pending())
+
+    await asyncio.gather(*(store.increment_attempts("c1") for _ in range(20)))
+
+    fetched = await store.get("c1")
+    assert fetched is not None
+    assert fetched.attempts == 20
+
+
 async def test_sql_captcha_store_delete(engine: AsyncEngine) -> None:
     store = SQLCaptchaStore(engine)
     await store.create_all()

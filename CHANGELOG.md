@@ -2,6 +2,73 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: gerçek güvenlik araştırması + 2 ciddi bug bulunup düzeltildi + IP itibarı hook'u
+
+Kullanıcının isteği: captcha alt sistemine kapsamlı bir araştırma yap
+(internet + kod), hata olmaması gereken yerleri bul ve düzelt, ve "kendi
+IP itibarı sistemimi eklemek istersem ekleyebilir miyim" sorusuna cevap
+ver. İnternet araştırması (2025-2026 captcha/bot-tespiti güvenlik
+literatürü) doğrudan kod incelemesine yön verdi ve iki gerçek, ciddi bug
+buldu.
+
+### Bulunan ve düzeltilen 2 gerçek bug
+
+1. **`SQLCaptchaStore.increment_attempts` gerçek bir race condition
+   içeriyordu (ciddi -- rate-limit bypass sınıfı)**. Araştırmada karşıma
+   çıkan iyi belgelenmiş bir saldırı deseni: "captcha deneme sayacını
+   yarışarak atlatmak" (bkz. kaynaklar). Eski kod SELECT-sonra-mutate-
+   sonra-commit yapıyordu (ORM'in `row.attempts += 1; commit()`'i) --
+   birden fazla eşzamanlı yanlış tahmin aynı çekilmemiş sayıyı okuyup
+   birbirinin artışını kaybedebiliyordu. **Gerçekten test ettim**: eski
+   kodu 20 eşzamanlı `increment_attempts` çağrısına karşı çalıştırdığımda
+   nihai sayı 20 değil **1** çıktı -- 19 artış kayboldu. Yani pratikte bir
+   saldırgan aynı challenge_id'ye onlarca eşzamanlı tahmin göndererek
+   `max_attempts` sınırını fiilen etkisiz kılabilirdi. Düzeltme: tek,
+   atomik bir `UPDATE ... SET attempts = attempts + 1` (MySQL'in
+   `RETURNING` desteklememesi yüzünden ayrı bir read-back ile, ama artışın
+   kendisi artık tek SQL adımı). `_shared.check_pending_challenge` da
+   "önce kontrol et, başarısız olursa artır" yerine "önce atomik olarak
+   artır, sonra kontrol et" sırasına değiştirildi -- read-then-write
+   aralığını tamamen kapatıyor.
+2. **Cevap karşılaştırması zamanlamaya duyarlıydı (düşük önem ama
+   bedava düzeltme)**. `verify_pending_challenge` düz `==` kullanıyordu --
+   ilk farklı karakterde erken dönen bir karşılaştırma, teorik olarak
+   karakter-karakter zamanlama analiziyle daraltılabilir. `hmac.compare_digest`
+   (sabit-zamanlı) ile değiştirildi.
+
+### Eklenen: `VerificationContext.client_ip` -- IP itibarı hook'u
+
+Kullanıcının sorusuna dürüst cevap: HAYIR, şu ana kadar hiçbir şekilde
+mümkün değildi -- `ctx.signals` istemci JS'inin gönderdiği bir çanta,
+oraya bir IP koymak istemcinin "ben buyum" demesi demek, sahteleniyor.
+Gerçek bağlantı IP'si hiçbir check'e ulaşmıyordu. Şimdi:
+`VerificationContext`/`CaptchaGate.verify()` yeni bir `client_ip`
+parametresi taşıyor, `build_captcha_router()` bunu `Request.client.host`'tan
+okuyup otomatik dolduruyor. Kütüphane kendi IP itibar veritabanını
+sunmuyor (hangi kaynağa güveneceğine dair görüşü yok) ama artık gerçek,
+sahtelenemez IP'yi kendi `extra_checks`'inize ulaştırıyor -- `docs/OZELLIKLER.md`'de
+somut bir `PredicateCheck` örneğiyle gösterildi.
+
+### Doğrulama
+
+Eski (buggy) `increment_attempts` kodunu izole bir script'te 20 eşzamanlı
+çağrıya karşı çalıştırıp gerçekten 1'e düştüğünü gördüm (bug'ın gerçek ve
+ciddi olduğunun kanıtı), sonra düzeltilmiş kodun aynı senaryoda tam 20
+verdiğini doğruladım. Mevcut tüm attempt-limit testleri (ör. "3 yanlış
+denemeden sonra doğru cevap bile reddedilir") değişmeden geçti --
+davranış dışarıdan aynı, sadece sayaç artık atomik.
+
+11 yeni test: `test_captcha_shared.py` (yeni dosya -- doğru/yanlış cevap,
+tam-limit-sonra-kilitlenme, süresi dolmuş challenge, bilinmeyen id,
+limitten sonra verifier'ın hiç çağrılmadığı, normalize, eşzamanlı yanlış
+tahminlerin limiti aşamadığı), `test_sql_captcha_store_increment_attempts_is_atomic_under_concurrency`
+(20 eşzamanlı artışın kayıpsız 20 verdiği), `test_math_provider_keeps_multiplication_to_single_digits`
+(önceki turdan), `test_client_ip_reaches_a_custom_check_for_your_own_ip_reputation`
++ `test_verify_gate_passes_the_real_client_ip_through_to_checks` (IP
+itibarı hook'unun gerçekten çalıştığı, hem gate seviyesinde hem gerçek
+HTTP isteği üzerinden). Tüm suite yeşil (bilinen Postgres ortam hatası
+hariç), ruff+mypy temiz (119 dosya).
+
 ## [Unreleased] — `/giveaway-test`: "uyarlanabilir" gate'e gerçek PoW maliyeti eklendi
 
 Kullanıcı, bir önceki turda "insan-benzeri sinyaller geçti" testimi

@@ -492,6 +492,35 @@ döndürüyor (`.verified`, hangi check patladı `.failed_check`, hangileri
 geçti `.passed`) ve `captcha_verified` event'i `checks_passed` taşıyor --
 bot ne kadar güçlü doğrulandığını bilerek tepki verebilir.
 
+**"Kendi IP itibarı sistemimi ekleyebilir miyim?" -- evet, ve bunun için
+özel olarak bir alan var.** `ctx.signals` istemci JS'inin gönderdiği bir
+çanta -- IP adresi buraya konursa istemcinin "ben şu IP'denim" demesi
+anlamına gelir, sahtelenebilir, güvenilmez. Bu yüzden `VerificationContext`
+ayrıca **`client_ip`** taşıyor -- `build_captcha_router()`'ın kendisinin
+`Request.client.host`'tan okuduğu, istemcinin asla değiştiremeyeceği
+gerçek bağlantı IP'si:
+
+```python
+BLOCKLIST = {"1.2.3.4", "5.6.7.8"}  # ya da kendi itibar servisinize sorgu
+
+async def ip_itibari_kontrolu(ctx):
+    if ctx.client_ip in BLOCKLIST:
+        return False
+    # ya da: await my_reputation_service.check(ctx.client_ip)
+    return True
+
+CaptchaGate(
+    transport, store, provider,
+    extra_checks=[PredicateCheck("ip-reputation", ip_itibari_kontrolu)],
+)
+```
+
+Kütüphane kendi IP itibar veritabanını/servisini SUNMUYOR (hangi
+kaynağa güveneceğinize dair bir görüşü yok) -- ama artık gerçek,
+sahtelenemeyen IP'yi check'lerinize ulaştırıyor, siz istediğiniz kaynakla
+(kendi blocklist'iniz, bir 3.taraf reputation API'si, kendi
+rate-limit/abuse geçmişiniz) birleştirebilirsiniz.
+
 **Katman içi granülerlik -- tek tek özellik açıp kapatmak da mümkün, sadece
 kat seviyesinde değil.** Yukarıdaki "bir check'i tamamen kullan/kullanma"
 seçiminin bir seviye altında: her katmanın kendi içinde de neyi

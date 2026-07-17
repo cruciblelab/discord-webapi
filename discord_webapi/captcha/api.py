@@ -180,6 +180,7 @@ def build_captcha_router(
             body.captcha_response,
             authenticated_user_id=user.id if user is not None else None,
             signals=body.signals,
+            client_ip=request.client.host if request.client else None,
         )
         return GateVerifyResult(
             verified=result.verified, failed_check=result.failed_check, detail=result.detail

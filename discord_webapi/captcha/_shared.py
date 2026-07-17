@@ -12,6 +12,7 @@ thin string-equality wrapper the simple image providers use.
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Callable
 from datetime import UTC, datetime
 
@@ -30,18 +31,30 @@ async def check_pending_challenge(
     of guesses (so a short answer can't be brute-forced by unlimited
     attempts against one `challenge_id`), runs the provider's own
     `verifier`, and always deletes the pending record on either a correct
-    answer or exhausted attempts -- one-time use, no replay."""
+    answer or exhausted attempts -- one-time use, no replay.
+
+    Attempts are incremented *before* the attempts-limit check, not after
+    a failed guess -- on purpose. The other order (check, then increment
+    only on failure) has a real TOCTOU race under concurrent guesses
+    against `SQLCaptchaStore`: several requests can each `get()` the same
+    still-low attempt count before any of their increments commits, so
+    all of them pass the limit check and each gets to try `verifier()` --
+    a well-documented captcha rate-limit bypass pattern (racing the
+    attempt counter). Incrementing first, via a single atomic
+    UPDATE-in-place (see `SQLCaptchaStore.increment_attempts`), removes
+    the read-then-write gap: the count-and-check becomes one step.
+    """
     pending = await store.get(challenge_id)
     if pending is None:
         return False
     if datetime.now(UTC) > pending.expires_at:
         await store.delete(challenge_id)
         return False
-    if pending.attempts >= max_attempts:
+    attempts = await store.increment_attempts(challenge_id)
+    if attempts > max_attempts:
         await store.delete(challenge_id)
         return False
     if not verifier(pending):
-        await store.increment_attempts(challenge_id)
         return False
     await store.delete(challenge_id)
     return True
@@ -56,10 +69,16 @@ async def verify_pending_challenge(
     normalize: Callable[[str], str] = str.strip,
 ) -> bool:
     """String-equality convenience over `check_pending_challenge`, used by
-    the plain image providers (Math/Text) whose answer is just text."""
+    the plain image providers (Math/Text) whose answer is just text.
+    Compares with `hmac.compare_digest` (constant-time) rather than `==`
+    -- a plain `==` on short answers is a (low-severity, but free to
+    close) timing side-channel: it returns as soon as the first differing
+    character is found, which a patient attacker can use to narrow down
+    the answer character by character."""
+
+    def _verifier(pending: PendingCaptcha) -> bool:
+        return hmac.compare_digest(normalize(response), pending.answer)
+
     return await check_pending_challenge(
-        store,
-        challenge_id,
-        max_attempts=max_attempts,
-        verifier=lambda pending: normalize(response) == pending.answer,
+        store, challenge_id, max_attempts=max_attempts, verifier=_verifier
     )

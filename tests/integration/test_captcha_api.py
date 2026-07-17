@@ -307,6 +307,38 @@ def test_captcha_router_without_a_gate_configured_returns_404_for_gate_routes() 
         assert resp.status_code == 404
 
 
+def test_verify_gate_passes_the_real_client_ip_through_to_checks() -> None:
+    """The HTTP layer must actually capture request.client.host and hand
+    it to CaptchaGate.verify() as client_ip -- otherwise a custom
+    IP-reputation extra_check has nothing real to read (see
+    VerificationContext.client_ip's docstring for why this has to come
+    from the server, not the client-submitted signals bag)."""
+    from discord_webapi.captcha.checks import PredicateCheck, VerificationContext
+
+    seen_ips: list[str | None] = []
+
+    async def record_ip(ctx: VerificationContext) -> bool:
+        seen_ips.append(ctx.client_ip)
+        return True
+
+    app = FastAPI()
+    transport = InProcessTransport()
+    gate = CaptchaGate(
+        transport,
+        MemoryVerificationStore(),
+        require_captcha=False,
+        extra_checks=[PredicateCheck("record-ip", record_ip)],
+    )
+    app.include_router(build_captcha_router(gate=gate))
+
+    with TestClient(app) as client:
+        req = asyncio.run(gate.create_verification(user_id=1, purpose="x"))
+        client.post(f"/api/captcha/gate/{req.token}/verify", json={})
+
+    assert len(seen_ips) == 1
+    assert seen_ips[0] is not None  # TestClient reports a real (test) client host
+
+
 def test_two_gates_can_be_mounted_at_once_via_explicit_gate_param() -> None:
     """A bot with two independent gate purposes (e.g. giveaway entry vs. a
     separate "verify before appealing a ban" gate) mounts the router twice

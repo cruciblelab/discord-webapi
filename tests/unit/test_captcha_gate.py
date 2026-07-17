@@ -307,6 +307,41 @@ async def test_extra_checks_let_you_stack_your_own_layer() -> None:
     assert ok.passed == ["client-signal", "captcha"]
 
 
+async def test_client_ip_reaches_a_custom_check_for_your_own_ip_reputation() -> None:
+    """Answers a real question: can a consumer add their own signal, e.g.
+    IP reputation, to the checks? Yes -- via extra_checks, same as any
+    other custom layer -- but IP specifically isn't something the client
+    submits via `signals` (that would be self-reported and forgeable);
+    it has to come from the server's own observation of the connection,
+    which is exactly what `ctx.client_ip` is for. This is a stand-in for
+    "call your own reputation service/blocklist"."""
+    blocked_ips = {"1.2.3.4"}
+
+    async def reject_known_bad_ips(ctx: VerificationContext) -> bool:
+        return ctx.client_ip not in blocked_ips
+
+    gate = CaptchaGate(
+        InProcessTransport(),
+        MemoryVerificationStore(),
+        MathCaptchaProvider(MemoryCaptchaStore()),
+        extra_checks=[PredicateCheck("ip-reputation", reject_known_bad_ips)],
+    )
+    store: MemoryCaptchaStore = gate.provider.store  # type: ignore[union-attr]
+
+    bad_req = await gate.create_verification(user_id=100, purpose="x")
+    bad_pending = await store.get(bad_req.challenge.challenge_id)
+    assert bad_pending is not None
+    blocked = await gate.verify(bad_req.token, bad_pending.answer, client_ip="1.2.3.4")
+    assert blocked.verified is False
+    assert blocked.failed_check == "ip-reputation"
+
+    good_req = await gate.create_verification(user_id=100, purpose="x")
+    good_pending = await store.get(good_req.challenge.challenge_id)
+    assert good_pending is not None
+    ok = await gate.verify(good_req.token, good_pending.answer, client_ip="5.6.7.8")
+    assert ok.verified is True
+
+
 def test_require_captcha_without_a_provider_raises() -> None:
     import pytest
 

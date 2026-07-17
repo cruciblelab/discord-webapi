@@ -1,5 +1,74 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: gerçek güvenlik araştırması -- 2 gerçek bug + IP itibarı hook'u (bu oturumda, devam)
+
+Kullanıcının isteği üç parçalıydı: (1) captcha'ya kapsamlı bir araştırma
+yap, hem internette hem kodda, (2) hata olmaması gereken yerleri tespit
+edip düzelt, (3) "kendi skor sistemlerini (örn. IP itibarı) ekleyebilirler
+mi" sorusuna cevap ver.
+
+**İnternet araştırması** (WebSearch, iki ayrı sorgu): modern anti-bot
+yığınlarının (Cloudflare/Akamai/DataDome/PerimeterX) TLS parmak izi, IP
+itibarı, header sırası, JS çalıştırma, mouse hareketi, cookie, zamanlama
+gibi düzinelerce sinyali birlikte değerlendirdiğini; davranışsal
+biyometriğin tek başına reCAPTCHA v3/Turnstile'dan daha iyi performans
+gösterdiğini ama 2026'da AI-tabanlı botların davranışsal telemetriyi
+taklit etmeye başladığını (bizim "replay saldırısı" bulgumuzla aynı
+kategori); ve ÖNEMLİSİ, captcha implementasyonlarında yaygın bir
+güvenlik açığı sınıfının **"race condition ile rate-limit/deneme-sayısı
+atlatma"** olduğunu (birden fazla makale/writeup bunu belgeliyor)
+öğrendim. Bu son bulgu doğrudan kod incelemesine yön verdi ve gerçek bir
+bug buldurdu.
+
+**Bug 1 -- `SQLCaptchaStore.increment_attempts` race condition (ciddi)**:
+Eski kod `row = await db.get(...); row.attempts += 1; await db.commit()`
+şeklindeydi -- SELECT-sonra-mutate-sonra-commit, klasik "lost update"
+deseni. Eşzamanlı yanlış tahminler aynı ön-artış sayısını okuyup
+birbirinin artışını kaybedebilir. **Bunu varsaymadım, gerçekten test
+ettim**: izole bir script'te eski kodu 20 eşzamanlı `increment_attempts`
+çağrısına karşı çalıştırdım -- nihai sayı 1 çıktı (20 değil). Yani bir
+saldırgan aynı challenge_id'ye onlarca paralel tahmin göndererek
+`max_attempts` sınırını fiilen etkisiz kılabilirdi -- tam olarak
+araştırmada okuduğum "captcha rate-limit'i race condition ile atlatma"
+zafiyet sınıfının kendisi. Düzeltme: `sqlalchemy.update()` ile tek atomik
+`UPDATE ... SET attempts = attempts + 1` (MySQL `RETURNING`
+desteklemediği için ayrı bir read-back ile, ama artışın kendisi artık
+bölünemez tek adım). `_shared.check_pending_challenge` da "kontrol et,
+başarısızsa artır" yerine "önce atomik artır, sonra kontrol et" sırasına
+değiştirildi -- read-then-write aralığı tamamen kapandı. Düzeltilmiş
+kodu aynı 20-eşzamanlı testte çalıştırıp tam 20 aldığımı doğruladım.
+
+**Bug 2 -- zamanlamaya duyarlı cevap karşılaştırması (düşük önem, bedava
+düzeltme)**: `verify_pending_challenge` düz `==` kullanıyordu. Küçük
+cevap uzayı + zaten var olan deneme sınırı yüzünden pratik risk düşük,
+ama `hmac.compare_digest` bedava ve doğru olan şey, değiştirdim.
+
+**IP itibarı sorusu -- dürüst cevap: ŞU ANA KADAR HAYIR, artık EVET**.
+Kod incelemesi gösterdi ki `VerificationContext`'in `signals` alanı
+tamamen istemci JS'inin gönderdiği bir çanta -- oraya bir IP koymanın
+hiçbir anlamı yok (istemci "ben şu IP'denim" diyebilir, sahte). Gerçek
+bağlantı IP'si (`Request.client.host`) hiçbir check'e ULAŞMIYORDU bile --
+kullanıcı IP itibarı eklemek istese bile elinde çalışacak bir malzeme
+yoktu. Bunu gerçek bir mimari eksiklik olarak ele alıp düzelttim:
+`VerificationContext.client_ip` (yeni alan) + `CaptchaGate.verify(...,
+client_ip=)` (yeni parametre) + `build_captcha_router()`'ın
+`Request.client.host`'u otomatik okuyup geçmesi. Kütüphane kendi IP
+itibar kaynağını sunmuyor (bilinçli -- hangi servise güveneceğinize dair
+görüşümüz yok) ama artık gerçek, sahtelenemez IP `extra_checks`'e
+ulaşıyor. `docs/OZELLIKLER.md`'ye somut bir `PredicateCheck` örneği
+eklendi (blocklist ya da kendi itibar servisinizi çağırma).
+
+11 yeni test: yeni `test_captcha_shared.py` dosyası (check_pending_challenge/
+verify_pending_challenge'ı doğrudan, izole test ediyor -- doğru/yanlış
+cevap, tam-limit-sonra-kilitlenme, süre dolması, bilinmeyen id, limit
+aşılınca verifier'ın hiç çağrılmadığı, normalize, eşzamanlı yanlış
+tahminlerin limiti aşamadığı), SQL store'un atomiklik testi (20 eşzamanlı
+artış = tam 20), IP itibarı hook'unun hem gate seviyesinde hem gerçek
+HTTP isteği üzerinden çalıştığını kanıtlayan 2 test. Mevcut tüm
+attempt-limit testleri (ör. "3 yanlış sonra doğru cevap bile reddedilir")
+davranış değişmeden geçti. Tüm suite yeşil (bilinen Postgres hatası
+hariç), ruff+mypy temiz.
+
 ## captcha: "insan-benzeri sinyaller geçti, kötü değil mi" sorusu -- demo'nun gerçek eksiğini buldu (bu oturumda, devam)
 
 Kullanıcının sorusu birebir: "Bu kötü değil mi insan benzeri sinayelleri

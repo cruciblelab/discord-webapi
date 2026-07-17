@@ -39,12 +39,24 @@ class VerificationContext:
     """Everything a check gets to look at. `signals` is an arbitrary,
     client-submitted bag (user-agent, a fingerprint token, behavioral
     data, ...) -- untrusted by definition, so a check that reads it is
-    responsible for deciding how much to trust it."""
+    responsible for deciding how much to trust it.
+
+    `client_ip` is different: it's the server's own observation of who
+    connected (from `Request.client.host`, via `build_captcha_router()`),
+    not something the client claims about itself -- as trustworthy as
+    your reverse proxy's `X-Forwarded-For` handling, but never
+    client-forgeable the way every entry in `signals` is. This is the
+    hook for building your own IP-reputation check (a blocklist, a
+    third-party lookup, whatever) as a `PredicateCheck`/`VerificationCheck`
+    reading `ctx.client_ip` -- the library ships no such check itself (no
+    opinion on which reputation source you'd trust), it just makes sure
+    the IP is actually available to write one against."""
 
     request: VerificationRequest
     authenticated_user_id: int | None = None
     captcha_response: str | None = None
     signals: dict[str, Any] = field(default_factory=dict)
+    client_ip: str | None = None
 
 
 @dataclass

@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String, Text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -107,13 +107,27 @@ class SQLCaptchaStore:
             )
 
     async def increment_attempts(self, challenge_id: str) -> int:
+        # A single atomic `UPDATE ... SET attempts = attempts + 1`, not a
+        # SELECT-then-mutate-then-commit -- the latter has a real lost-
+        # update race under concurrent guesses against the same
+        # challenge_id (two transactions both read the same pre-increment
+        # count before either commits, e.g. under READ COMMITTED), which
+        # is exactly the kind of race `_shared.check_pending_challenge`
+        # relies on this being immune to for its attempt-limit check to
+        # be trustworthy under concurrency. No `.returning()` here --
+        # MySQL's dialect doesn't support it, and this needs to work
+        # across sqlite/postgres/mysql -- so the atomic UPDATE commits
+        # first, then a plain read-back reports the (already-consistent,
+        # already-committed) new value.
         async with self._sessionmaker() as db:
-            row = await db.get(PendingCaptchaRow, challenge_id)
-            if row is None:
-                return 0
-            row.attempts += 1
+            await db.execute(
+                update(PendingCaptchaRow)
+                .where(PendingCaptchaRow.challenge_id == challenge_id)
+                .values(attempts=PendingCaptchaRow.attempts + 1)
+            )
             await db.commit()
-            return row.attempts
+            row = await db.get(PendingCaptchaRow, challenge_id)
+            return row.attempts if row is not None else 0
 
     async def delete(self, challenge_id: str) -> None:
         async with self._sessionmaker() as db:
