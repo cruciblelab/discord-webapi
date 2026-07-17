@@ -259,13 +259,26 @@ document.getElementById('btn-behavior-replay').addEventListener('click', async (
 
   function since(t) { return `${(t - pageLoadedAt).toFixed(0)}ms sayfa yüklendiğinden sonra`; }
 
+  let lastPointerTypeSeen = 'mouse';
+  let lastEnterAt = null;
+
   widgetEl.addEventListener('pointerenter', (e) => {
+    lastPointerTypeSeen = e.pointerType;
+    lastEnterAt = performance.now();
     if (approached) return;
     approached = true;
     log('widget: mouse/parmak kutuya yaklaştı', null, `${since(performance.now())}, pointer_type=${e.pointerType}`);
   });
-  widgetEl.addEventListener('pointerleave', () => {
-    if (approached && !busy) log('widget: kutudan uzaklaşıldı (henüz tıklanmadı)', null, since(performance.now()));
+  widgetEl.addEventListener('pointerleave', (e) => {
+    // On touch/pen there is no real "hover and approach" -- the browser
+    // synthesizes an enter+leave pair around the tap itself, so this
+    // fires a few ms before the click on the *same* tap, not because the
+    // finger genuinely left and came back. Logging it for touch would
+    // misleadingly look like a second, separate approach. Only meaningful
+    // for a real mouse cursor, which can genuinely hover and retreat.
+    if (approached && !busy && e.pointerType !== 'touch' && e.pointerType !== 'pen') {
+      log('widget: kutudan uzaklaşıldı (henüz tıklanmadı)', null, since(performance.now()));
+    }
   });
 
   widgetEl.addEventListener('click', async (e) => {
@@ -281,10 +294,14 @@ document.getElementById('btn-behavior-replay').addEventListener('click', async (
     const centerNote = offset < 2
       ? ' -- DİKKAT: neredeyse tam matematiksel merkez, bir insan için fazla kusursuz, şüpheli sayılır'
       : '';
+    const touchNote = (lastPointerTypeSeen === 'touch' || lastPointerTypeSeen === 'pen')
+      ? ' [dokunmatik: yaklaşma+tıklama aynı dokunuşun parçası olduğu için birbirine çok yakın zamanlıdır, ' +
+        'bu normaldir -- bir mouse imlecinin gerçekten "önce yaklaşıp sonra tıklaması" gibi ayrı iki an değildir]'
+      : '';
     log(
       'widget: tıklandı', null,
       `kutu-içi konum=(${localX},${localY}), merkezden sapma=${offset.toFixed(1)}px, ` +
-      `${since(performance.now())}, o ana kadar toplanan mouse örneği=${trajectory.length}${centerNote}`
+      `${since(performance.now())}, o ana kadar toplanan mouse örneği=${trajectory.length}${centerNote}${touchNote}`
     );
 
     // Freeze the trajectory/click data at the moment of the click -- the

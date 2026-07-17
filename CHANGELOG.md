@@ -2,6 +2,32 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha_playground: dokunmatik "yaklaşma" log'u yanıltıcıydı, düzeltildi
+
+Kullanıcı telefonda widget'ı test edince log'da `yaklaştı` -> 89ms sonra
+`uzaklaşıldı` -> 3ms sonra `tıklandı` sırasını gördü ve bunu "çok hızlı,
+hata ihtimali yüksek" diye şüphelendi -- haklı bir gözlemdi ama sebebi
+bir güvenlik zafiyeti değil, dokunmatik ekranların tarayıcı olay modeli:
+dokunmatikte gerçek bir "önce yaklaş sonra tıkla" kavramı yok, tarayıcı
+tek bir dokunuşun etrafına sentetik bir enter+leave çifti üretiyor --
+`pointerleave` neredeyse `click` ile aynı anda ateşleniyor çünkü ikisi de
+AYNI dokunuşun parçası, gerçekten ayrılıp geri gelme değil.
+
+### Değişenler
+
+- **`kutudan uzaklaşıldı` log'u artık sadece mouse/pen için yazılıyor**,
+  touch için bastırıldı -- yanıltıcı "ayrı bir yaklaşma daha oldu" izlenimi
+  vermesin diye.
+- **Tıklama log satırına dokunmatik notu eklendi**: `pointer_type` touch/
+  pen ise, "yaklaşma+tıklama aynı dokunuşun parçası olduğu için birbirine
+  çok yakın zamanlıdır, bu normaldir" açıklaması otomatik ekleniyor.
+- Playwright'ın gerçek dokunmatik emülasyonuyla (`page.touchscreen.tap`,
+  iPhone 12 cihaz profili) doğrulandı: `uzaklaşıldı` satırı artık hiç
+  görünmüyor, tıklama satırında yeni açıklama var.
+
+Kütüphaneye (`discord_webapi/captcha/`) hiçbir dokunuş yok, sadece örnek.
+Test suite'e etkisi yok; ruff/mypy temiz.
+
 ## [Unreleased] — captcha_playground: gerçek doğrulama widget'ı + tam adım-adım log
 
 Kullanıcı iki şey istedi: (1) tam merkeze tıklamanın gerçekten
