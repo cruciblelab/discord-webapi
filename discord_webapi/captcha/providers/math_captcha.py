@@ -20,9 +20,11 @@ _OPERATORS = ("+", "-", "*")
 
 class MathCaptchaProvider:
     """`CaptchaProvider` that asks the user to solve a small arithmetic
-    problem shown in a distorted image. Numbers are kept small (1-20,
-    subtraction never goes negative) so the problem is trivial for a
-    human and the rendered text stays short."""
+    problem shown in a distorted image. Addition/subtraction use 1-20
+    (subtraction never goes negative); multiplication is kept to single
+    digits (1-9) specifically -- 1-20 x 1-20 can produce a problem like
+    "16 x 19", which is not the trivial-for-a-human arithmetic this is
+    supposed to be, just a different kind of hard captcha."""
 
     kind = "math"
 
@@ -38,9 +40,13 @@ class MathCaptchaProvider:
         self.max_attempts = max_attempts
 
     async def issue(self) -> CaptchaChallenge:
-        a = random.randint(1, 20)
-        b = random.randint(1, 20)
         operator = random.choice(_OPERATORS)
+        if operator == "*":
+            a = random.randint(1, 9)
+            b = random.randint(1, 9)
+        else:
+            a = random.randint(1, 20)
+            b = random.randint(1, 20)
         if operator == "-" and b > a:
             a, b = b, a  # keep subtraction non-negative -- less confusing
         answer = {"+": a + b, "-": a - b, "*": a * b}[operator]

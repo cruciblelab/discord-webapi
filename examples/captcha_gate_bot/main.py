@@ -48,6 +48,15 @@ general pattern for physical-testing an example bot):
                                      for direct side-by-side comparison
     /test-participants           -> lists everyone who has completed any
                                      of the three test gates so far
+    /giveaway-test               -> posts a public "Katıl" button (like a
+                                     real giveaway post); clicking it
+                                     replies ephemerally and DMs a verify
+                                     link that requires login first, then
+                                     shows two slots: an adaptive one
+                                     (invisible check, escalates to a
+                                     Path-Trace draw if it looks
+                                     suspicious) and a plain original
+                                     Math captcha
 """
 
 from __future__ import annotations
@@ -56,9 +65,12 @@ import os
 
 import discord
 from discord.ext import commands
+from fastapi import Depends
 from fastapi.responses import HTMLResponse
 
 from discord_webapi import DiscordWebAPI
+from discord_webapi.auth.dependencies import get_current_user_optional
+from discord_webapi.auth.models import DiscordUser
 from discord_webapi.bot import default_intents
 from discord_webapi.captcha.api import build_captcha_router
 from discord_webapi.captcha.events import CaptchaVerified
@@ -373,4 +385,160 @@ diğerinin yerine geçmiyor.
 <div class="dwa-captcha-widget" data-token="{original}" data-api-base="/test-original"></div>
 
 <script src="/static/discord-webapi-captcha-widget.js"></script>
+</body>""")
+
+
+# ---------------------------------------------------------------------
+# Giveaway-bot simulation with adaptive escalation. A public "Katıl"
+# button (an embed message, like a real giveaway post) replies
+# ephemerally (invisible to everyone else in the channel) and DMs the
+# clicking user a verify link. That page requires Discord login FIRST
+# (checked server-side -- no captcha is shown before that), then offers
+# two independent verification slots:
+#
+#   1. Adaptive -- starts invisible (behavior score only, require_captcha=
+#      False). If it looks suspicious, a second widget appears asking the
+#      user to draw a line (Path-Trace). CaptchaGate itself has no
+#      built-in escalation -- this composes TWO separate gates via page
+#      JS (try the invisible one, only reveal the Path-Trace one if that
+#      fails), the same "compose your own" pattern as everywhere else in
+#      this library, not a new CaptchaGate feature.
+#   2. Original -- a single, always-required Math captcha, independent of
+#      the above.
+# ---------------------------------------------------------------------
+
+giveaway_test_invisible_gate = CaptchaGate(
+    transport,
+    MemoryVerificationStore(),
+    require_captcha=False,
+    require_account=True,
+    extra_checks=_behavior_checks(),
+)
+giveaway_test_pathtrace_gate = CaptchaGate(
+    transport, MemoryVerificationStore(), PathTraceProvider(_captcha_store), require_account=True
+)
+giveaway_test_original_gate = CaptchaGate(
+    transport, MemoryVerificationStore(), MathCaptchaProvider(_captcha_store), require_account=True
+)
+
+app.include_router(
+    build_captcha_router(gate=giveaway_test_invisible_gate), prefix="/giveaway-test-invisible"
+)
+app.include_router(
+    build_captcha_router(gate=giveaway_test_pathtrace_gate), prefix="/giveaway-test-pathtrace"
+)
+app.include_router(
+    build_captcha_router(gate=giveaway_test_original_gate), prefix="/giveaway-test-original"
+)
+
+
+class _GiveawayTestJoinView(discord.ui.View):
+    """A real giveaway bot would register this with `bot.add_view()` so
+    the button keeps working across restarts -- skipped here to keep the
+    demo to one file."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Katıl", style=discord.ButtonStyle.success, custom_id="giveaway_test_join"
+    )
+    async def join_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        user_id = interaction.user.id
+        invisible_req = await giveaway_test_invisible_gate.create_verification(
+            user_id=user_id, purpose="giveaway_test_invisible"
+        )
+        pathtrace_req = await giveaway_test_pathtrace_gate.create_verification(
+            user_id=user_id, purpose="giveaway_test_pathtrace"
+        )
+        original_req = await giveaway_test_original_gate.create_verification(
+            user_id=user_id, purpose="giveaway_test_original"
+        )
+        url = (
+            f"{_base_url}/giveaway-test/verify"
+            f"?invisible={invisible_req.token}"
+            f"&pathtrace={pathtrace_req.token}"
+            f"&original={original_req.token}"
+        )
+        # Ephemeral -- invisible to everyone else in the channel.
+        await interaction.response.send_message(
+            "Kontrol ediliyor... DM'ine bir doğrulama linki gönderdim!", ephemeral=True
+        )
+        await interaction.user.send(f"Çekilişe katılmak için doğrulan: {url}")
+
+
+@bot.hybrid_command(
+    name="giveaway-test", description="Demo: gerçek bir çekiliş botu gibi bir 'Katıl' mesajı at"
+)
+async def giveaway_test(ctx: commands.Context) -> None:
+    embed = discord.Embed(
+        title="Test çekilişi", description="Katılmak için aşağıdaki butona tıkla."
+    )
+    await ctx.send(embed=embed, view=_GiveawayTestJoinView())
+
+
+@app.get("/giveaway-test/verify")
+async def giveaway_test_verify_page(
+    invisible: str,
+    pathtrace: str,
+    original: str,
+    user: DiscordUser | None = Depends(get_current_user_optional),
+) -> HTMLResponse:
+    if user is None:
+        return HTMLResponse("""<!doctype html>
+<title>Giriş yap</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 16px">
+<h2>Önce giriş yap</h2>
+<p>Doğrulama ekranını görebilmek için önce Discord hesabınla giriş yapman
+gerekiyor. Giriş yaptıktan sonra bu linke (adres çubuğundakine) geri dön.</p>
+<p><a href="/auth/discord/login" target="_blank" rel="noopener">Discord ile giriş yap</a></p>
+</body>""")
+
+    return HTMLResponse(f"""<!doctype html>
+<title>Çekiliş doğrulaması</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:40px auto;padding:0 16px">
+<h2>Merhaba, {user.username}</h2>
+<p>Giriş yaptın -- şimdi iki ayrı doğrulama var:</p>
+
+<h3>1) Uyarlanabilir (görünmez katmandan başlar)</h3>
+<p style="font-size:.85rem;color:#666">
+Önce sessizce davranış skorunu dener. Şüpheli görünürse aşağıda ikinci bir
+widget belirip çizgiyi çizmeni ister.
+</p>
+<div id="invisible-widget" class="dwa-captcha-widget" data-token="{invisible}"
+     data-api-base="/giveaway-test-invisible"></div>
+<div id="pathtrace-widget-holder"></div>
+
+<h3>2) Orijinal -- sade, tek başına bir Math captcha</h3>
+<div class="dwa-captcha-widget" data-token="{original}"
+     data-api-base="/giveaway-test-original"></div>
+
+<script src="/static/discord-webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
+<script>
+var INVISIBLE_TOKEN = {invisible!r};
+var PATHTRACE_TOKEN = {pathtrace!r};
+
+function onWidgetVerified(result) {{
+  // data-callback is one global name shared by every widget on this
+  // page -- route on result.token so only the "invisible" widget's
+  // outcome triggers the escalation logic below.
+  if (result.token !== INVISIBLE_TOKEN) return;
+
+  if (result.verified) {{
+    document.getElementById("invisible-widget").insertAdjacentHTML(
+      "afterend", "<p>Görünmez katman geçti, robot sanılmadın.</p>"
+    );
+    return;
+  }}
+  document.getElementById("pathtrace-widget-holder").innerHTML =
+    "<p>Robot gibi göründün -- lütfen aşağıdaki çizgiyi çiz.</p>" +
+    "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + PATHTRACE_TOKEN +
+    "\\" data-api-base=\\"/giveaway-test-pathtrace\\"></div>";
+  if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+}}
+</script>
 </body>""")

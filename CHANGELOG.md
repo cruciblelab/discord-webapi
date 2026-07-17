@@ -2,6 +2,56 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: gerçek çekiliş botu simülasyonu (adaptive escalation) + Math zorluk düzeltmesi
+
+Kullanıcı iki şey bildirdi: (1) son testte math captcha "16 × 19" sordu --
+gerçek bir bug, insan için "kolay" olması gereken bir captcha için
+mantıksız zor. (2) Asıl istediği "normal widgetli test" farklıymış:
+gerçek bir çekiliş botu simülasyonu -- kanalda butona tıkla, görünmez
+(ephemeral) mesaj + DM'den link, linke girince önce Discord girişi
+istensin, giriş sonrası captcha ekranı açılsın, 2 widget olsun: biri
+robot şüphesiyle reddedip çizgi-çizme captcha'sını tetikleyen uyarlanabilir
+bir akış, diğeri sade orijinal.
+
+### Değişenler
+
+- **`MathCaptchaProvider` gerçek bug'ı düzeltildi**
+  (`discord_webapi/captcha/providers/math_captcha.py`): docstring "1-20
+  arası, insan için kolay" diyordu ama çarpma işleminde de aynı 1-20
+  aralığı kullanılıyordu -- `16 × 19 = 304` gibi gerçekte hiç kolay
+  olmayan sorular üretebiliyordu. Artık çarpma işlemi 1-9 aralığına
+  (en fazla 9×9=81) sınırlı, toplama/çıkarma hâlâ 1-20 kullanıyor. Yeni
+  test: operatörü zorla `*` yapıp üretilen cevabın hep ≤81 kaldığını
+  doğruluyor.
+- **`examples/captcha_gate_bot`'a gerçek bir çekiliş simülasyonu eklendi**
+  (`/giveaway-test`): kanala gerçek bir çekiliş botu gibi embed + "Katıl"
+  butonlu bir mesaj atıyor. Tıklanınca: ephemeral (kanaldaki herkesten
+  gizli) bir yanıt + DM'den doğrulama linki. Link önce giriş istiyor --
+  sunucu tarafında kontrol ediliyor, giriş yapılmadan hiçbir captcha
+  gösterilmiyor. Giriş sonrası 2 bağımsız doğrulama:
+  1. **Uyarlanabilir**: önce sessizce sadece davranış skorunu dener
+     (`require_captcha=False`); şüpheli çıkarsa sayfa JS'i ikinci bir
+     widget'ı (çizgi-takip) açığa çıkarıp kullanıcıdan çizgiyi çizmesini
+     istiyor. `CaptchaGate`'in kendisinde escalation özelliği yok --
+     bu, sayfa JS'inin İKİ AYRI gate'i birleştirmesiyle (önce görünmezi
+     dene, başarısız olursa çizgi-takip gate'ini aç) elde ediliyor --
+     kütüphanenin her yerindeki "kendi kompozisyonunu kur" deseninin
+     aynısı, yeni bir `CaptchaGate` özelliği değil.
+  2. **Orijinal**: tek başına, her zaman gerekli bir Math captcha.
+
+### Doğrulama
+
+OAuth round-trip'i (gerçek tarayıcı gerektiriyor) atlayıp gate'lere
+doğrudan karşı test ettim: bot-benzeri sinyaller (webdriver=true, sıfır
+mouse hareketi, anlık tıklama) görünmez gate'i gerçekten reddetti;
+insan-benzeri sinyaller geçti; çizgi-takip fallback'i gerçek bir çizilmiş
+yolla gerçekten doğrulandı. Ayrıca giriş yapmadan sayfanın hiçbir captcha
+göstermediğini (sadece giriş linki) doğruladım.
+
+1 yeni test (`test_captcha_providers.py`: çarpma işleminin 9×9'u
+aşmadığı). Tüm suite yeşil (bilinen Postgres ortam hatası hariç),
+ruff+mypy temiz.
+
 ## [Unreleased] — captcha: `on_verified()` çapraz-gate sızıntısı bulunup düzeltildi + 3'lü karşılaştırma testi
 
 Kullanıcı, bir önceki turdaki çoklu-gate desteğini gerçekten test etmemi

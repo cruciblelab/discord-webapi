@@ -32,6 +32,24 @@ async def test_math_provider_accepts_the_correct_answer() -> None:
     assert ok is True
 
 
+async def test_math_provider_keeps_multiplication_to_single_digits(monkeypatch) -> None:
+    """1-20 x 1-20 can produce e.g. "16 x 19" -- not a trivial mental-math
+    captcha anymore. Force the "*" operator and confirm the resulting
+    product never exceeds 9*9=81, i.e. both operands stayed single-digit."""
+    import discord_webapi.captcha.providers.math_captcha as math_captcha_module
+
+    monkeypatch.setattr(math_captcha_module.random, "choice", lambda ops: "*")
+    store = MemoryCaptchaStore()
+    provider = MathCaptchaProvider(store)
+
+    for _ in range(50):
+        challenge = await provider.issue()
+        pending = await store.get(challenge.challenge_id)
+        assert pending is not None
+        assert int(pending.answer) <= 81
+        await store.delete(challenge.challenge_id)
+
+
 async def test_math_provider_rejects_a_wrong_answer() -> None:
     store = MemoryCaptchaStore()
     provider = MathCaptchaProvider(store)

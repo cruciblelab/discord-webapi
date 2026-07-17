@@ -1,5 +1,64 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: gerçek çekiliş simülasyonu (adaptive escalation) + math zorluk bug'ı (bu oturumda, devam)
+
+Kullanıcının geri bildirimi iki parçaydı: "16×19 sordu ciddi misin"
+(math captcha'nın zorluğu hakkında haklı bir şikayet) ve "normal widgetli
+testi kastetmiştim" (bir önceki 3'lü-karşılaştırma testi yanlış
+anlaşılmıştı) -- asıl istediği: gerçek bir çekiliş botu simülasyonu,
+kanalda buton, ephemeral+DM akışı, giriş sonrası captcha, 2 widget (biri
+şüpheli bulup çizgi-çizme'ye yükselen uyarlanabilir bir akış, diğeri sade
+orijinal).
+
+**Math zorluk bug'ı (gerçek, basit)**: `MathCaptchaProvider`'ın
+docstring'i "1-20 arası, insan için kolay" diyordu ama `*` operatörü de
+aynı 1-20 aralığını kullanıyordu -- `random.randint(1,20)` iki kere
+çekilip çarpılınca `16*19=304` gibi gerçekte hiç kolay olmayan bir soru
+çıkabiliyordu. Docstring'in iddiası ile gerçek davranış arasında
+uyuşmazlık vardı. Düzeltme: `operator == "*"` ise operandlar 1-9 aralığına
+(en fazla 9×9=81) sınırlandı, toplama/çıkarma hâlâ 1-20. `monkeypatch` ile
+operatörü zorla `*` yapıp 50 deneme boyunca cevabın hep ≤81 kaldığını
+doğrulayan bir test eklendi.
+
+**Gerçek çekiliş simülasyonu** (`examples/captcha_gate_bot`, `/giveaway-test`):
+- Kanala embed + "Katıl" butonlu (`discord.ui.View`, `custom_id` ile) bir
+  mesaj atıyor -- gerçek bir çekiliş botu postu gibi.
+- Butona tıklayınca: `interaction.response.send_message(..., ephemeral=True)`
+  (kanaldaki herkesten gizli) + `interaction.user.send(...)` (DM'den
+  link) -- kullanıcının "görünmez mesajı ve dmden linki" isteğinin birebir
+  karşılığı.
+- Verify sayfası `get_current_user_optional` dependency'sini kullanıp
+  sunucu tarafında giriş kontrolü yapıyor -- giriş yoksa SADECE giriş
+  linki gösteriliyor, hiçbir captcha/widget render edilmiyor. Giriş
+  sonrası (kullanıcının "girdikten sonra capctha ekranı açılsın" isteğinin
+  birebir karşılığı) 2 widget'lı sayfa açılıyor.
+- **Uyarlanabilir widget**: `require_captcha=False` bir gate (sadece
+  davranış skoru) + `require_captcha=True` bir Path-Trace gate'i --
+  ikisi ayrı `CaptchaGate` nesnesi. Sayfanın kendi JS'i önce görünmez
+  olanı dener (`data-callback` -- widget script'inin TEK bir global
+  callback'i var, `result.token`'a bakarak hangi widget'ın sonucu olduğunu
+  ayırt ediyorum, bu önemli bir detaydı: `data-callback` widget div'inde
+  değil `<script>` etiketinde okunuyor). Başarısız olursa
+  `window.dwaCaptchaWidgetInit()` çağrılıp ikinci (çizgi-takip) widget
+  DOM'a ekleniyor. `CaptchaGate`'in kendisinde escalation YOK -- bu iki
+  ayrı gate'in sayfa JS'iyle birleştirilmesi, kütüphanenin "kendi
+  kompozisyonunu kur" felsefesinin doğal bir uzantısı, çekirdeğe yeni bir
+  özellik eklemedim.
+- **Orijinal widget**: sade, tek başına (artık düzeltilmiş zorlukta)
+  Math captcha.
+
+**Doğrulama**: Gerçek bir OAuth round-trip tarayıcı gerektirdiğinden
+(quickstart SQL session store kullanıyor, sahte respx mock'u bu oturumda
+kurmadım), escalation MANTIĞINI gate'lere doğrudan Python seviyesinde
+karşı test ettim: bot-benzeri sinyaller (`webdriver=true`, `pointer_moves=0`,
+`interaction_ms=1`) görünmez gate'i gerçekten reddetti; insan-benzeri
+sinyaller (gerçekçi dil/saat dilimi/tıklama-ofseti/süre) geçti; çizgi-takip
+fallback'i gerçek bir yoğun-örneklenmiş çizilmiş yolla gerçekten
+doğrulandı. Ayrıca `TestClient` ile giriş yapmadan sayfanın hiçbir
+`dwa-captcha-widget` içermediğini, sadece giriş linkini gösterdiğini
+doğruladım. Tüm suite yeşil (bilinen Postgres hatası hariç), ruff+mypy
+temiz.
+
 ## captcha: on_verified() çapraz-gate sızıntısı -- ikinci gerçek bug bu oturumda (devam)
 
 Kullanıcı bir önceki turda eklediğim çoklu-gate desteğini ("bununla da

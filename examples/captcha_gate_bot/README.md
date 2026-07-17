@@ -65,6 +65,35 @@ this example (including the giveaway/appeal ones above) passes it, and
 the three test gates each get their own distinct `purpose` string
 specifically so `/test-participants` counts correctly.
 
+## Scenario 4 -- a real giveaway simulation with adaptive escalation (`/giveaway-test`)
+
+```
+/giveaway-test    -- posts a public embed + "Katıl" button, like a real giveaway
+```
+
+Clicking it replies **ephemerally** (invisible to everyone else in the
+channel) and DMs the clicking user a verify link. That link requires
+Discord login **first** -- the page checks server-side and shows nothing
+but a login link until you're signed in, then shows two independent
+verification slots:
+
+1. **Adaptive** -- starts invisible (behavior score only,
+   `require_captcha=False`). If the signals look suspicious, a *second*
+   widget appears below it asking you to draw a line (Path-Trace).
+   `CaptchaGate` has no built-in escalation feature -- this composes
+   **two separate gates** via the page's own JS (try the invisible one,
+   only reveal the Path-Trace one if that fails), the same
+   "compose your own" pattern the whole library follows.
+2. **Original** -- a single, always-required Math captcha, independent
+   of the above.
+
+Verified directly against the gates (bypassing the OAuth round-trip,
+which needs a live browser): bot-like signals (`webdriver: true`, no
+pointer movement, near-instant) fail the invisible gate; human-like
+signals pass it; and the Path-Trace fallback genuinely verifies a real
+drawn line. The page itself was also confirmed to show no captcha at all
+before login.
+
 ## Why multiple gates need multiple URL prefixes
 
 `build_captcha_router()`'s default reads a single
