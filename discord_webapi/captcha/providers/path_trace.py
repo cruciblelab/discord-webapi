@@ -58,16 +58,31 @@ def _dist_point_to_polyline(p: tuple[float, float], polyline: list[tuple[float, 
     )
 
 
+def _chord_bulge(path: list[list[float]]) -> float:
+    """How far the wave's vertices stray from the straight line between its
+    own start and end points -- i.e. how much "curve" there is to trace. A
+    dead-straight diagonal has a bulge of ~0."""
+    start = (path[0][0], path[0][1])
+    end = (path[-1][0], path[-1][1])
+    return max(_dist_point_to_segment((x, y), start, end) for x, y in path)
+
+
 class PathTraceProvider:
     """`CaptchaProvider` that issues a wavy line and passes if the pointer
-    trace (a) never strays further than `tolerance` from the line, (b)
+    trace (a) never strays further than `tolerance` from the line and (b)
     passes within `tolerance` of every vertex (so the user traced the whole
-    line, not just a piece), and (c) actually bulges away from the
-    straight start->end line by nearly as much as the real curve does --
-    an earlier version only checked (a) and (b), which a near-straight
-    diagonal can satisfy whenever the curve's amplitude happens to be
-    small relative to `tolerance`, without ever really tracing the
-    wave."""
+    line, not just a piece).
+
+    For (a)+(b) to actually force *tracing the curve* rather than cutting a
+    straight diagonal between the endpoints, the issued wave has to bulge
+    away from its own start->end chord by comfortably more than `tolerance`
+    -- otherwise a dead-straight trace stays within `tolerance` of every
+    vertex and passes both checks without following the wave at all. A
+    purely random sine can land as flat as ~17px of bulge for the 24px
+    default tolerance, so `_make_path` regenerates until the bulge clears
+    `tolerance * 1.5`; with that guarantee, the peak vertices sit far
+    enough from the chord that check (b) inherently rejects a straight
+    shortcut."""
 
     kind = "path-trace"
 
@@ -86,7 +101,7 @@ class PathTraceProvider:
         self.ttl = ttl
         self.max_attempts = max_attempts
 
-    def _make_path(self) -> list[list[float]]:
+    def _random_wave(self) -> list[list[float]]:
         # A smooth-ish sine curve across the width, randomized per issue so
         # the same-looking line isn't served twice.
         phase = random.uniform(0, 2 * math.pi)
@@ -99,6 +114,20 @@ class PathTraceProvider:
             x = left + frac * (right - left)
             y = mid + amplitude * math.sin(phase + frac * math.pi * 1.5)
             path.append([round(x, 1), round(y, 1)])
+        return path
+
+    def _make_path(self) -> list[list[float]]:
+        # Regenerate until the wave bulges away from its own start->end chord
+        # by comfortably more than `tolerance` (see the class docstring for
+        # why a flat wave lets a straight shortcut pass). A random wave
+        # clears this most of the time, so the loop almost always returns on
+        # the first try; 50 is astronomically more than enough headroom.
+        min_bulge = self.tolerance * 1.5
+        path = self._random_wave()
+        for _ in range(50):
+            if _chord_bulge(path) >= min_bulge:
+                break
+            path = self._random_wave()
         return path
 
     async def issue(self) -> CaptchaChallenge:
@@ -152,23 +181,16 @@ class PathTraceProvider:
             # (a) no wild excursions: every sample is near the line
             if any(_dist_point_to_polyline(pt, path) > tolerance for pt in trace):
                 return False
-            # (b) full coverage: every vertex has a nearby sample
+            # (b) full coverage: every vertex has a nearby sample. Because
+            # the issued wave is guaranteed to bulge > tolerance from its
+            # own chord (see _make_path), covering every vertex here is
+            # exactly what a dead-straight shortcut cannot do -- its nearest
+            # point to the peak vertices sits a full bulge (> tolerance)
+            # away. So (a)+(b) together already force tracing the curve; no
+            # separate "did it bulge enough" check is needed (and an earlier
+            # attempt at one was dead code -- (b) passing already implies it).
             for vertex in path:
                 if min(math.hypot(vertex[0] - t[0], vertex[1] - t[1]) for t in trace) > tolerance:
-                    return False
-            # (c) genuinely followed the curve's shape rather than cutting a
-            # straight shortcut between the endpoints: the curve bulges away
-            # from the straight start->end chord by some real amount (its
-            # amplitude); the trace has to bulge out by nearly as much too.
-            # Without this, (a)+(b) alone can be satisfied by a near-straight
-            # diagonal whenever the curve's amplitude happens to be smaller
-            # than `tolerance` -- a shortcut that never really traced the
-            # wave. `tolerance` slack keeps this as forgiving as (a)/(b).
-            start, end = path[0], path[-1]
-            curve_bulge = max(_dist_point_to_segment(v, start, end) for v in path)
-            if curve_bulge > tolerance:
-                trace_bulge = max(_dist_point_to_segment(pt, start, end) for pt in trace)
-                if trace_bulge < curve_bulge - tolerance:
                     return False
             return True
 

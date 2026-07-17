@@ -23,15 +23,30 @@ sorun bildirdi -- hepsi araştırılıp gerçek bulunanlar düzeltildi:
 2. **"Çizgi çok düzleşiyor, olduğu gibi işlemeli"** -- gerçek bir
    doğrulama zafiyetiydi: `PathTraceProvider.verify()` sadece (a) her
    nokta polyline'a `tolerance` içinde mi ve (b) her köşeye yakın bir
-   nokta var mı kontrol ediyordu -- eğrinin genliği `tolerance`'a göre
-   küçük kaldığında bu ikisini, eğriyi hiç takip etmeden, dümdüz bir
-   köşegen çizerek de geçmek mümkündü. Eklenen üçüncü kontrol: çizilen
-   izin düz kirişten (start->end) sapması, gerçek eğrinin kirişten
-   sapmasına (genliğine) yakın olmalı -- `tests/unit/test_captcha_new_
-   providers.py::test_path_trace_rejects_a_straight_shortcut_even_
-   within_tolerance` ile doğrudan doğrulandı (düzeltmeden önce geçen bir
-   düz-çizgi kısayolu artık reddediliyor), mevcut 11 path-trace testi
-   değişmeden yeşil kaldı.
+   nokta var mı kontrol ediyordu -- eğrinin kendi kirişinden sapması
+   (bulge) `tolerance`'tan küçük kaldığında bu ikisini, eğriyi hiç takip
+   etmeden, dümdüz bir köşegen çizerek de geçmek mümkündü.
+   **DÜZELTME İKİ AŞAMALI OLDU** (kullanıcının "emin olalım" demesi
+   sayesinde ilk denemenin bozuk olduğu yakalandı): İlk deneme verify'a
+   üçüncü bir "iz yeterince kavis yaptı mı" kontrolü ekledi -- ama bu ÖLÜ
+   KOD çıktı: kontrol (b) geçtiğinde iz zaten matematiksel olarak
+   `curve_bulge - tolerance` kadar kavis yapmış oluyor, yani üçüncü
+   kontrol asla tetiklenemiyordu; ayrıca gerçek bug durumunda (bulge <=
+   tolerance) dış `if curve_bulge > tolerance` koşulu false olduğu için
+   tamamen atlanıyordu. Somut ölçüm: 2000 challenge'da düz kısayolların
+   89'u HÂLÂ kabul ediliyordu. **Gerçek düzeltme üretim tarafında**:
+   `_make_path` artık üretilen dalgayı, kendi start->end kirişinden en az
+   `tolerance * 1.5` kadar sapana dek yeniden üretiyor (rastgele sinüs
+   bazen 17px'e kadar düz kalabiliyordu, 24px tolerans için bug'ın
+   kaynağı buydu). Bu garantiyle kontrol (b) düz kısayolu doğası gereği
+   reddediyor (tepe köşeler kirişten `tolerance`'tan uzakta kalıyor), ve
+   ölü üçüncü kontrol kaldırıldı. Somut doğrulama: 3000 challenge'da düz
+   kısayol kabul sayısı **0** (öncesi 89/2000), min bulge tam 36.0px,
+   tüm sadık izler kabul, hiçbir vertex 160px canvas dışına taşmıyor.
+   İki yeni test: `test_path_trace_rejects_a_straight_shortcut_across_
+   many_issues` (200 challenge boyunca hiçbir düz kısayol geçmiyor) ve
+   `test_path_trace_issued_wave_always_bulges_past_tolerance` (üretim
+   garantisi). Mevcut 6 path-trace testi değişmeden yeşil.
 3. **"/giveaway-test'te butona tıklayınca 'etkileşim başarısız oldu'"** --
    büyük olasılıkla kök neden: buton callback'i Discord'un ~3 saniyelik
    etkileşim yanıt penceresi içinde `interaction.response.send_message()`

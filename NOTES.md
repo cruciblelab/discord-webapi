@@ -34,29 +34,52 @@ davranış skorunu BİRLİKTE istiyor. Aynı sahte-iyi sinyaller artık PoW
 doğrulandı (`{"verified": false, "failed_check": "captcha", "detail":
 "no captcha answer was submitted"}`).
 
-**#2 -- gerçek bug, doğrulandı ve düzeltildi.** Kullanıcının sorusu ("biz
-mi düzleştiriyoruz yoksa kullanıcı mı düz çiziyor") araştırılınca gerçek
-bir doğrulama zafiyeti ortaya çıktı:
-`discord_webapi/captcha/providers/path_trace.py`'nin `verify()`'ı sadece
-(a) her çizilen nokta gerçek eğrinin `tolerance` (varsayılan 24px)
-içinde mi ve (b) eğrinin her köşesine yakın bir çizilen nokta var mı
-kontrol ediyordu. Eğrinin genliği (30-50px, rastgele) ile tolerans (24px)
-arasındaki oran nedeniyle, başlangıç ve bitiş noktaları arasına düz bir
-köşegen çizmek de bazen bu iki kontrolü geçebiliyordu -- eğriyi HİÇ takip
-etmeden. Yani soru "kullanıcılar çok düz görüyor" değil, "sunucu düz bir
-kısayolu bazen kabul ediyordu" idi -- gerçek bir bug. Düzeltme: üçüncü
-bir geometrik kontrol eklendi -- çizilen izin düz kirişten (start->end
-doğrusu) maksimum sapması, gerçek eğrinin kirişten sapmasına (genliğine)
-en az `tolerance` kadar yakın olmalı; aksi halde reddediliyor. Bu,
-kullanıcının "olduğu gibi almalı işlemeli" isteğinin tam karşılığı --
-artık çizilen izin gerçekten eğrinin şeklini (dışa doğru kavis) takip
-edip etmediği ölçülüyor, sadece polyline'a yakınlık değil.
-`test_path_trace_rejects_a_straight_shortcut_even_within_tolerance` adlı
-yeni bir regresyon testiyle doğrudan kanıtlandı: düzeltmeden önce geçen
-düz-kısayol izi artık reddediliyor; mevcut 11 path-trace testi
-(faithful-trace kabul, kısmi-iz red, bozuk-veri red, tek-kullanımlık,
-boyut-limiti) değişmeden yeşil kaldı -- yani gerçek, eğriyi doğru takip
-eden bir iz hâlâ geçiyor, sadece kısayol artık geçmiyor.
+**#2 -- gerçek bug, ama İLK DÜZELTMESİ BOZUKTU; "emin olalım" turunda
+yakalanıp düzgün düzeltildi.** Kullanıcının sorusu ("biz mi
+düzleştiriyoruz yoksa kullanıcı mı düz çiziyor") araştırılınca gerçek bir
+doğrulama zafiyeti ortaya çıktı: `path_trace.py`'nin `verify()`'ı sadece
+(a) her çizilen nokta polyline'a `tolerance` (24px) içinde mi ve (b)
+eğrinin her köşesine yakın bir çizilen nokta var mı kontrol ediyordu.
+Eğrinin kendi kirişinden sapması (bulge) `tolerance`'tan küçük kaldığında,
+başlangıç-bitiş arasına düz köşegen çizmek de bu ikisini geçiyordu --
+eğriyi HİÇ takip etmeden. Yani soru "kullanıcı düz görüyor" değil,
+"sunucu düz kısayolu bazen kabul ediyordu" -- gerçek bug.
+
+**İlk düzeltme denemem ÖLÜ KOD'du (önemli ders).** verify'a üçüncü bir
+kontrol ekledim: "çizilen izin kirişten sapması, gerçek eğrinin
+sapmasına `tolerance` kadar yakın olmalı" (`if curve_bulge > tolerance:
+if trace_bulge < curve_bulge - tolerance: return False`). İki nedenle
+tamamen işe yaramazdı: (1) kontrol (b) geçtiğinde, tepe köşeye
+`tolerance` içinde bir iz noktası olması ZORUNLU olduğundan, üçgen
+eşitsizliğiyle `trace_bulge >= curve_bulge - tolerance` zaten garantidir
+-- yani üçüncü kontrolün red koşulu (b) geçince ASLA sağlanamaz; (2)
+gerçek bug durumunda (bulge <= tolerance) dış `if curve_bulge >
+tolerance` false olduğundan kontrol büsbütün atlanıyordu. Kullanıcı "emin
+olalım hepsini tekrar kontrol et" deyince doğrudan ölçtüm: ilk
+"düzeltme"den sonra bile 2000 challenge'da düz kısayolların **89'u hâlâ
+kabul ediliyordu** (curve_bulge'ün 17-24px'e düştüğü durumlar). Bu, bir
+düzeltmeyi "yeşil test" gördüğüm için doğru sanmanın klasik tuzağıydı --
+test (`...rejects_a_straight_shortcut...`) geçiyordu ama benim ölü
+kontrolüm sayesinde DEĞİL, zaten var olan kontrol (b) sayesinde (o tek
+challenge'da curve_bulge tesadüfen > tolerance'tı). Tek örnekli test,
+%4-5 olasılıkla gerçekleşen bug'ı gizliyordu.
+
+**Gerçek düzeltme üretim tarafında.** `_make_path` iki parçaya bölündü:
+`_random_wave` (eski sinüs gövdesi) + `_make_path` artık dalgayı, kendi
+start->end kirişinden en az `tolerance * 1.5` (=36px) sapana dek yeniden
+üretiyor (bounded retry, 50 deneme -- rastgele dalga bu barajı çoğu
+zaman ilk denemede aşıyor). Modül düzeyinde `_chord_bulge` yardımcısı
+eklendi. Bu garantiyle tepe köşeler kirişten `tolerance`'tan uzakta
+kalıyor, dolayısıyla kontrol (b) düz kısayolu DOĞASI GEREĞİ reddediyor;
+ölü üçüncü kontrol verify'dan kaldırıldı (yorumda neden ölü olduğu
+açıklandı ki biri tekrar eklemeye kalkmasın). Somut doğrulama (3000
+challenge): düz kısayol kabul = **0** (öncesi 89/2000), min bulge tam
+36.0, tüm sadık izler kabul, hiçbir vertex 160px canvas dışına taşmıyor
+(retry eski üreticiyi kullandığı için canvas sınırları korunuyor). İki
+yeni test: `test_path_trace_rejects_a_straight_shortcut_across_many_
+issues` (200 challenge -- tek örnek yerine döngü, tam da ilk testin
+kaçırdığı şeyi yakalıyor) ve `test_path_trace_issued_wave_always_
+bulges_past_tolerance` (üretim garantisi).
 
 **#3 -- muhtemel bug, kod incelemesiyle en olası kök nedene göre
 düzeltildi (canlı Discord olmadan kesin tekrar üretilemedi).**
@@ -88,22 +111,35 @@ kullanıyor -- bu zaten kendi başına, hiçbir sayfa-JS zincirlemesi
 olmadan, tam olarak istenen iki katmanlı deseni uyguluyor: IP temizse
 sessizce geç, kara listedeyse TEK bir gerçek Math captcha'sı göster.
 
-**Doğrulanamayan iki nokta -- açık uçlu bırakıldı, kullanıcıdan netlik
-istenecek.** (a) "`/test-join`'de 3 captcha diyor ama 2 tane var": kod
-incelemesinde `/test-widgets` şablonunun üç ayrı `<div class="dwa-
-captcha-widget">` içerdiği ve her birinin kendi bağımsız token/prefix'e
-sahip olduğu doğrulandı -- üçünün de bağımsız render edilmesi gerekir,
-koddan bir eksiklik bulunamadı; canlı bir tarayıcı olmadan kesin
-tekrar üretilemedi. (b) "captcha geçince otomatik katılmalı, kuyrukta
-bekleme süresi olsun, Discord girişi istemedi": `/test-join` (Scenario 3)
-BİLEREK "3 captcha türünü yan yana karşılaştır" demosu olarak
-tasarlandı, hiçbir zaman gerçek bir "katıl" akışı olması amaçlanmadı --
-gerçek giriş-zorunlu + captcha-geçince-otomatik-katıl akışı zaten
-Scenario 4'te (`/giveaway-test`) var ve tam olarak istenen şekilde
-çalışıyor (giriş sayfası login olmadan hiçbir captcha göstermiyor, `on_
-verified` ile katılım anlık ve otomatik, polling yok). Kullanıcının
-`/test-join`'i mi yoksa `/giveaway-test`'i mi kastettiği net değil --
-sonraki turda ekran görüntüsü/tam adım sırası istenip netleştirilecek.
+**Doğrulanamayan iki nokta -- "emin olalım" turunda tekrar somut olarak
+ölçüldü, kod tarafında bir hata bulunamadı; kullanıcının hangi sayfada
+olduğu hâlâ net değil.** (a) "`/test-join`'de 3 captcha diyor ama 2 tane
+var": `TestClient` ile `/test-widgets` sayfasının HTML'i çekildi ve tam
+**3** adet `dwa-captcha-widget` div'i içerdiği doğrulandı (DM metni ve
+başlık da "üç" diyor -- tutarlı). Sunucu tarafında eksik yok; kullanıcı 2
+görüyorsa üçünden biri istemci tarafında render edilememiş olmalı (JS
+hatası, süresi dolmuş token, vs.) -- canlı tarayıcı/ekran görüntüsü
+olmadan tekrar üretilemedi. NOT: `/giveaway-test/verify` sayfası
+BAŞLANGIÇTA 2 widget gösteriyor (invisible + original); üçüncüsü
+(pathtrace) sadece eskalasyonda beliriyor -- URL'de 3 token olduğu için
+kullanıcı burada "3 ama 2 görünüyor" diye yorumlamış olabilir, ki bu
+tasarım gereği. (b) "captcha geçince otomatik katılmalı": `/giveaway-
+test` akışında gerçekten otomatik katılımı DOĞRUDAN test ettim --
+`giveaway_test_original_gate.verify()`'ı doğru cevapla + `authenticated_
+user_id` ile çağırdım, `on_verified` fire-and-forget handler'ının
+çalışmasını bekledim, ve kullanıcı `_giveaway_test_participants[gid]`'e
+gerçekten eklendi (ekstra "katıl" butonu YOK -- captcha geçmek tek başına
+katılım demek). Yani mekanizma çalışıyor; kullanıcının "katılmıyor"
+demesi büyük olasılıkla ya login olmadan denemesinden (gate'ler
+`require_account=True`, giriş yoksa "account" kontrolünde takılır) ya da
+gerçek-katıl akışı olan `/giveaway-test` yerine karşılaştırma-demosu olan
+`/test-join`'de olmasından. "yetkilendirme istemedi" ipucu bunu
+destekliyor: `/test-join`/`/test-widgets` bilerek login İSTEMEZ (captcha
+türü karşılaştırması, hesap-bağlama değil); gerçek login-zorunlu akış
+`/giveaway-test/verify`. Sonraki turda kullanıcıdan ekran görüntüsü + tam
+adım sırası istenip hangi sayfada olduğu netleştirilecek -- muhtemel
+gerçek iş: test sayfalarının sayısını azaltıp isim/amaç karışıklığını
+gidermek (kullanıcı onayıyla).
 
 ## examples/captcha_gate_bot: 5 test sayfası + gerçek katılımcı kaydı + kendi "Cloudflare"imiz
 

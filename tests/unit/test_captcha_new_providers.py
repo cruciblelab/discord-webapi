@@ -127,24 +127,38 @@ async def test_path_trace_is_one_time_use() -> None:
     assert await provider.verify(challenge.challenge_id, trace) is False
 
 
-async def test_path_trace_rejects_a_straight_shortcut_even_within_tolerance() -> None:
-    # A regression check for a real bug: with only "every sample stays
-    # within `tolerance` of the polyline" + "every vertex has a nearby
-    # sample", a near-straight diagonal between the endpoints can satisfy
-    # both, because the vertices in the middle of a wavy path can still
-    # land within `tolerance` of the straight chord depending on how the
-    # amplitude and tolerance compare -- passing without ever really
-    # tracing the wave. `PathTraceProvider`'s default amplitude (30-50px)
-    # comfortably clears its default 24px tolerance, so a dead-straight
-    # chord between the two endpoints reproduces exactly that shortcut.
+async def test_path_trace_rejects_a_straight_shortcut_across_many_issues() -> None:
+    # Regression check for a real bug: with only "every sample within
+    # `tolerance` of the polyline" + "every vertex has a nearby sample", a
+    # dead-straight diagonal between the endpoints passes both whenever the
+    # issued wave's bulge from its own chord happens to be <= tolerance --
+    # which a purely random sine hit for a real fraction of issues (~4-5%
+    # of them landed a bulge below the 24px default tolerance). The first
+    # fix attempt added a "did the trace bulge enough" check that was dead
+    # code (vertex-coverage already implies it), so it did nothing for the
+    # small-bulge case; the real fix guarantees _make_path bulges >
+    # tolerance. Loop many issues so a lucky flat wave can't hide the bug.
     store = MemoryCaptchaStore()
     provider = PathTraceProvider(store)
-    challenge = await provider.issue()
-    path = challenge.params["path"]
+    for _ in range(200):
+        challenge = await provider.issue()
+        path = challenge.params["path"]
+        start, end = path[0], path[-1]
+        straight_chord = json.dumps(_sample_along([start, end], per_segment=20))
+        assert await provider.verify(challenge.challenge_id, straight_chord) is False
 
-    start, end = path[0], path[-1]
-    straight_chord = json.dumps(_sample_along([start, end], per_segment=20))
-    assert await provider.verify(challenge.challenge_id, straight_chord) is False
+
+async def test_path_trace_issued_wave_always_bulges_past_tolerance() -> None:
+    # The generation-side guarantee the straight-shortcut rejection relies
+    # on: no matter what the random sine does, the issued wave strays from
+    # its own start->end chord by more than `tolerance`.
+    from discord_webapi.captcha.providers.path_trace import _chord_bulge
+
+    store = MemoryCaptchaStore()
+    provider = PathTraceProvider(store)
+    for _ in range(200):
+        challenge = await provider.issue()
+        assert _chord_bulge(challenge.params["path"]) > provider.tolerance
 
 
 async def test_path_trace_rejects_an_oversized_payload() -> None:
