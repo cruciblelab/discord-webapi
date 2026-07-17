@@ -67,7 +67,12 @@ providers: dict[str, CaptchaProvider] = {
     "math": MathCaptchaProvider(_captcha_store),
     "text": TextCaptchaProvider(_captcha_store),
     "pow": ProofOfWorkProvider(_captcha_store, difficulty=18),
-    "path-trace": PathTraceProvider(_captcha_store),
+    # tolerance is bumped above the library default (24px) for this demo
+    # specifically -- a real finger on a phone screen is much less precise
+    # than a mouse cursor, and 24px turned out to be uncomfortably tight
+    # for touch during manual testing. This is a playground-only tuning
+    # choice, not a change to PathTraceProvider's own default.
+    "path-trace": PathTraceProvider(_captcha_store, tolerance=34.0),
 }
 
 _recaptcha_site_key = os.environ.get("RECAPTCHA_SITE_KEY")

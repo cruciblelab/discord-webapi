@@ -2,6 +2,42 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha_playground: teşhis/şeffaflık iyileştirmeleri (kullanıcının gerçek telefon testinden sonra)
+
+Kullanıcı playground'u telefonundan gerçekten test etti ve üç şey
+sordu: (1) davranış skorunda mouse-kinematiği neden yoktu, anında geçti,
+gerçekten kontrol ediliyor mu; (2) PoW süresi neden 3980ms'den 12735ms'ye
+sıçradı; (3) path-trace neden iki kez FAIL, hesaplama gerçekten yapılıyor
+mu. Hiçbiri bug değildi ama playground hiçbirini açıklamıyordu -- sadece
+teşhis eksikliğiydi. Kod tarafında (`discord_webapi/captcha/`) hiçbir
+değişiklik yok, sadece `examples/captcha_playground/`:
+
+- Davranış check'inden önce ham sinyalleri (`pointer_type`, `pointer_moves`,
+  `click_offset`, `interaction_ms`, `webdriver`) log'a yazıyor artık --
+  dokunmatikse "mouse-kinematiği bilerek çekimser kalır, hata değil"
+  notuyla. `interaction_ms`'in tıklama anından değil sayfa yüklenmesinden
+  itibaren ölçüldüğü de açıkça yazılıyor.
+- PoW: arama sırasında ilerleme (`N deneme yapıldı`) gösteriliyor, bitince
+  beklenen ortalama deneme sayısıyla karşılaştırıp "şansa bağlı büyük
+  değişkenlik normaldir" notunu ekliyor (hashcash aramasının süresi
+  geometrik dağılımlı -- aynı zorlukta 3 kat fark tamamen olağan).
+- Path-trace: sunucudaki geometriyi (`_dist_point_to_segment`/
+  `_dist_point_to_polyline`) tarayıcıda da hesaplayıp göndermeden ÖNCE
+  "en uzak sapma Xpx (tolerans Ypx), kapsanmayan köşe: N/M" diye
+  yazıyor -- geçip geçmeyeceğini tahmin ediyor, gerçekten sunucunun ne
+  hesapladığını görünür kılıyor. Ayrıca **playground'un** `PathTraceProvider`
+  tolerans'ı 24px'ten 34px'e çıkarıldı (kütüphanenin varsayılanı
+  DEĞİŞMEDİ) -- gerçek parmak dokunuşu bir mouse imlecinden çok daha az
+  hassas, 24px telefon için fazla sıkıydı.
+- Görsel captcha submit: "gönderiliyor" anında loglanıyor, sonuçta
+  gönderilen cevap tekrar yazılıyor (sunucunun gerçekten o cevabı kontrol
+  ettiğini görünür kılmak için).
+
+Sunucuyu yeniden ayağa kaldırıp yeni tolerans + geometri hesaplarını curl
+ile tekrar doğruladım (gerçek bir path'i yoğun örnekleyerek gönderdim,
+`verified: true` döndü). Kod değişikliği testleri etkilemiyor; ruff/mypy
+temiz.
+
 ## [Unreleased] — captcha: homing-correction sezgiseli (fail-open) + tıklanabilir test sitesi
 
 Kullanıcı, daha önce test edip "bağımsız değer katmıyor, eklemiyorum"

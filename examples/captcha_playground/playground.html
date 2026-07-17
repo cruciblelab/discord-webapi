@@ -171,9 +171,24 @@ async function runBehaviorCheck(signals, label) {
   return body;
 }
 
+function logRawSignals(signals) {
+  const touchNote = (signals.pointer_type === 'touch' || signals.pointer_type === 'pen')
+    ? ' (dokunmatik -- mouse-kinematiği/pointer-movement sezgiselleri bilerek çekimser kalır, bu hata değil)'
+    : '';
+  log(
+    'toplanan ham sinyaller',
+    null,
+    `pointer_type=${signals.pointer_type}${touchNote}, pointer_moves=${signals.pointer_moves}, ` +
+    `click_offset=${signals.click_offset !== null ? signals.click_offset.toFixed(1) + 'px' : 'yok'}, ` +
+    `interaction_ms=${signals.interaction_ms.toFixed(0)}ms (sayfa yüklendiğinden beri geçen süre, ` +
+    `tıklama anından değil), webdriver=${signals.webdriver}`
+  );
+}
+
 document.getElementById('btn-behavior').addEventListener('click', async () => {
   const signals = currentSignals();
   lastSubmittedTrajectory = signals.mouse_trajectory;
+  logRawSignals(signals);
   await runBehaviorCheck(signals, 'davranış katmanı');
 });
 
@@ -187,6 +202,7 @@ document.getElementById('btn-behavior-replay').addEventListener('click', async (
   // bir parmak izi olarak yakalayıp reddetmeli.
   const signals = currentSignals();
   signals.mouse_trajectory = lastSubmittedTrajectory;
+  logRawSignals(signals);
   await runBehaviorCheck(signals, 'replay testi (aynı hareket ikinci kez)');
 });
 
@@ -211,13 +227,14 @@ document.getElementById('btn-image-submit').addEventListener('click', async () =
   if (!currentImageChallenge) { log('görsel captcha gönder', false, 'önce yeni captcha alın'); return; }
   const kind = document.getElementById('image-kind').value;
   const response = document.getElementById('image-answer').value;
+  log(`${kind} captcha gönderiliyor`, null, `girdiğiniz cevap: "${response}"`);
   const resp = await fetch('/api/captcha/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ kind, challenge_id: currentImageChallenge.challenge_id, response }),
   });
   const body = await resp.json();
-  log(`${kind} captcha doğrulama`, body.verified);
+  log(`${kind} captcha doğrulama`, body.verified, `sunucu gerçekten "${response}" cevabını kontrol etti`);
 });
 
 // ---- 3) Proof-of-Work: real hashcash search in the browser ----
@@ -245,18 +262,27 @@ document.getElementById('btn-pow-run').addEventListener('click', async () => {
   if (!resp.ok) { log('pow captcha alma', false, await resp.text()); return; }
   const challenge = await resp.json();
   const { prefix, difficulty } = challenge.params;
-  status.textContent = `arıyor... (zorluk ${difficulty} bit)`;
+  const expectedMean = Math.pow(2, difficulty);
+  status.textContent = `arıyor... (zorluk ${difficulty} bit, ortalama ~${expectedMean} deneme bekleniyor)`;
   const start = performance.now();
   let nonce = 0;
   while (true) {
     const bits = await sha256LeadingZeroBits(`${prefix}${nonce}`);
     if (bits >= difficulty) break;
     nonce++;
-    if (nonce % 500 === 0) await new Promise((r) => setTimeout(r, 0)); // don't freeze the tab
+    if (nonce % 500 === 0) {
+      status.textContent = `arıyor... ${nonce} deneme yapıldı (zorluk ${difficulty} bit)`;
+      await new Promise((r) => setTimeout(r, 0)); // don't freeze the tab
+    }
   }
   const elapsedMs = Math.round(performance.now() - start);
   status.textContent = `bulundu: nonce=${nonce} (${elapsedMs}ms)`;
-  log('pow arama tamamlandı', null, `nonce=${nonce}, ${elapsedMs}ms`);
+  log(
+    'pow arama tamamlandı', null,
+    `${nonce} gerçek SHA-256 hash denendi (${elapsedMs}ms). Beklenen ortalama ~${expectedMean} ` +
+    `deneme -- ama arama süresi şansa bağlı büyük değişkenlik gösterir (bazen çok erken, bazen ` +
+    `ortalamanın birkaç katı sürebilir), bu normaldir, hata değil.`
+  );
   const verifyResp = await fetch('/api/captcha/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -323,8 +349,41 @@ async function loadNewTrace() {
 
 document.getElementById('btn-trace-new').addEventListener('click', loadNewTrace);
 
+// Mirrors PathTraceProvider's own geometry (discord_webapi/captcha/providers/
+// path_trace.py) client-side, purely for diagnostics -- so you can see
+// *why* a submission passed or failed instead of just true/false.
+function distPointToSegment(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  if (dx === 0 && dy === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  let t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy);
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy));
+}
+function distPointToPolyline(p, poly) {
+  let best = Infinity;
+  for (let i = 0; i < poly.length - 1; i++) best = Math.min(best, distPointToSegment(p, poly[i], poly[i + 1]));
+  return best;
+}
+
 document.getElementById('btn-trace-submit').addEventListener('click', async () => {
   if (!currentTraceChallenge) { log('path-trace gönder', false, 'önce yeni çizgi alın'); return; }
+  const { path, tolerance } = currentTraceChallenge.params;
+  if (tracePoints.length === 0) {
+    log('path-trace gönderiliyor', false, 'hiç nokta çizilmedi -- önce çizgiyi fare/parmakla takip edin');
+    return;
+  }
+  const maxDeviation = Math.max(...tracePoints.map((p) => distPointToPolyline(p, path)));
+  const uncovered = path.filter(
+    (v) => Math.min(...tracePoints.map((p) => Math.hypot(p[0] - v[0], p[1] - v[1]))) > tolerance
+  ).length;
+  log(
+    'path-trace gönderiliyor', null,
+    `${tracePoints.length} nokta, çizginin merkezinden en uzak sapma: ${maxDeviation.toFixed(1)}px ` +
+    `(tolerans ${tolerance}px), kapsanmayan köşe: ${uncovered}/${path.length}` +
+    (maxDeviation > tolerance || uncovered > 0
+      ? ' -- bu haliyle muhtemelen REDDEDİLECEK, yukarıdaki sebeple'
+      : ' -- bu haliyle geçmesi bekleniyor')
+  );
   const resp = await fetch('/api/captcha/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
