@@ -2,6 +2,46 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — verify sayfaları: giriş yapılmışsa kullanıcı adı gösteriliyor, yanlış hesabın linki erken engelleniyor
+
+Kullanıcı isteği: "yetkilendirme yapıldıysa orada kullanıcı ismi gözüksün
+ve token kontrolü vesaireler yapılsın, başka hesabın linkini
+doğrulamaya çalışmasın." `AccountMatchCheck` zaten yanlış hesabı
+*doğrulama anında* reddediyordu (`checks.py`) -- ama bu, kullanıcının
+bunu ancak captcha'yı çözmeye çalıştıktan SONRA öğrenmesi demekti,
+kafa karıştırıcı ve captcha'nın kendisi bozukmuş gibi görünebiliyordu.
+
+### `examples/captcha_gate_bot/main.py`
+
+- Yeni `_expected_user_id(gate, token)` yardımcı fonksiyonu: token'ın
+  hangi kullanıcı için oluşturulduğunu `gate.store.get(token)` üzerinden
+  okuyor (hem `CaptchaGate` hem `AdaptiveCaptchaGate` için çalışıyor,
+  ikisi de `.store` attribute'una sahip).
+- Yeni `_wrong_account_page(signed_in_as)`: "Bu link sana ait değil"
+  mesajı + çıkış yap linki -- captcha hiç gösterilmiyor.
+- `_verify_page` artık `user: DiscordUser | None` parametresi alıyor:
+  giriş yapılmışsa önce token sahipliğini kontrol ediyor (uyuşmazsa
+  `_wrong_account_page`, hiçbir widget render edilmiyor), uyuşuyorsa
+  "Giriş yaptın: **username**" gösterip widget'ı render ediyor; giriş
+  yapılmamışsa eskisi gibi login linki gösteriyor. `/verify/giveaway`,
+  `/verify/appeal`, `/verify/adaptive` route'ları artık
+  `get_current_user_optional` dependency'sini `_verify_page`'e
+  geçiriyor.
+- `giveaway_test_verify_page` (`/giveaway-test/verify`) zaten kullanıcı
+  adını gösteriyordu ama sahiplik kontrolü yapmıyordu -- aynı
+  `_expected_user_id` kontrolü eklendi (üç token da aynı buton
+  tıklamasında aynı kullanıcı için basıldığından tek bir token'ı
+  kontrol etmek yeterli).
+
+### Doğrulama
+
+`TestClient` ile auth dependency override kullanılarak (canlı Discord
+gerekmeden) üç durum da doğrudan test edildi: giriş yapılmamış ->
+login linki var, widget yok; yanlış hesapla giriş yapılmış -> "Bu link
+sana ait değil" sayfası, widget YOK; doğru hesapla giriş yapılmış ->
+kullanıcı adı gösteriliyor, widget VAR. `ruff`/`mypy` temiz, `pytest`
+702 passed (bilinen Postgres-ortam testi hariç).
+
 ## [Unreleased] — sayfa yenilemede doğrulanmış link artık "geçersiz/süresi dolmuş" görünmüyor (gerçek bug)
 
 Kullanıcının bir önceki turdaki widget düzeltmesini test ederken bildirdiği

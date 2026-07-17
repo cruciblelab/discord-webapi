@@ -1,5 +1,43 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## verify sayfaları: kullanıcı adı gösterimi + erken hesap-sahiplik kontrolü (bu oturum, devam)
+
+Kullanıcının isteği (sıralı test planına geçmeden önce): "Ondan önce
+zaten yetkilendirme yapıldıysa orada kullanıcı ismi gözüksün ve token
+kontrolü vesaireler yapılsın başka hesabın linkini doğrulamaya
+çalışmasın."
+
+**Zaten var olan güvenlik**: `AccountMatchCheck` (`checks.py`) yanlış
+hesabı `verify()` çağrısında zaten reddediyordu (`require_account=True`
+olan her gate'te) -- yani gerçek bir güvenlik açığı yoktu. Ama bu kontrol
+sadece captcha çözülüp gönderildikten SONRA çalışıyordu; kullanıcı yanlış
+hesapla giriş yapmışsa bunu ancak denedikten sonra öğreniyordu, ki bu
+kafa karıştırıcı (captcha'nın kendisi bozukmuş gibi görünebilir).
+
+**Eklenen**: `_expected_user_id(gate, token)` -- `gate.store.get(token)`
+ile token'ın hangi kullanıcı için kesildiğini okuyor (hem `CaptchaGate`
+hem `AdaptiveCaptchaGate` `.store` attribute'una sahip olduğundan ikisi
+için de çalışıyor). `_wrong_account_page(username)` -- "Bu link sana ait
+değil" + çıkış yap linki, captcha hiç render edilmiyor.
+`_verify_page(token, api_base, gate, user)` artık `user` parametresi
+alıyor (route'lar `Depends(get_current_user_optional)` ile çekip
+geçiriyor -- global bir hack yerine düz parametre geçişi, ilk
+denemede bir closure/global-mutation hilesi yazmıştım ama bunun
+eşzamanlı isteklerde race condition'a açık olduğunu fark edip düz
+parametreye çevirdim): giriş yapılmışsa önce sahiplik kontrolü, uyuşmazsa
+blokla; uyuşuyorsa "Giriş yaptın: **username**" + widget; giriş
+yapılmamışsa eskisi gibi login linki. `giveaway_test_verify_page` zaten
+kullanıcı adını gösteriyordu, ona da aynı sahiplik kontrolü eklendi
+(üç token'dan birini kontrol etmek yeterli, hepsi aynı buton
+tıklamasında aynı kullanıcı için kesiliyor).
+
+**Doğrulama**: `TestClient` + `app.dependency_overrides[get_current_
+user_optional]` ile üç durum ayrı ayrı doğrudan test edildi: (1) giriş
+yok -> login linki, widget yok; (2) yanlış hesap (`user_id=999`,
+token `user_id=111` için) -> "Bu link sana ait değil" sayfası, widget
+YOK; (3) doğru hesap -> kullanıcı adı + widget VAR. Üçü de beklenen
+gibi çalıştı.
+
 ## get_info: doğrulanmış link sayfa yenilemede "geçersiz/süresi dolmuş" görünüyor (bu oturum, devam)
 
 Kullanıcı "sıralı test edelim" dedi, 1. adımı (widget donma düzeltmesi)

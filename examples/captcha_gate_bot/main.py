@@ -246,21 +246,68 @@ app.include_router(build_captcha_router(gate=appeal_gate), prefix="/appeal")
 app.include_router(build_captcha_widget_router())
 
 
-def _verify_page(token: str, api_base: str) -> HTMLResponse:
+async def _expected_user_id(gate: CaptchaGate | AdaptiveCaptchaGate, token: str) -> int | None:
+    """Who this specific link was minted for -- `None` if the token is
+    gone/unknown, in which case the widget's own `get_info()` call shows
+    the real "invalid or expired" state; this helper's only job is
+    catching the *different, valid* token case."""
+    request = await gate.store.get(token)
+    return request.user_id if request is not None else None
+
+
+def _wrong_account_page(signed_in_as: str) -> HTMLResponse:
+    # A real bug-report-driven fix: `AccountMatchCheck` already rejects a
+    # mismatched account at *verify* time (see checks.py), but that means
+    # someone only finds out after clicking through and trying to solve
+    # the captcha -- confusing, and easy to mistake for the captcha itself
+    # being broken. Checking token ownership up front, before rendering
+    # anything solvable, catches "forwarded someone else's link" (or
+    # "switched Discord accounts mid-flow") immediately with a clear
+    # explanation instead of a cryptic failed-check after the fact.
+    return HTMLResponse(f"""<!doctype html>
+<title>Yanlış hesap</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 16px">
+<h2>Bu link sana ait değil</h2>
+<p>Şu anda <strong>{signed_in_as}</strong> olarak giriş yapmışsın, ama bu
+doğrulama linki farklı bir Discord hesabı için oluşturuldu. Linki başka
+biriyle mi paylaştın, yoksa yanlış hesapla mı giriş yaptın?</p>
+<p><a href="/auth/discord/logout">Çıkış yap</a> ve doğru hesapla tekrar
+giriş yap, ya da bu linki oluşturan komutu doğru hesabınla tekrar
+çalıştır.</p>
+</body>""")
+
+
+async def _verify_page(
+    token: str, api_base: str, gate: CaptchaGate | AdaptiveCaptchaGate, user: DiscordUser | None
+) -> HTMLResponse:
     # DiscordAuth's non-mobile /auth/discord/login doesn't take a
     # redirect target -- it sets an httpOnly session cookie for this
     # domain and lands on a fixed login_success_redirect (default "/").
     # Since the widget's own fetch calls already carry that cookie once
     # it exists, the flow is: log in once, come back to this same
     # verify link (still in your DMs), then click the widget.
+    if user is not None:
+        expected_user_id = await _expected_user_id(gate, token)
+        if expected_user_id is not None and expected_user_id != user.id:
+            return _wrong_account_page(user.username)
+
+    who = (
+        f"<p>Giriş yaptın: <strong>{user.username}</strong>. Aşağıdaki kutuyu tıkla.</p>"
+        if user is not None
+        else (
+            "<p>Önce Discord hesabınla giriş yap, sonra bu sayfaya geri dönüp "
+            "aşağıdaki kutuyu tıkla.</p>"
+            '<p><a href="/auth/discord/login" target="_blank" rel="noopener">'
+            "Discord ile giriş yap</a></p>"
+        )
+    )
     return HTMLResponse(f"""<!doctype html>
 <title>Doğrulama</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <body style="font-family:system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 16px">
 <h2>Doğrulama</h2>
-<p>Önce Discord hesabınla giriş yap, sonra bu sayfaya geri dönüp aşağıdaki
-kutuyu tıkla.</p>
-<p><a href="/auth/discord/login" target="_blank" rel="noopener">Discord ile giriş yap</a></p>
+{who}
 <div class="dwa-captcha-widget" data-token="{token}" data-api-base="{api_base}"></div>
 <script src="/static/discord-webapi-captcha-widget.js" data-callback="onVerified"></script>
 <script>
@@ -275,13 +322,17 @@ function onVerified(result) {{
 
 
 @app.get("/verify/giveaway/{token}")
-async def verify_giveaway_page(token: str) -> HTMLResponse:
-    return _verify_page(token, "/giveaway")
+async def verify_giveaway_page(
+    token: str, user: DiscordUser | None = Depends(get_current_user_optional)
+) -> HTMLResponse:
+    return await _verify_page(token, "/giveaway", giveaway_gate, user)
 
 
 @app.get("/verify/appeal/{token}")
-async def verify_appeal_page(token: str) -> HTMLResponse:
-    return _verify_page(token, "/appeal")
+async def verify_appeal_page(
+    token: str, user: DiscordUser | None = Depends(get_current_user_optional)
+) -> HTMLResponse:
+    return await _verify_page(token, "/appeal", appeal_gate, user)
 
 
 # ---------------------------------------------------------------------
@@ -617,6 +668,14 @@ gerekiyor. Giriş yaptıktan sonra bu linke (adres çubuğundakine) geri dön.</
 <p><a href="/auth/discord/login" target="_blank" rel="noopener">Discord ile giriş yap</a></p>
 </body>""")
 
+    # All three tokens were minted for the same user in one button click
+    # (see _GiveawayTestJoinView.join_button), so checking one is enough --
+    # this catches a forwarded link or a mid-flow account switch before
+    # showing anything solvable, the same fix applied to _verify_page.
+    expected_user_id = await _expected_user_id(giveaway_test_invisible_gate, invisible)
+    if expected_user_id is not None and expected_user_id != user.id:
+        return _wrong_account_page(user.username)
+
     return HTMLResponse(f"""<!doctype html>
 <title>Çekiliş doğrulaması</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -722,8 +781,10 @@ async def join_adaptive(ctx: commands.Context) -> None:
 
 
 @app.get("/verify/adaptive/{token}")
-async def verify_adaptive_page(token: str) -> HTMLResponse:
-    return _verify_page(token, "/adaptive")
+async def verify_adaptive_page(
+    token: str, user: DiscordUser | None = Depends(get_current_user_optional)
+) -> HTMLResponse:
+    return await _verify_page(token, "/adaptive", adaptive_gate, user)
 
 
 @app.get("/api/test/block-my-ip")

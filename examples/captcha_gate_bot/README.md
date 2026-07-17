@@ -199,6 +199,28 @@ for any of these five, since none require login): page 1 and 2's shared
 flips what `/test-cloudflare`'s first widget requires, same as it does
 for `/join-adaptive`.
 
+## Showing who you're signed in as, and catching a forwarded link early
+
+Every login-gated verify page (`/verify/giveaway`, `/verify/appeal`,
+`/verify/adaptive`, `/giveaway-test/verify`) now does two things before
+it renders anything solvable:
+
+1. If you're signed in, it says so ("Giriş yaptın: **username**" /
+   "Merhaba, **username**").
+2. It checks the token's *intended* user against who's actually signed
+   in -- `AccountMatchCheck` already rejects a mismatched account at
+   *verify* time, but that means finding out only after clicking through
+   and trying to solve the captcha. Checking ownership up front instead
+   shows a clear "this link isn't yours" page immediately (with a link
+   to log out and sign back in with the right account) rather than a
+   confusing failed-check after the fact -- catches a forwarded link or
+   a mid-flow account switch before any captcha is even shown.
+
+Verified directly with `TestClient` (auth dependency override, no live
+Discord needed): signed out shows the login link and no widget; signed
+in as the wrong account shows the "isn't yours" page and no widget;
+signed in as the right account shows the username and the widget.
+
 ## Running it
 
 ```bash
