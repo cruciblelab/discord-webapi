@@ -1,5 +1,62 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## Path-Trace: canvas ölçek uyuşmazlığı -- gerçek çizgi bile reddediliyordu (bu oturum, devam)
+
+Sıralı test planının 3. adımında kullanıcı bildirdi: "baya farklı şey
+denedim hepsi reddedildi ama normal şekilde yapıyorum yine
+reddediliyor... hep aynı çizgi çıkıyor ve çizdiğim çizgiyi düzleştirme
+yapıyor heralde." Bu, önceki turda düzelttiğim "düz kısayol" bug'ından
+TAMAMEN FARKLI, yeni ve gerçek bir bug'dı -- kullanıcının şüphesi
+("düzleştiriyor") doğru çıktı.
+
+**Kök neden**: `widget.js`'in path-trace canvas'ı, `pointerdown`/
+`pointermove`'da `canvas.getBoundingClientRect()`'ten (canvas'ın CSS'te
+GÖRÜNDÜĞÜ boyut) fare koordinatlarını alıp DOĞRUDAN, hiçbir ölçek
+düzeltmesi yapmadan, çizginin sunucu tarafındaki native koordinat
+uzayıyla (canvas'ın `width="320" height="160"` HTML attribute'ları)
+karşılaştırıyordu. Bu ikisi eşit OLMAK ZORUNDA değil --
+`.dwa-captcha-widget{max-width:300px}` zaten canvas'ın native 320px'inden
+dar bir konteyner, host sayfanın kendi CSS'i (responsive bir
+`canvas{max-width:100%}` reset'i, dar bir konteyner, tarayıcı zoom'u,
+mobil cihaz) bunu daha da küçültüp/büyütebilir. Kullanıcı GÖRDÜĞÜ
+(küçültülmüş) çizgiyi tam sadakatle takip etse bile, kaydedilen
+noktalar yanlış ölçekte olduğundan sunucuya sistematik olarak kaymış/
+"düzleşmiş" bir iz gönderiliyor, 24px tolerans kontrolü rastgele
+başarısız oluyordu (host'un CSS'ine, cihaz genişliğine, zoom'a göre
+değişken -- bu yüzden kullanıcı "bazen oluyor, çok takmadım" dedi).
+
+**"hep aynı çizgi çıkıyor" kısmı bir bug DEĞİL**: aynı token/challenge
+üzerinde tekrar denemeler (max_attempts=5) kasıtlı olarak AYNI eğriyi
+tekrar gösteriyor -- her başarısız denemede yeni bir eğri sunmak,
+"kaç deneme hakkın kaldı" mantığını anlamsızlaştırırdı. Bu tasarım
+gereği, sorun değil.
+
+**Düzeltme**: `renderPathTraceChallenge`'a `toCanvasPoint(e)` eklendi --
+`canvas.width / rect.width` ve `canvas.height / rect.height` oranlarıyla
+her noktayı canvas'ın NATIVE çizim uzayına çeviriyor.
+`pointerdown`/`pointermove` artık bunu kullanıyor. Ölçekleme yoksa oran
+1, davranış aynı; ölçeklemede artık doğru.
+
+**Doğrulama -- gerçek tarayıcı, kök nedeni kanıtlayacak şekilde**:
+Playwright ile canvas'ı host-sayfa-CSS'i taklit ederek kasıtlı olarak
+320x160 native'den 222x112 CSS boyutuna küçülttüm (`.dwa-cw-canvas{width:
+220px!important;height:110px!important}`), gerçek fareyle GÖRÜNEN
+(küçültülmüş) eğrinin üzerinden ekran koordinatlarını doğru
+hesaplayarak sadakatle geçtim (gerçek bir kullanıcının GÖRDÜĞÜ şeyi
+takip etmesini simüle ederek). Sonuçlar:
+- **Eski kod (bu düzeltmeden önceki `HEAD` commit'i, `git show HEAD:...`
+  ile ayrı serve edildi) aynı senaryoda REDDETTİ** ("the captcha answer
+  was wrong") -- kullanıcının bildirdiği bug'ı birebir yeniden üretti.
+- **Yeni kod aynı senaryoda KABUL ETTİ** ("Doğrulandı").
+
+Bu, kök nedenin gerçekten canvas ölçek uyuşmazlığı olduğunu ve
+düzeltmenin çalıştığını doğrudan kanıtlıyor -- daha önceki turlardaki
+Playwright testlerimin bu bug'ı YAKALAMAMASININ sebebi de netleşti:
+o testler geniş, varsayılan bir viewport'ta çalıştığı için canvas hiç
+küçültülmemişti (`rect.width === canvas.width`), yani sorun hiç
+tetiklenmemişti -- kullanıcının gerçek cihazında/tarayıcısında bir
+şekilde canvas küçültülüyor olmalı.
+
 ## /appeal'da da aynı "DM onayı yok" bug'ı bulundu (bu oturum, devam)
 
 Sıralı test planının 1. adımını takip ederken kullanıcı bildirdi:

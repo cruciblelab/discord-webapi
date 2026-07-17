@@ -314,16 +314,35 @@
       ctx.stroke();
     }
     redraw();
+    // Map a pointer event to the canvas's OWN drawing coordinate space
+    // (the `width`/`height` HTML attributes, i.e. what `p.path` and the
+    // server's tolerance check are both in pixels of), not the CSS box
+    // it happens to render at. Those two can differ -- `.dwa-captcha-
+    // widget{max-width:300px}` is narrower than this canvas's native
+    // 320px, and a host page's own CSS (a `canvas{max-width:100%}`-style
+    // reset, a narrower container, browser zoom, ...) can shrink or
+    // stretch the rendered box further. Without this scale correction, a
+    // real user's faithfully-traced line gets recorded in the WRONG
+    // coordinate space -- systematically offset/distorted relative to
+    // the reference path -- and can fail tolerance checks that a
+    // perfectly good trace should pass (a real bug reported from
+    // testing: "aynı çizgi çıkıyor ve çizdiğim çizgiyi düzleştirme
+    // yapıyor" -- a rendered-vs-native size mismatch is exactly what
+    // that looks like).
+    function toCanvasPoint(e) {
+      var r = canvas.getBoundingClientRect();
+      var scaleX = canvas.width / r.width;
+      var scaleY = canvas.height / r.height;
+      return [(e.clientX - r.left) * scaleX, (e.clientY - r.top) * scaleY];
+    }
     canvas.addEventListener('pointerdown', function (e) {
       tracing = true; tracePoints = [];
-      var r = canvas.getBoundingClientRect();
-      tracePoints.push([e.clientX - r.left, e.clientY - r.top]);
+      tracePoints.push(toCanvasPoint(e));
       redraw();
     });
     canvas.addEventListener('pointermove', function (e) {
       if (!tracing) return;
-      var r = canvas.getBoundingClientRect();
-      tracePoints.push([e.clientX - r.left, e.clientY - r.top]);
+      tracePoints.push(toCanvasPoint(e));
       redraw();
     });
     window.addEventListener('pointerup', function () { tracing = false; });

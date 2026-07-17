@@ -2,6 +2,52 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Path-Trace: canvas'ın görsel boyutu native çözünürlüğünden farklıysa çizim yanlış koordinatta kaydediliyordu (gerçek bug)
+
+Kullanıcı sıralı test planının 3. adımında bildirdi: normal şekilde,
+eğriyi gerçekten takip ederek çizdiği halde çizgi-takip captcha'sı
+reddediliyordu ("normal şekilde yapıyorum yine reddediliyor"), ve
+"çizdiğim çizgiyi düzleştirme yapıyor heralde" diye şüphelendi. Bu
+gerçek ve ciddi bir bug'dı.
+
+### Kök neden
+
+`widget.js`'in `renderPathTraceChallenge`'ı, fare/dokunma noktalarını
+`canvas.getBoundingClientRect()`'ten (canvas'ın CSS'te GÖRÜNDÜĞÜ boyut)
+alıp doğrudan, hiçbir ölçek düzeltmesi yapmadan, çizginin sunucudan
+gelen native koordinat uzayıyla (canvas'ın `width`/`height` HTML
+attribute'ları -- 320x160) karşılaştırıyordu. Bu ikisi HER ZAMAN eşit
+değil: `.dwa-captcha-widget{max-width:300px}` zaten canvas'ın native
+320px'inden dar; host sayfanın kendi CSS'i (bir `canvas{max-width:100%}`
+tarzı reset, dar bir konteyner, tarayıcı zoom'u, ...) bunu daha da
+küçültebilir/büyütebilir. Sonuç: kullanıcının GÖRDÜĞÜ (küçültülmüş)
+çizgiyi tam olarak takip etmesi bile, kaydedilen noktaların yanlış
+ölçekte olması yüzünden sunucu tarafında sistematik bir kaymaya/
+"düzleşmeye" yol açıyor, tolerans kontrolünü (24px) rastgele
+başarısız kılabiliyordu.
+
+### Düzeltme
+
+`renderPathTraceChallenge`'a `toCanvasPoint(e)` yardımcı fonksiyonu
+eklendi: `canvas.width / rect.width` ve `canvas.height / rect.height`
+oranlarıyla her fare/dokunma noktasını canvas'ın NATIVE çizim
+koordinat uzayına çeviriyor, `pointerdown`/`pointermove` bu fonksiyonu
+kullanıyor. Ölçekleme yoksa (`rect.width === canvas.width`) oran 1'dir,
+davranış değişmez -- sadece host sayfanın canvas'ı küçültüp/büyüttüğü
+durumlarda fark yaratır.
+
+### Doğrulama -- gerçek tarayıcı, kök nedeni ayırt edecek şekilde
+
+Gerçek headless Chromium (Playwright) ile: canvas'ı host sayfa CSS'i
+gibi kasıtlı olarak 320x160 native'den 222x112 CSS boyutuna küçülttüm,
+gerçek bir fareyle GÖRÜNEN (küçültülmüş) eğrinin üzerinden sadakatle
+geçtim (ekran koordinatlarını gerçek CSS-ölçekli canvas kutusuna göre
+hesaplayarak, gerçek bir kullanıcının yapacağı gibi). **Eski kodla aynı
+senaryo REDDEDİLDİ** ("the captcha answer was wrong") -- bu, kullanıcının
+bildirdiği bug'ı birebir yeniden üretti. **Yeni kodla aynı senaryo
+KABUL EDİLDİ** ("Doğrulandı"). Bu, kök nedenin gerçekten bu ölçek
+uyuşmazlığı olduğunu ve düzeltmenin gerçekten çalıştığını kanıtlıyor.
+
 ## [Unreleased] — /appeal doğrulaması da artık DM ile onaylıyor (aynı sınıftan bir bug daha)
 
 Kullanıcı sıralı test planını takip ederken bildirdi: `/simulate-ban`'ı
