@@ -204,14 +204,33 @@ class CaptchaGate:
         )
         return CheckResult(verified=True, passed=passed)
 
-    def on_verified(self, handler: Callable[[CaptchaVerified], Awaitable[None]]) -> None:
+    def on_verified(
+        self,
+        handler: Callable[[CaptchaVerified], Awaitable[None]],
+        *,
+        purpose: str | None = None,
+    ) -> None:
         """Convenience wrapper around `transport.subscribe` so bot-side
         code doesn't need to know the event type string or unwrap the
         payload itself -- `handler` receives an already-parsed
-        `CaptchaVerified` (including `checks_passed`)."""
+        `CaptchaVerified` (including `checks_passed`).
+
+        **Important if you run more than one `CaptchaGate` on the same
+        `Transport`** (a giveaway gate and a separate appeal gate, say):
+        `captcha_verified` is one shared event type, published by every
+        gate on that transport -- `on_verified()` on any one of them
+        receives *all* of their events, not just its own. Pass `purpose=`
+        to filter to the one this handler actually cares about (matched
+        against `VerificationRequest.purpose`/`CaptchaVerified.purpose`);
+        leaving it `None` keeps the old unfiltered behavior, which is only
+        safe when this is the only gate on this transport.
+        """
 
         async def _wrapped(event: Event) -> None:
-            await handler(CaptchaVerified.model_validate(event.payload))
+            payload = CaptchaVerified.model_validate(event.payload)
+            if purpose is not None and payload.purpose != purpose:
+                return
+            await handler(payload)
 
         self.transport.subscribe(EVENT_TYPE_CAPTCHA_VERIFIED, _wrapped)
 

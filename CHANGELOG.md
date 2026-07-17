@@ -2,6 +2,63 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: `on_verified()` çapraz-gate sızıntısı bulunup düzeltildi + 3'lü karşılaştırma testi
+
+Kullanıcı, bir önceki turdaki çoklu-gate desteğini gerçekten test etmemi
+istedi: web + bot komutu, 3 captcha türü alt alta (çizgi-takip / "başarılı
+dönse de robot doğrulaması isteyen" güvenli mod / sade orijinal), bir test
+komutu, DM'e buton gönderen bir test mesajı, ve 2 katılımcıyla sağlam bir
+test. Bunu gerçekten inşa edip çalıştırırken kütüphanede önceden
+bilinmeyen gerçek bir bug bulundu.
+
+### Bulunan gerçek bug ve düzeltmesi
+
+- **`CaptchaGate.on_verified()` filtre yapmıyordu.** Bu örnekte 5 gate
+  (çekiliş, itiraz, ve yeni 3 test gate'i) hepsi TEK bir `Transport`'u
+  paylaşıyor -- `captcha_verified` tek bir event type, o transport
+  üzerindeki HER gate'e broadcast ediliyor. `on_verified()` hiçbir filtre
+  yapmadığı için bir gate'e abone olmak diğer TÜM gate'lerin
+  doğrulamalarını da görüyordu (2 kullanıcıyla simüle edilen testte
+  katılımcı sayısı 2 yerine 6 çıktı, ayrıca çekiliş gate'inin handler'ı
+  test gate'lerinin doğrulamaları için de tetiklenip hatalı `KeyError`/
+  `AttributeError` fırlatıyordu). Düzeltme: `on_verified(handler, *,
+  purpose=None)` -- `purpose` verilirse sadece o `purpose`'a sahip
+  event'leri geçiriyor, `purpose=None` (varsayılan) eski davranışın
+  birebir aynısı (geriye dönük tam uyumlu).
+- `examples/captcha_gate_bot`'taki TÜM `on_verified()` çağrıları
+  (çekiliş, itiraz, ve 3 yeni test gate'i) artık kendi `purpose`'larını
+  filtreliyor.
+
+### Eklenen: `/test-join`, `/test-participants`, `/test-widgets`
+
+- **3 yeni demo gate**: Path-Trace (sade, görünmez katman yok), "safety
+  mode" (görünür Math captcha VE görünmez davranış skoru ikisi de şart --
+  davranış skoru geçse bile yanlış Math cevabı hâlâ `"captcha"`
+  check'inde reddediliyor, gerçekten test edildi), "orijinal" (sade tek
+  başına Math). Her biri `/test-path-trace`, `/test-safety`,
+  `/test-original` prefix'leri altında ayrı mount ediliyor.
+- **`/test-join`** -- DM'e bir `discord.ui.Button` ("Katıl") gönderiyor;
+  tıklanınca üç token birden mint edilip tek bir `/test-widgets` linki
+  ephemeral olarak dönüyor.
+- **`/test-widgets`** -- üç widget'ı alt alta gösteren sayfa.
+- **`/test-participants`** -- şu ana kadar üç test gate'inden herhangi
+  birini tamamlayan herkesi listeliyor.
+
+### Doğrulama
+
+`TestClient` ile 2 farklı sahte Discord kullanıcısı (`111`, `222`) üç test
+gate'inin her birinden gerçekten geçirildi -- düzeltmeden önce katılımcı
+sayısı yanlış (6) çıkıyordu, düzeltmeden sonra doğru (2, çapraz sızıntı
+yok) çıktı. Path-trace gerçek yoğun bir trace ile, safety-mode hem doğru
+hem yanlış Math cevabıyla (ikisinde de davranış sinyalleri insan-gibi
+tutularak -- gerçekten `"captcha"` check'inin ayrı çalıştığını kanıtlamak
+için) ayrı ayrı test edildi.
+
+2 yeni birim testi (`test_captcha_gate.py`: filtresiz eski davranışın
+korunduğunu, `purpose=` ile çapraz-gate sızıntısının önlendiğini
+kanıtlıyor). Tüm suite yeşil (bilinen Postgres ortam hatası hariç),
+ruff+mypy temiz.
+
 ## [Unreleased] — captcha: gerçek bot-komut senaryoları için çoklu-gate desteği + `examples/captcha_gate_bot`
 
 Kullanıcının sorusu: "peki komutlarda çalışıyor mu, çekiliş botu +

@@ -90,6 +90,61 @@ async def test_full_giveaway_scenario_verify_notifies_the_bot_side() -> None:
     assert notified[0].checks_passed == ["captcha"]
 
 
+async def test_on_verified_without_purpose_filter_sees_every_gate_on_a_shared_transport() -> None:
+    """The trap this is documenting: `captcha_verified` is one event type
+    shared by every gate on the same Transport. Without a `purpose=`
+    filter, a handler subscribed on gate A also fires for gate B's
+    verifications -- this is the *old*, unfiltered default behavior,
+    preserved for backwards compatibility."""
+    transport = InProcessTransport()
+    store = MemoryCaptchaStore()
+    gate_a = CaptchaGate(transport, MemoryVerificationStore(), MathCaptchaProvider(store))
+    gate_b = CaptchaGate(transport, MemoryVerificationStore(), MathCaptchaProvider(store))
+    seen: list[CaptchaVerified] = []
+    gate_a.on_verified(lambda event: seen.append(event))  # type: ignore[arg-type,return-value]
+
+    req_a = await gate_a.create_verification(user_id=1, purpose="purpose_a")
+    pending_a = await store.get(req_a.challenge.challenge_id)
+    assert pending_a is not None
+    await gate_a.verify(req_a.token, pending_a.answer)
+
+    req_b = await gate_b.create_verification(user_id=2, purpose="purpose_b")
+    pending_b = await store.get(req_b.challenge.challenge_id)
+    assert pending_b is not None
+    await gate_b.verify(req_b.token, pending_b.answer)
+    await asyncio.sleep(0.05)
+
+    assert [e.purpose for e in seen] == ["purpose_a", "purpose_b"]
+
+
+async def test_on_verified_purpose_filter_ignores_other_gates_events() -> None:
+    """Pass `purpose=` to fix the trap above: a handler only sees events
+    whose `purpose` matches, so two gates sharing one Transport (a
+    giveaway gate and a separate appeal gate, say) don't cross-fire."""
+    transport = InProcessTransport()
+    store = MemoryCaptchaStore()
+    gate_a = CaptchaGate(transport, MemoryVerificationStore(), MathCaptchaProvider(store))
+    gate_b = CaptchaGate(transport, MemoryVerificationStore(), MathCaptchaProvider(store))
+    seen_a: list[CaptchaVerified] = []
+    seen_b: list[CaptchaVerified] = []
+    gate_a.on_verified(lambda event: seen_a.append(event), purpose="purpose_a")  # type: ignore[arg-type,return-value]
+    gate_b.on_verified(lambda event: seen_b.append(event), purpose="purpose_b")  # type: ignore[arg-type,return-value]
+
+    req_a = await gate_a.create_verification(user_id=1, purpose="purpose_a")
+    pending_a = await store.get(req_a.challenge.challenge_id)
+    assert pending_a is not None
+    await gate_a.verify(req_a.token, pending_a.answer)
+
+    req_b = await gate_b.create_verification(user_id=2, purpose="purpose_b")
+    pending_b = await store.get(req_b.challenge.challenge_id)
+    assert pending_b is not None
+    await gate_b.verify(req_b.token, pending_b.answer)
+    await asyncio.sleep(0.05)
+
+    assert len(seen_a) == 1 and seen_a[0].purpose == "purpose_a"
+    assert len(seen_b) == 1 and seen_b[0].purpose == "purpose_b"
+
+
 async def test_verify_with_the_wrong_answer_does_not_notify_the_bot_side() -> None:
     gate = _make_gate()
     notified: list[CaptchaVerified] = []

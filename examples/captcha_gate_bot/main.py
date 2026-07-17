@@ -38,6 +38,16 @@ general pattern for physical-testing an example bot):
     /appeal reason:...           -> refuses until BAN_THRESHOLD is
                                      simulated (see _ban_count_for below)
                                      and a separate link is completed
+    /test-join                  -> DMs a button; clicking it hands back a
+                                     link to /test-widgets, which shows
+                                     three genuinely different captcha
+                                     configurations stacked on one page
+                                     (Path-Trace / "safety mode" combining
+                                     a visible captcha with the invisible
+                                     layer / the plain original baseline)
+                                     for direct side-by-side comparison
+    /test-participants           -> lists everyone who has completed any
+                                     of the three test gates so far
 """
 
 from __future__ import annotations
@@ -54,6 +64,8 @@ from discord_webapi.captcha.api import build_captcha_router
 from discord_webapi.captcha.events import CaptchaVerified
 from discord_webapi.captcha.gate import CaptchaGate
 from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
+from discord_webapi.captcha.providers.math_captcha import MathCaptchaProvider
+from discord_webapi.captcha.providers.path_trace import PathTraceProvider
 from discord_webapi.captcha.providers.proof_of_work import ProofOfWorkProvider
 from discord_webapi.captcha.replay_guard import (
     MemoryTrajectoryFingerprintStore,
@@ -106,7 +118,7 @@ async def _on_giveaway_verified(event: CaptchaVerified) -> None:
     await user.send(f"Doğrulandı! **{event.metadata['giveaway_name']}** çekilişine katıldın.")
 
 
-giveaway_gate.on_verified(_on_giveaway_verified)
+giveaway_gate.on_verified(_on_giveaway_verified, purpose="giveaway_entry")
 
 
 @bot.hybrid_command(name="join", description="Bir çekilişe katıl")
@@ -147,7 +159,7 @@ async def _on_appeal_verified(event: CaptchaVerified) -> None:
     _appeal_verified_users.add(event.user_id)
 
 
-appeal_gate.on_verified(_on_appeal_verified)
+appeal_gate.on_verified(_on_appeal_verified, purpose="appeal_gate")
 
 
 def _ban_count_for(user_id: int) -> int:
@@ -225,3 +237,140 @@ async def verify_giveaway_page(token: str) -> HTMLResponse:
 @app.get("/verify/appeal/{token}")
 async def verify_appeal_page(token: str) -> HTMLResponse:
     return _verify_page(token, "/appeal")
+
+
+# ---------------------------------------------------------------------
+# Side-by-side comparison test: three genuinely different captcha
+# configurations, stacked on one page, so you can compare them directly
+# instead of one at a time. No account requirement here on purpose --
+# this is about comparing *captcha types*, not re-proving account-binding
+# (already covered by the giveaway/appeal gates above).
+#
+#   1. Path-Trace  -- draw the line, no invisible layer at all.
+#   2. "Safety mode" -- a visible Math captcha is REQUIRED, and so is the
+#      invisible behavior score -- passing the invisible layer does NOT
+#      let you skip the visible one, both are ANDed.
+#   3. "Original" -- the plain baseline: one Math captcha, nothing else.
+# ---------------------------------------------------------------------
+
+test_path_trace_gate = CaptchaGate(
+    transport, MemoryVerificationStore(), PathTraceProvider(_captcha_store)
+)
+test_safety_gate = CaptchaGate(
+    transport,
+    MemoryVerificationStore(),
+    MathCaptchaProvider(_captcha_store),
+    extra_checks=_behavior_checks(),
+)
+test_original_gate = CaptchaGate(
+    transport, MemoryVerificationStore(), MathCaptchaProvider(_captcha_store)
+)
+
+# Every distinct (purpose, user_id) that has ever completed ANY of the
+# three test gates -- a real bot would persist this, this is just enough
+# to prove "2 participants completed verification" for the test below.
+#
+# All three gates (and the giveaway/appeal ones above) share ONE
+# Transport (app.state.discord_webapi_transport) -- `captcha_verified` is
+# one event type shared by every gate on it, so on_verified() without a
+# purpose= filter would see all five gates' events, not just its own
+# (see CaptchaGate.on_verified's docstring). Each test gate gets its own
+# distinct purpose specifically so this filters correctly.
+_test_participants: set[tuple[str, int]] = set()
+
+
+async def _record_test_participant(event: CaptchaVerified) -> None:
+    _test_participants.add((event.purpose, event.user_id))
+
+
+test_path_trace_gate.on_verified(_record_test_participant, purpose="test_widgets_path_trace")
+test_safety_gate.on_verified(_record_test_participant, purpose="test_widgets_safety")
+test_original_gate.on_verified(_record_test_participant, purpose="test_widgets_original")
+
+app.include_router(build_captcha_router(gate=test_path_trace_gate), prefix="/test-path-trace")
+app.include_router(build_captcha_router(gate=test_safety_gate), prefix="/test-safety")
+app.include_router(build_captcha_router(gate=test_original_gate), prefix="/test-original")
+
+
+@bot.hybrid_command(
+    name="test-participants", description="Demo: kaç kişi test gate'lerini tamamladı"
+)
+async def test_participants(ctx: commands.Context) -> None:
+    if not _test_participants:
+        await ctx.reply("Henüz kimse doğrulamadı.", ephemeral=True)
+        return
+    lines = [f"- <@{user_id}> ({purpose})" for purpose, user_id in sorted(_test_participants)]
+    await ctx.reply(
+        f"**{len(_test_participants)}** doğrulama tamamlandı:\n" + "\n".join(lines),
+        ephemeral=True,
+    )
+
+
+class _JoinTestView(discord.ui.View):
+    """The button-in-a-DM flow: clicking doesn't verify anything by
+    itself (a Discord interaction can't run JS/collect mouse signals) --
+    it mints three fresh tokens for *this* user and hands back the one
+    link that shows all three widgets stacked."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=300)
+
+    @discord.ui.button(label="Katıl", style=discord.ButtonStyle.primary)
+    async def join_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        user_id = interaction.user.id
+        path_trace_req = await test_path_trace_gate.create_verification(
+            user_id=user_id, purpose="test_widgets_path_trace"
+        )
+        safety_req = await test_safety_gate.create_verification(
+            user_id=user_id, purpose="test_widgets_safety"
+        )
+        original_req = await test_original_gate.create_verification(
+            user_id=user_id, purpose="test_widgets_original"
+        )
+        url = (
+            f"{_base_url}/test-widgets"
+            f"?path_trace={path_trace_req.token}"
+            f"&safety={safety_req.token}"
+            f"&original={original_req.token}"
+        )
+        await interaction.response.send_message(
+            f"Üç captcha türünü karşılaştırmak için: {url}", ephemeral=True
+        )
+
+
+@bot.hybrid_command(
+    name="test-join", description="Demo: DM'e buton gönder, 3 captcha türünü karşılaştır"
+)
+async def test_join(ctx: commands.Context) -> None:
+    await ctx.author.send(
+        "Aşağıdaki butona tıkla, üç farklı captcha türünü yan yana test edeceğin linki alacaksın.",
+        view=_JoinTestView(),
+    )
+    await ctx.reply("Sana DM attım, butona tıkla!", ephemeral=True)
+
+
+@app.get("/test-widgets")
+async def test_widgets_page(path_trace: str, safety: str, original: str) -> HTMLResponse:
+    return HTMLResponse(f"""<!doctype html>
+<title>Captcha karşılaştırma testi</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:40px auto;padding:0 16px">
+<h2>Üç captcha türünü karşılaştır</h2>
+
+<h3>1) Çizgi-takip -- sadece görsel, görünmez katman yok</h3>
+<div class="dwa-captcha-widget" data-token="{path_trace}" data-api-base="/test-path-trace"></div>
+
+<h3>2) Safety mode -- görünür captcha VE görünmez davranış katmanı ikisi de şart</h3>
+<p style="font-size:.85rem;color:#666">
+Davranış skoru geçse bile görsel captcha'yı da çözmen gerekiyor -- biri
+diğerinin yerine geçmiyor.
+</p>
+<div class="dwa-captcha-widget" data-token="{safety}" data-api-base="/test-safety"></div>
+
+<h3>3) Orijinal -- sade, tek başına bir Math captcha</h3>
+<div class="dwa-captcha-widget" data-token="{original}" data-api-base="/test-original"></div>
+
+<script src="/static/discord-webapi-captcha-widget.js"></script>
+</body>""")

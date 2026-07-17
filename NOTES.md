@@ -1,5 +1,69 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: on_verified() çapraz-gate sızıntısı -- ikinci gerçek bug bu oturumda (devam)
+
+Kullanıcı bir önceki turda eklediğim çoklu-gate desteğini ("bununla da
+test oluştur") gerçekten test etmemi istedi: web + bot, 3 captcha türü
+alt alta (çizgi-takip / başarılı dönse de robot doğrulaması isteyen
+güvenli mod / orijinal sade), test komutu, DM'e buton gönderen mesaj,
+2 katılımcı ile sağlam bir test. Talimat oldukça yazım hatalı/dağınıktı
+ama niyeti netti: gerçek bir uçtan uca senaryoyla kanıtla.
+
+**İkinci gerçek bug bu turda bulundu** (birincisi önceki turdaki tek-gate
+sınırıydı): `examples/captcha_gate_bot`'a 3 yeni test gate'i ekleyip
+2 sahte kullanıcıyla (`111`, `222`) her birini gerçekten doğrulattığımda
+katılımcı sayısı 2 değil **6** çıktı, ve ayrıca çekiliş gate'inin
+`on_verified` handler'ı (`bot.fetch_user` çağıran) test gate'lerinin
+doğrulamaları için de tetiklenip hata fırlattı. Sebep: bu örnekteki TÜM
+gate'ler (çekiliş, itiraz, 3 test gate'i -- 5 tane) aynı `Transport`'u
+paylaşıyor (`app.state.discord_webapi_transport`, `quickstart()`'tan),
+ve `captcha_verified` HEPSİ için aynı, tek bir event type. `on_verified()`
+hiçbir filtre yapmıyordu -- bir gate'e abone olmak, o transport üzerindeki
+DİĞER TÜM gate'lerin doğrulamalarını da alıyordu. Bu, önceki turda
+playground'da bir kez rastladığım "tek global gate" sınırından farklı,
+ondan bağımsız ikinci bir gerçek tuzak -- bu sefer `build_captcha_router`
+değil, `CaptchaGate.on_verified()`'ın kendisinde.
+
+**Düzeltme** (`discord_webapi/captcha/gate.py`): `on_verified(handler, *,
+purpose: str | None = None)` -- `purpose` verilirse event'in
+`payload.purpose`'u eşleşmiyorsa handler hiç çağrılmıyor. `purpose=None`
+(varsayılan) eski davranışın birebir aynısı -- geriye dönük tam uyumlu,
+mevcut testler değişmeden geçti. Docstring'e büyük harflerle "birden
+fazla gate aynı transport'ta ise bunu mutlaka kullan" uyarısı eklendi.
+2 yeni birim testi: filtresiz eski davranışın (çapraz sızıntı dahil)
+hâlâ çalıştığını, `purpose=` ile sızıntının önlendiğini kanıtlıyor.
+
+**`examples/captcha_gate_bot`'a eklenenler**:
+- 3 yeni demo gate + `/test-path-trace`, `/test-safety`, `/test-original`
+  prefix'leri: Path-Trace (görünmez katman yok), "safety mode" (Math
+  captcha VE davranış skoru ikisi de şart -- davranış skoru insan-gibi
+  olsa bile yanlış Math cevabı hâlâ `"captcha"` check'inde reddediliyor,
+  gerçekten test ettim), "orijinal" (sade Math). Kullanıcının "başarılı
+  dönse de robot doğrulaması isteyecek" tarifinin birebir karşılığı.
+- `/test-join`: DM'e `discord.ui.Button` ("Katıl") -- tıklanınca 3 token
+  mint edilip tek bir `/test-widgets` linki dönüyor (kullanıcının "test
+  butonlu mesaj, butona tıkla dmden" isteğinin karşılığı).
+- `/test-widgets`: üç widget'ı alt alta gösteren sayfa.
+- `/test-participants`: katılımcı listesi/sayısı (kullanıcının "katılanlar
+  2 olacak" isteğinin doğrulanabilir karşılığı).
+- Her üç test gate'i ayrı `purpose` string'i kullanıyor
+  (`test_widgets_path_trace`/`_safety`/`_original`) -- yeni `purpose=`
+  filtresinin doğru çalışması için şart, aksi halde üçü de aynı etikette
+  toplanırdı.
+
+**Doğrulama**: `TestClient` ile 2 sahte kullanıcıyı (`111`, `222`) üç test
+gate'inin her birinden gerçekten geçirdim. Düzeltmeden ÖNCE katılımcı
+sayısı 6 (yanlış, çapraz sızıntı), düzeltmeden SONRA tam olarak 2 (doğru,
+`{("test_widgets_original", 111), ("test_widgets_original", 222)}`).
+Path-trace gerçek yoğun bir trace ile geçti; safety-mode'da davranış
+sinyalleri kusursuzca insan-gibi tutulup Math cevabı bilerek yanlış
+gönderildi -- yine de reddedildi, spesifik olarak `"captcha"` check'inde
+(davranış check'inde değil) -- yani "ikisi de şart, biri diğerinin yerine
+geçmiyor" iddiası gerçekten doğrulandı, varsayılmadı.
+
+2 yeni test (`test_captcha_gate.py`), tüm suite yeşil (bilinen Postgres
+hatası hariç), ruff+mypy temiz.
+
 ## captcha: "komutlarda gerçekten çalışıyor mu" sorusu gerçek bir mimari sınır ortaya çıkardı (bu oturumda)
 
 Kullanıcının sorusu birebir: "Peki komutlsrda şeylerde çalışıyor mu

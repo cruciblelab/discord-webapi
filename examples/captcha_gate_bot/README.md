@@ -33,15 +33,49 @@ for your own moderation history -- swap `_ban_count_for` for a real
 for this demo's lifetime (a real bot would persist that, not use an
 in-memory `set`).
 
-## Why two gates need two URL prefixes
+## Scenario 3 -- side-by-side captcha comparison (`/test-join`, `/test-participants`)
+
+```
+/test-join            -- DMs a button; clicking it replies with one link
+/test-participants     -- lists everyone who has completed any of the 3 below
+```
+
+Clicking the button mints three fresh tokens (one per `CaptchaGate`
+config below) and hands back a single link to `/test-widgets`, which
+stacks all three on one page for direct comparison:
+
+1. **Path-Trace** -- purely visual/interactive, no invisible layer at all.
+2. **"Safety mode"** -- a visible Math captcha is required, *and* so is
+   the invisible behavior score. Passing the behavior score does **not**
+   let you skip the visible captcha -- both are ANDed. Try submitting a
+   wrong Math answer with otherwise perfectly human-like signals: it
+   still fails, specifically on the `"captcha"` check, not the behavior
+   one.
+3. **"Original"** -- the plain baseline, one Math captcha, nothing else.
+
+This scenario is what surfaced a real bug in the library while building
+it: five `CaptchaGate`s (this repo's two above plus these three) all
+share one `Transport`, and `captcha_verified` is one event type broadcast
+to every gate on it. `on_verified()` used to have no way to filter, so
+subscribing on any one gate silently received *every other gate's*
+verifications too (confirmed with two simulated users -- the participant
+count came out as 6, not 2, until this was fixed). `CaptchaGate.on_verified()`
+now takes an optional `purpose=` filter -- every `on_verified()` call in
+this example (including the giveaway/appeal ones above) passes it, and
+the three test gates each get their own distinct `purpose` string
+specifically so `/test-participants` counts correctly.
+
+## Why multiple gates need multiple URL prefixes
 
 `build_captcha_router()`'s default reads a single
 `app.state.discord_webapi_captcha_gate` -- fine for one gate purpose. This
-example has two (`giveaway_gate`, `appeal_gate`), so each is mounted
-explicitly via `build_captcha_router(gate=...)` under its own prefix
-(`/giveaway`, `/appeal`), and the widget's `data-api-base` attribute
-points at the matching prefix. See `discord_webapi/captcha/api.py`'s
-module docstring for the general pattern.
+example has five (`giveaway_gate`, `appeal_gate`, and the three test
+gates above), so each is mounted explicitly via `build_captcha_router(gate=...)`
+under its own prefix (`/giveaway`, `/appeal`, `/test-path-trace`,
+`/test-safety`, `/test-original`), and each widget's `data-api-base`
+attribute points at the matching prefix. See
+`discord_webapi/captcha/api.py`'s module docstring for the general
+pattern.
 
 ## Running it
 
