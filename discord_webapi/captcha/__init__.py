@@ -47,13 +47,17 @@ from discord_webapi.captcha.pageguard import (
     PageGuard,
     PageGuardRedirect,
     missing_accept_language,
+    suspicious_user_agent,
 )
+from discord_webapi.captcha.presets import CloudflareStyleGuard, build_cloudflare_style_guard
+from discord_webapi.captcha.providers.fallback import FallbackCaptchaProvider
 from discord_webapi.captcha.providers.hcaptcha import HCaptchaProvider
 from discord_webapi.captcha.providers.math_captcha import MathCaptchaProvider
 from discord_webapi.captcha.providers.path_trace import PathTraceProvider
 from discord_webapi.captcha.providers.proof_of_work import ProofOfWorkProvider
 from discord_webapi.captcha.providers.recaptcha import ReCaptchaProvider
 from discord_webapi.captcha.providers.text_captcha import TextCaptchaProvider
+from discord_webapi.captcha.providers.turnstile import TurnstileProvider
 from discord_webapi.captcha.replay_guard import (
     MemoryTrajectoryFingerprintStore,
     RepeatedMovementCheck,
@@ -67,6 +71,9 @@ from discord_webapi.captcha.scoring import (
     default_behavior_heuristics,
 )
 from discord_webapi.captcha.signals import (
+    DEFAULT_HEADLESS_UA_PATTERNS,
+    honeypot_field_empty,
+    reject_headless_user_agent,
     reject_webdriver,
     require_min_interaction_ms,
     require_signal_flag,
@@ -85,6 +92,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_COOKIE_MAX_AGE",
     "DEFAULT_COOKIE_NAME",
+    "DEFAULT_HEADLESS_UA_PATTERNS",
     "DEFAULT_WIDGET_MOUNT_PATH",
     "EVENT_TYPE_CAPTCHA_VERIFIED",
     "AccountMatchCheck",
@@ -99,6 +107,8 @@ __all__ = [
     "CaptchaVerified",
     "CheckOutcome",
     "CheckResult",
+    "CloudflareStyleGuard",
+    "FallbackCaptchaProvider",
     "HCaptchaProvider",
     "IPReputationChecker",
     "MathCaptchaProvider",
@@ -126,18 +136,23 @@ __all__ = [
     "TextCaptchaProvider",
     "TrajectoryFingerprintStore",
     "TrustStore",
+    "TurnstileProvider",
     "VerificationCheck",
     "VerificationContext",
     "VerificationRequest",
     "VerificationStore",
     "build_captcha_router",
+    "build_cloudflare_style_guard",
     "build_captcha_widget_router",
     "default_behavior_heuristics",
     "fingerprint_trajectory",
+    "honeypot_field_empty",
     "missing_accept_language",
+    "reject_headless_user_agent",
     "reject_webdriver",
     "require_min_interaction_ms",
     "require_signal_flag",
+    "suspicious_user_agent",
 ]
 
 

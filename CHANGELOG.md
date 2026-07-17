@@ -2,6 +2,122 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Captcha sisteminde sağlamlaştırma + hızlı kullanım için ekstralar (hibrit, tam özelleştirilebilir)
+
+Kullanıcının isteği (özet, kendi kelimeleriyle): "capctha sistemine
+sağlamlaştırma ve ekstralara hızlı kullanımlar için tam özelleştirilebilir
+hibrit modele açık yeni şeyler ekleyelim" — sorduğum iki soruya verdiği
+cevap: sağlamlaştırma için dört cephenin HEPSİ (daha fazla anti-bot
+sinyali, deneme/hız limiti, sağlayıcı çeşitliliği/yedekleme, depolama/
+güvenlik sertleştirme); ekstralar için hem hazır bir captcha komutu hem
+de Cloudflare tarzı `PageGuard` preset'i — "nasıl ettikleri önemsiz,
+temeli sağlam verelim, sen aç genişlet iyileştirme sağlamlaştırma yap."
+
+Mevcut captcha altyapısı (önceki oturumlarda kurulan `AdaptiveCaptchaGate`/
+`PageGuard`/`scoring.py`/`replay_guard.py`) zaten çok olgun olduğu için bu
+tur BUNLARIN üzerine ekleme yaptı, yeniden yazmadı.
+
+### 1) Daha fazla anti-bot sinyali
+
+- `VerificationContext`'e yeni `user_agent: str | None` alanı eklendi --
+  `client_ip` ile aynı mantık: sunucunun kendi gözlemlediği bir değer
+  (`Request`'in `User-Agent` header'ı), `signals`'daki gibi istemcinin
+  JS'inin iddia ettiği bir şey değil. `CaptchaGate.verify()`/
+  `AdaptiveCaptchaGate.verify()`'a yeni opsiyonel `user_agent=` parametresi
+  eklendi, `build_captcha_router()` gerçek HTTP header'ı otomatik geçiyor
+  (uçtan uca HTTP testiyle doğrulandı).
+- `signals.honeypot_field_empty(field_name)`: klasik honeypot tekniği --
+  gizli bir form alanını bir bot doldurursa reddeder, gerçek kullanıcı
+  hiç görmediği için asla dolduramaz.
+- `signals.reject_headless_user_agent(patterns=None)`: `ctx.user_agent`'ı
+  bilinen headless-browser/otomasyon araçlarına (`HeadlessChrome`,
+  `PhantomJS`, `Puppeteer`, `Playwright`, `Selenium`, `Electron`) karşı
+  kontrol ediyor -- dar tutuldu (bilinçli olarak), sıradan tarayıcıları
+  yanlışlıkla engellememesi için.
+- `pageguard.suspicious_user_agent()`: aynı listeyi `PageGuard`'ın
+  `extra_suspicious` yuvasına (sunucu tarafında, JS gerektirmeden,
+  `missing_accept_language` ile aynı desen) takan hazır bir fabrika.
+
+### 2) Deneme/hız limiti sağlamlaştırma
+
+`build_captcha_router()`'a iki yeni, opsiyonel IP-bazlı rate limiter:
+- `challenge_rate_limiter`: `GET /challenge`'ta daha önce HİÇ limit
+  yoktu -- kendi barındırılan (Math/Text) sağlayıcının her çağrıda yeni
+  bir `CaptchaStore` satırı yazması, sınırsız issuance'ı o tabloyu
+  doldurmanın ucuz bir yolu yapıyordu.
+- `gate_verify_ip_rate_limiter`: mevcut `verify_rate_limiter`,
+  `/gate/{token}/verify`'da SADECE token bazında sınırlıyordu -- bir IP
+  farklı farklı token'lara saldırırsa (her biri kendi taze bütçesiyle)
+  hiç yakalanmıyordu. Yeni limiter bunu IP bazında da kapatıyor,
+  mevcut token-bazlı limitin davranışını değiştirmeden.
+
+### 3) Sağlayıcı çeşitliliği/yedekleme
+
+- `providers/turnstile.py` -- Cloudflare Turnstile, reCAPTCHA/hCaptcha ile
+  birebir aynı şekilde (`site_key`/`secret_key`, `siteverify` POST'u,
+  non-JSON/non-dict yanıtta baştan kapalı-hata).
+- `providers/fallback.py` -- `FallbackCaptchaProvider`: birden fazla
+  `CaptchaProvider`'ı sırayla dener, biri `issue()`'da patlarsa bir
+  sonrakine geçer (kendi barındırılan bir sağlayıcının store yazması
+  başarısız olursa, ya da kendi yazdığınız ücretli bir servis sağlayıcısı
+  ağ hatası verirse). Hangi alt sağlayıcının hangi challenge'ı verdiğini
+  `challenge_id`'nin başına bir index ekleyerek takip ediyor -- `verify()`
+  her zaman doğru sağlayıcıya yönleniyor (bir insan HANGİ sağlayıcının
+  sorusunu çözdüyse doğrulama da SADECE o sağlayıcıdan olabilir).
+
+### 4) Depolama/güvenlik sertleştirme
+
+- `SQLCaptchaStore`'a opsiyonel `encryption_keys` parametresi (varsayılan
+  `None` -- eski davranış, tam geriye uyumlu): verilirse
+  `PendingCaptcha.answer` (henüz çözülmemiş bir challenge'ın beklenen
+  cevabı) `Fernet`/`MultiFernet` ile şifrelenmiş olarak saklanıyor --
+  `DiscordAuth`'un token şifrelemesiyle aynı desen. Salt okuma erişimi
+  olan biri artık bekleyen tüm challenge'ların cevaplarını göremiyor.
+  Anahtar uyuşmazlığında (ya da şifreleme sonradan açıldığında eski
+  plaintext satırlar için) `get()` `None` dönüyor (hata fırlatmak yerine
+  "bu challenge yok" ile aynı, paketin geri kalanındaki "kapalı-hata"
+  felsefesiyle tutarlı).
+- Dört SQL store'a (`SQLCaptchaStore`, `SQLVerificationStore`,
+  `SQLTrajectoryFingerprintStore`, `SQLTrustStore`) yeni `purge_expired()`
+  metodu: süresi geçmiş satırları toplu siliyor (kendi cron/APScheduler
+  job'unuza bağlayın -- kütüphane kendi zamanlayıcısını çalıştırmıyor).
+  Mevcut lazy-expiry (okuma anında tek satır silme) davranışı aynen
+  duruyor, bu ayrıca hiç okunmayan satırlar için depolama hijyeni.
+
+### 5) Ekstra: hazır captcha doğrulama komutu
+
+`extras/captcha_verify.py` -- `warn.py`/`ban.py` ile aynı `setup(bot,
+**kwargs)` konvansiyonu: `/verify` komutu `gate.create_verification()`
+ile bir link üretip ephemeral yanıt olarak ya da (`dm_link=True`) DM
+olarak gönderiyor. Bilinçli olarak ince tutuldu -- gerçek doğrulama
+politikası (hangi captcha, hesap bağlama, IP-adaptif eskalasyon) tamamen
+geçirilen `gate`'e ait; hem `CaptchaGate` hem `AdaptiveCaptchaGate` ile
+değişmeden çalışıyor (küçük bir yapısal `Protocol`, ikisinden birini
+import etmeden).
+
+### 6) Preset: Cloudflare-tarzı `PageGuard` fabrikası
+
+`captcha/presets.py::build_cloudflare_style_guard()` -- kullanıcının tarif
+ettiği akışı (önce IP itibarı, kötüyse hemen captcha, varsayılan olarak
+çizgi-çizme/PathTrace captchası, davranışsal skorlama, IP değişince
+tekrar captcha) TEK bir çağrıyla kuran quickstart. Her parametre
+`AdaptiveCaptchaGate`/`PageGuard`'ın kendi parametresi, sıfır-config bir
+varsayılanla (boş bir `StaticBlocklistReputationChecker`, taze bir
+`PathTraceProvider`, in-memory store'lar, varsayılan
+`SignalScoreCheck()`) -- herhangi bir parçayı (gerçek bir itibar
+kaynağı, `TurnstileProvider`, SQL store'lar, kendi scoring heuristiklerin)
+değiştirmek için farklı bir fonksiyona gerek yok, aynı hibrit/tam
+özelleştirilebilir felsefe. `bind_trust_to_ip` bu preset'te varsayılan
+olarak `True` (gate'in kendi varsayılanı `False`'un aksine) -- "bir IP'den
+bağlandı, başka IP'den bağlanırsa hemen captcha" isteğinin karşılığı.
+
+### Doğrulama
+
+Her yeni parça gerçek testlerle doğrulandı (yeni eklenen ~50 test dahil
+tüm captcha test paketi: 248 test yeşil). `ruff check`, `mypy` (126
+dosya), `python -m pytest` (yerel Redis ile, 801 test yeşil, 7 skip,
+ilgisiz 1 Postgres testi bu ortamda deselect) -- hepsi temiz.
+
 ## [Unreleased] — Tüm kütüphanenin paralel-ajan denetimi: 10 gerçek bug bulundu ve düzeltildi
 
 Kullanıcının isteği (birebir): "Tüm kütüphaneyi parçalara ayır ve her

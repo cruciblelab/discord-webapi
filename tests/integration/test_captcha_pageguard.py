@@ -20,6 +20,7 @@ from discord_webapi.captcha import (
     PageGuardRedirect,
     StaticBlocklistReputationChecker,
     missing_accept_language,
+    suspicious_user_agent,
 )
 from discord_webapi.transport import InProcessTransport
 
@@ -117,6 +118,37 @@ def test_extra_suspicious_signal_forces_a_redirect_even_on_a_clean_ip() -> None:
     resp = client.get("/protected", follow_redirects=False)
 
     assert resp.status_code == 307  # httpx/TestClient sends no Accept-Language by default
+
+
+def test_suspicious_user_agent_forces_a_redirect_even_on_a_clean_ip() -> None:
+    app, _guard, _gate = _build_app(extra_suspicious=suspicious_user_agent())
+    client = TestClient(app, client=("1.1.1.1", 12345))
+
+    resp = client.get(
+        "/protected",
+        follow_redirects=False,
+        headers={"user-agent": "Mozilla/5.0 HeadlessChrome/120.0.0.0"},
+    )
+
+    assert resp.status_code == 307
+
+
+def test_ordinary_user_agent_is_not_flagged_as_suspicious() -> None:
+    app, _guard, _gate = _build_app(extra_suspicious=suspicious_user_agent())
+    client = TestClient(app, client=("1.1.1.1", 12345))
+
+    resp = client.get(
+        "/protected",
+        follow_redirects=False,
+        headers={
+            "user-agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+        },
+    )
+
+    assert resp.status_code == 200
 
 
 def test_solving_the_redirected_challenge_lets_the_same_ip_through_next_time() -> None:

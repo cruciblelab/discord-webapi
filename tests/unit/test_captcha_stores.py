@@ -5,6 +5,7 @@ tests/unit/test_captcha_providers.py."""
 from datetime import UTC, datetime, timedelta
 
 import pytest_asyncio
+from cryptography.fernet import Fernet
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -12,6 +13,7 @@ from discord_webapi.captcha.adaptive import AdaptiveDecision
 from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
 from discord_webapi.captcha.sql import (
+    PendingCaptchaRow,
     SQLAdaptiveDecisionStore,
     SQLCaptchaStore,
     SQLTrajectoryFingerprintStore,
@@ -444,3 +446,138 @@ async def test_sql_trust_store_concurrent_first_trust_does_not_crash(tmp_path: o
 
     assert await store.is_trusted(100) is True
     await file_engine.dispose()
+
+
+# -- SQLCaptchaStore: optional at-rest encryption --
+
+
+async def test_sql_captcha_store_without_encryption_keys_round_trips_plaintext(
+    engine: AsyncEngine,
+) -> None:
+    """Backward compatibility: no encryption_keys (the default) behaves
+    exactly as before this feature existed."""
+    store = SQLCaptchaStore(engine)
+    await store.create_all()
+    await store.create(_pending(answer="42"))
+
+    fetched = await store.get("c1")
+
+    assert fetched is not None
+    assert fetched.answer == "42"
+
+
+async def test_sql_captcha_store_with_encryption_keys_round_trips_the_answer(
+    engine: AsyncEngine,
+) -> None:
+    store = SQLCaptchaStore(engine, encryption_keys=Fernet.generate_key())
+    await store.create_all()
+    await store.create(_pending(answer="42"))
+
+    fetched = await store.get("c1")
+
+    assert fetched is not None
+    assert fetched.answer == "42"
+
+
+async def test_sql_captcha_store_with_encryption_keys_does_not_store_plaintext(
+    engine: AsyncEngine,
+) -> None:
+    """Confirms the encryption is real, not just round-tripping through
+    get() -- reads the raw row directly, bypassing the store's own
+    decryption, and checks the stored value isn't the plaintext answer."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    store = SQLCaptchaStore(engine, encryption_keys=Fernet.generate_key())
+    await store.create_all()
+    await store.create(_pending(answer="super-secret-answer"))
+
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessionmaker() as db:
+        row = await db.get(PendingCaptchaRow, "c1")
+        assert row is not None
+        assert row.answer != "super-secret-answer"
+
+
+async def test_sql_captcha_store_encryption_key_mismatch_treats_answer_as_gone(
+    engine: AsyncEngine,
+) -> None:
+    """A row encrypted under one key (or never encrypted at all) can't be
+    read back by a store configured with a different key -- treated the
+    same as "this pending challenge doesn't exist" (None), not a raised
+    exception, matching the fail-closed philosophy the rest of this
+    package follows."""
+    writer = SQLCaptchaStore(engine, encryption_keys=Fernet.generate_key())
+    await writer.create_all()
+    await writer.create(_pending(answer="42"))
+
+    reader = SQLCaptchaStore(engine, encryption_keys=Fernet.generate_key())
+    assert await reader.get("c1") is None
+
+
+async def test_sql_captcha_store_purge_expired(engine: AsyncEngine) -> None:
+    store = SQLCaptchaStore(engine)
+    await store.create_all()
+    now = datetime.now(UTC)
+    await store.create(
+        PendingCaptcha(
+            challenge_id="expired",
+            kind="math",
+            answer="1",
+            created_at=now - timedelta(minutes=20),
+            expires_at=now - timedelta(minutes=10),
+        )
+    )
+    await store.create(_pending(challenge_id="still-live"))
+
+    deleted = await store.purge_expired()
+
+    assert deleted == 1
+    assert await store.get("still-live") is not None
+
+
+# -- purge_expired() for the other SQL stores --
+
+
+async def test_sql_verification_store_purge_expired(engine: AsyncEngine) -> None:
+    store = SQLVerificationStore(engine)
+    await store.create_all()
+    now = datetime.now(UTC)
+    await store.create(
+        VerificationRequest(
+            token="expired",
+            user_id=1,
+            purpose="x",
+            created_at=now - timedelta(minutes=20),
+            expires_at=now - timedelta(minutes=10),
+        )
+    )
+    await store.create(_verification(token="still-live"))
+
+    deleted = await store.purge_expired()
+
+    assert deleted == 1
+    assert await store.get("still-live") is not None
+
+
+async def test_sql_trajectory_fingerprint_store_purge_expired(engine: AsyncEngine) -> None:
+    store = SQLTrajectoryFingerprintStore(engine)
+    await store.create_all()
+    await store.record("expired", timedelta(seconds=-1))
+    await store.record("still-live", timedelta(hours=1))
+
+    deleted = await store.purge_expired()
+
+    assert deleted == 1
+    assert await store.seen_recently("still-live") is True
+
+
+async def test_sql_trust_store_purge_expired(engine: AsyncEngine) -> None:
+    store = SQLTrustStore(engine)
+    await store.create_all()
+    await store.trust(1, ttl=timedelta(seconds=-1))
+    await store.trust(2, ttl=timedelta(hours=1))
+
+    deleted = await store.purge_expired()
+
+    assert deleted == 1
+    assert await store.is_trusted(2) is True

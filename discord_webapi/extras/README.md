@@ -86,6 +86,15 @@ registry.command_meta(category="moderation")(ban_command)
   hierarchy against the bot's own rank when a bot token makes the call,
   not the invoking human's, so this needs its own client-side guard for
   the same reason the member-targeting commands do.
+- `captcha_verify.py` — the quick-usage front door to
+  `discord_webapi.captcha`'s `CaptchaGate`/`AdaptiveCaptchaGate`: a
+  `/verify` command that mints a verification link
+  (`gate.create_verification()`) and hands it to whoever ran the command,
+  as an ephemeral reply or (`dm_link=True`) a DM. Deliberately thin --
+  the actual verification policy (captcha kind, account-binding,
+  IP-adaptive escalation, ...) is entirely the `gate` you construct and
+  pass in; this command never touches that. Works with either gate class
+  unchanged (a small structural `Protocol`, not an import of either).
 - `automod/` — the second non-command one, and the first that's a
   whole subpackage rather than a single file: a coordinator
   (`automod/__init__.py::setup()`) wiring together seven independent,

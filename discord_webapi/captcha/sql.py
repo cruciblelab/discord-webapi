@@ -11,9 +11,21 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String, Text, update
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CursorResult,
+    DateTime,
+    Integer,
+    String,
+    Text,
+    delete,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -22,6 +34,15 @@ from discord_webapi.captcha.adaptive import AdaptiveDecision
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
 
 _TIMESTAMP = DateTime(timezone=True)
+
+
+def _normalize_encryption_keys(keys: bytes | list[bytes]) -> list[bytes]:
+    # Same helper (and same MultiFernet key-rotation shape) as
+    # `auth/oauth.py`'s -- kept as its own small copy here rather than
+    # importing that module's private helper, matching this module's own
+    # "independent tables, not bolted onto anything else" stance (see the
+    # module docstring).
+    return [keys] if isinstance(keys, bytes) else list(keys)
 
 _Row = TypeVar("_Row")
 
@@ -103,15 +124,57 @@ def _as_utc(value: datetime) -> datetime:
 
 class SQLCaptchaStore:
     """CaptchaStore backed by SQLAlchemy 2.0 async. Call `create_all()`
-    once at startup (or manage the tables via Alembic)."""
+    once at startup (or manage the tables via Alembic).
 
-    def __init__(self, engine: AsyncEngine) -> None:
+    `encryption_keys`: optional (default `None` -- plaintext, the
+    original behavior, fully backward compatible with existing rows and
+    deployments that never pass this). When set, `PendingCaptcha.answer`
+    -- the expected solution to a not-yet-solved challenge -- is
+    encrypted at rest (Fernet, same `MultiFernet` key-rotation shape as
+    `DiscordAuth`'s token encryption): read access to the database alone
+    then isn't enough to read off every currently-pending challenge's
+    answer and auto-solve it. `challenge_id`/`kind`/`attempts`/timestamps
+    stay in plaintext -- none of those reveal the answer itself, and
+    `increment_attempts()`'s atomic `UPDATE ... SET attempts = attempts +
+    1` needs to keep working as a bare column operation, which an
+    encrypted value can't support.
+    """
+
+    def __init__(
+        self, engine: AsyncEngine, *, encryption_keys: bytes | list[bytes] | None = None
+    ) -> None:
         self._engine = engine
         self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+        self._fernet = (
+            MultiFernet([Fernet(key) for key in _normalize_encryption_keys(encryption_keys)])
+            if encryption_keys is not None
+            else None
+        )
 
     async def create_all(self) -> None:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+
+    def _encrypt_answer(self, answer: str) -> str:
+        if self._fernet is None:
+            return answer
+        return self._fernet.encrypt(answer.encode()).decode("ascii")
+
+    def _decrypt_answer(self, answer: str) -> str | None:
+        """`None` (not a raised exception) when the stored value isn't a
+        valid Fernet token for the configured key(s) -- e.g. a plaintext
+        row left over from before `encryption_keys` was turned on
+        mid-deployment. Treated the same as "this pending challenge
+        doesn't exist" by `get()`, matching the fail-closed philosophy
+        `_shared.check_pending_challenge` already relies on elsewhere
+        (an unreadable answer can never be verified against, so there's
+        nothing a caller could usefully do with it anyway)."""
+        if self._fernet is None:
+            return answer
+        try:
+            return self._fernet.decrypt(answer.encode("ascii")).decode()
+        except InvalidToken:
+            return None
 
     async def create(self, pending: PendingCaptcha) -> None:
         async with self._sessionmaker() as db:
@@ -119,7 +182,7 @@ class SQLCaptchaStore:
                 PendingCaptchaRow(
                     challenge_id=pending.challenge_id,
                     kind=pending.kind,
-                    answer=pending.answer,
+                    answer=self._encrypt_answer(pending.answer),
                     attempts=pending.attempts,
                     created_at=pending.created_at,
                     expires_at=pending.expires_at,
@@ -132,14 +195,37 @@ class SQLCaptchaStore:
             row = await db.get(PendingCaptchaRow, challenge_id)
             if row is None:
                 return None
+            answer = self._decrypt_answer(row.answer)
+            if answer is None:
+                return None
             return PendingCaptcha(
                 challenge_id=row.challenge_id,
                 kind=row.kind,
-                answer=row.answer,
+                answer=answer,
                 attempts=row.attempts,
                 created_at=_as_utc(row.created_at),
                 expires_at=_as_utc(row.expires_at),
             )
+
+    async def purge_expired(self) -> int:
+        """Bulk-deletes every pending challenge past its `expires_at`.
+        `get()`/`_shared.check_pending_challenge` already treat an
+        expired row as gone on read (lazy expiry), so this is purely
+        storage hygiene for rows nobody ever looks at again -- wire it
+        into your own periodic task (a cron job, an APScheduler job,
+        whatever you already use); this library runs no background
+        scheduler of its own. Returns how many rows were deleted."""
+        async with self._sessionmaker() as db:
+            result = cast(
+                CursorResult[Any],
+                await db.execute(
+                    delete(PendingCaptchaRow).where(
+                        PendingCaptchaRow.expires_at <= datetime.now(UTC)
+                    )
+                ),
+            )
+            await db.commit()
+            return result.rowcount or 0
 
     async def increment_attempts(self, challenge_id: str) -> int:
         # A single atomic `UPDATE ... SET attempts = attempts + 1`, not a
@@ -240,6 +326,28 @@ class SQLVerificationStore:
                 await db.delete(row)
                 await db.commit()
 
+    async def purge_expired(self) -> int:
+        """Bulk-deletes every verification request past its `expires_at`
+        -- same storage-hygiene role as `SQLCaptchaStore.purge_expired()`.
+        Note this doesn't also clean up a corresponding
+        `SQLAdaptiveDecisionStore` row for the same token, if one exists
+        (that store has no `expires_at` of its own -- its lifecycle
+        follows whichever `VerificationRequest` it was resolved for);
+        purge that store's genuinely orphaned rows separately if you use
+        `AdaptiveCaptchaGate` with a SQL decision store and care about
+        this scale of storage hygiene."""
+        async with self._sessionmaker() as db:
+            result = cast(
+                CursorResult[Any],
+                await db.execute(
+                    delete(VerificationRequestRow).where(
+                        VerificationRequestRow.expires_at <= datetime.now(UTC)
+                    )
+                ),
+            )
+            await db.commit()
+            return result.rowcount or 0
+
 
 class SQLTrajectoryFingerprintStore:
     """`TrajectoryFingerprintStore` backed by SQLAlchemy 2.0 async -- the
@@ -287,6 +395,24 @@ class SQLTrajectoryFingerprintStore:
                 get_existing=lambda: db.get(TrajectoryFingerprintRow, fingerprint),
                 apply_fields=_apply,
             )
+
+    async def purge_expired(self) -> int:
+        """Bulk-deletes every fingerprint past its `expires_at` -- same
+        storage-hygiene role as `SQLCaptchaStore.purge_expired()`.
+        `seen_recently()` already lazily deletes one expired row per
+        read; this covers fingerprints nobody's checked against since
+        they expired."""
+        async with self._sessionmaker() as db:
+            result = cast(
+                CursorResult[Any],
+                await db.execute(
+                    delete(TrajectoryFingerprintRow).where(
+                        TrajectoryFingerprintRow.expires_at <= datetime.now(UTC)
+                    )
+                ),
+            )
+            await db.commit()
+            return result.rowcount or 0
 
 
 class AdaptiveDecisionRow(Base):
@@ -420,3 +546,18 @@ class SQLTrustStore:
                 get_existing=lambda: db.get(TrustRow, user_id),
                 apply_fields=_apply,
             )
+
+    async def purge_expired(self) -> int:
+        """Bulk-deletes every trust entry past its `trusted_until` --
+        same storage-hygiene role as `SQLCaptchaStore.purge_expired()`.
+        `is_trusted()` already lazily deletes one expired row per read;
+        this covers users nobody's checked trust for since it expired."""
+        async with self._sessionmaker() as db:
+            result = cast(
+                CursorResult[Any],
+                await db.execute(
+                    delete(TrustRow).where(TrustRow.trusted_until <= datetime.now(UTC))
+                ),
+            )
+            await db.commit()
+            return result.rowcount or 0

@@ -139,6 +139,24 @@ async def test_require_account_and_extra_checks_still_apply_regardless_of_ip() -
     assert ok.verified is True
 
 
+async def test_user_agent_reaches_a_custom_check() -> None:
+    async def reject_curl(ctx: VerificationContext) -> bool:
+        return "curl" not in (ctx.user_agent or "").lower()
+
+    gate = _make_gate(extra_checks=[PredicateCheck("no-curl", reject_curl)])
+    request = await gate.create_verification(user_id=100, purpose="signup")
+    await gate.get_info(request.token, client_ip="9.9.9.9")  # clean IP, no captcha
+
+    blocked = await gate.verify(request.token, client_ip="9.9.9.9", user_agent="curl/8.0.0")
+    assert blocked.verified is False
+    assert blocked.failed_check == "no-curl"
+
+    request2 = await gate.create_verification(user_id=101, purpose="signup")
+    await gate.get_info(request2.token, client_ip="9.9.9.9")
+    ok = await gate.verify(request2.token, client_ip="9.9.9.9", user_agent="Mozilla/5.0")
+    assert ok.verified is True
+
+
 async def test_trust_store_skips_reputation_check_for_recently_verified_users() -> None:
     trust_store = MemoryTrustStore()
     gate = _make_gate(trust_store=trust_store)

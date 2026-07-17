@@ -50,13 +50,24 @@ class VerificationContext:
     third-party lookup, whatever) as a `PredicateCheck`/`VerificationCheck`
     reading `ctx.client_ip` -- the library ships no such check itself (no
     opinion on which reputation source you'd trust), it just makes sure
-    the IP is actually available to write one against."""
+    the IP is actually available to write one against.
+
+    `user_agent` is the same kind of server-observed value as `client_ip`
+    (the request's own `User-Agent` header, via `build_captcha_router()`)
+    -- not something the client's JavaScript claims in `signals`, but not
+    unspoofable either (any HTTP client sets this header to whatever it
+    wants); it's simply a *different, harder-to-coordinate* lie than a
+    JS-reported flag, since it's set once per request rather than
+    computed by script logic that has to fake an entire browser
+    environment. See `signals.reject_headless_user_agent` for the one
+    check shipped against it."""
 
     request: VerificationRequest
     authenticated_user_id: int | None = None
     captcha_response: str | None = None
     signals: dict[str, Any] = field(default_factory=dict)
     client_ip: str | None = None
+    user_agent: str | None = None
 
 
 @dataclass

@@ -8,6 +8,7 @@ import respx
 
 from discord_webapi.captcha.providers.hcaptcha import HCaptchaProvider
 from discord_webapi.captcha.providers.recaptcha import ReCaptchaProvider
+from discord_webapi.captcha.providers.turnstile import TurnstileProvider
 
 
 async def test_recaptcha_issue_returns_the_site_key() -> None:
@@ -131,5 +132,77 @@ async def test_hcaptcha_verify_fails_closed_on_a_non_json_200_response() -> None
     provider = HCaptchaProvider(site_key="site-abc", secret_key="secret-def")
 
     ok = await provider.verify("site-abc", "widget-response-token")
+
+    assert ok is False
+
+
+async def test_turnstile_issue_returns_the_site_key() -> None:
+    provider = TurnstileProvider(site_key="site-xyz", secret_key="secret-ghi")
+
+    challenge = await provider.issue()
+
+    assert challenge.kind == "turnstile"
+    assert challenge.site_key == "site-xyz"
+    assert challenge.image_data_uri is None
+
+
+@respx.mock
+async def test_turnstile_verify_succeeds() -> None:
+    respx.post("https://challenges.cloudflare.com/turnstile/v0/siteverify").mock(
+        return_value=httpx.Response(200, json={"success": True})
+    )
+    provider = TurnstileProvider(site_key="site-xyz", secret_key="secret-ghi")
+
+    ok = await provider.verify("site-xyz", "widget-response-token")
+
+    assert ok is True
+
+
+@respx.mock
+async def test_turnstile_verify_fails_when_cloudflare_says_no() -> None:
+    respx.post("https://challenges.cloudflare.com/turnstile/v0/siteverify").mock(
+        return_value=httpx.Response(200, json={"success": False})
+    )
+    provider = TurnstileProvider(site_key="site-xyz", secret_key="secret-ghi")
+
+    ok = await provider.verify("site-xyz", "bad-token")
+
+    assert ok is False
+
+
+@respx.mock
+async def test_turnstile_verify_handles_a_network_error_cleanly() -> None:
+    respx.post("https://challenges.cloudflare.com/turnstile/v0/siteverify").mock(
+        side_effect=httpx.ConnectError("boom")
+    )
+    provider = TurnstileProvider(site_key="site-xyz", secret_key="secret-ghi")
+
+    ok = await provider.verify("site-xyz", "widget-response-token")
+
+    assert ok is False
+
+
+@respx.mock
+async def test_turnstile_verify_fails_closed_on_a_non_json_200_response() -> None:
+    """Same regression as ReCaptchaProvider/HCaptchaProvider's identical
+    test -- learned from that fix and applied here from the start."""
+    respx.post("https://challenges.cloudflare.com/turnstile/v0/siteverify").mock(
+        return_value=httpx.Response(200, text="<html>Service Unavailable</html>")
+    )
+    provider = TurnstileProvider(site_key="site-xyz", secret_key="secret-ghi")
+
+    ok = await provider.verify("site-xyz", "widget-response-token")
+
+    assert ok is False
+
+
+@respx.mock
+async def test_turnstile_verify_fails_closed_on_valid_json_that_is_not_an_object() -> None:
+    respx.post("https://challenges.cloudflare.com/turnstile/v0/siteverify").mock(
+        return_value=httpx.Response(200, json=["not", "a", "dict"])
+    )
+    provider = TurnstileProvider(site_key="site-xyz", secret_key="secret-ghi")
+
+    ok = await provider.verify("site-xyz", "widget-response-token")
 
     assert ok is False

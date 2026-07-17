@@ -29,7 +29,10 @@ GUILDS_URL = "https://discord.com/api/v10/users/@me/guilds"
 
 
 def _build_app(
-    *, verify_rate_limiter: TokenBucketLimiter | None = None
+    *,
+    verify_rate_limiter: TokenBucketLimiter | None = None,
+    challenge_rate_limiter: TokenBucketLimiter | None = None,
+    gate_verify_ip_rate_limiter: TokenBucketLimiter | None = None,
 ) -> tuple[FastAPI, CaptchaGate]:
     app = FastAPI()
     transport = InProcessTransport()
@@ -38,7 +41,13 @@ def _build_app(
 
     app.state.discord_webapi_captcha_providers = {"math": provider}
     app.state.discord_webapi_captcha_gate = gate
-    app.include_router(build_captcha_router(verify_rate_limiter=verify_rate_limiter))
+    app.include_router(
+        build_captcha_router(
+            verify_rate_limiter=verify_rate_limiter,
+            challenge_rate_limiter=challenge_rate_limiter,
+            gate_verify_ip_rate_limiter=gate_verify_ip_rate_limiter,
+        )
+    )
     return app, gate
 
 
@@ -189,6 +198,40 @@ def test_verify_rate_limit_returns_429_when_exceeded() -> None:
         second = client.post(
             "/api/captcha/verify", json={"kind": "math", "challenge_id": "x", "response": "y"}
         )
+
+        assert first.status_code == 200
+        assert second.status_code == 429
+
+
+def test_challenge_rate_limit_returns_429_when_exceeded() -> None:
+    """Regression test: GET /challenge had no rate limiter at all --
+    issuing a self-hosted challenge writes a fresh CaptchaStore row every
+    call, so unbounded issuance was a cheap way to fill that store."""
+    app, _gate = _build_app(challenge_rate_limiter=TokenBucketLimiter(1, 60.0))
+    with TestClient(app) as client:
+        first = client.get("/api/captcha/challenge", params={"kind": "math"})
+        second = client.get("/api/captcha/challenge", params={"kind": "math"})
+
+        assert first.status_code == 200
+        assert second.status_code == 429
+
+
+def test_gate_verify_ip_rate_limit_catches_one_ip_across_many_tokens() -> None:
+    """Regression test: the existing verify_rate_limiter on
+    /gate/{token}/verify is keyed by *token*, so it only ever bounds
+    guesses against one specific token -- it does nothing to stop one IP
+    from attempting many different tokens, each with its own fresh
+    per-token budget. gate_verify_ip_rate_limiter closes that gap."""
+    app, gate = _build_app(gate_verify_ip_rate_limiter=TokenBucketLimiter(1, 60.0))
+    with TestClient(app) as client:
+        token_a = asyncio.run(gate.create_verification(user_id=1, purpose="x")).token
+        token_b = asyncio.run(gate.create_verification(user_id=2, purpose="x")).token
+
+        first = client.post(f"/api/captcha/gate/{token_a}/verify", json={})
+        # A *different* token from the *same* IP -- the per-token limiter
+        # alone would let this through (it's that token's very first
+        # call), but the IP-keyed limiter has already spent its 1 call.
+        second = client.post(f"/api/captcha/gate/{token_b}/verify", json={})
 
         assert first.status_code == 200
         assert second.status_code == 429
@@ -383,6 +426,40 @@ def test_verify_gate_passes_the_real_client_ip_through_to_checks() -> None:
 
     assert len(seen_ips) == 1
     assert seen_ips[0] is not None  # TestClient reports a real (test) client host
+
+
+def test_verify_gate_passes_the_real_user_agent_through_to_checks() -> None:
+    """Same reasoning as client_ip: the HTTP layer must capture the
+    request's own User-Agent header and hand it to CaptchaGate.verify()
+    as user_agent, for signals.reject_headless_user_agent (or a custom
+    check) to read."""
+    from discord_webapi.captcha.checks import PredicateCheck, VerificationContext
+
+    seen_uas: list[str | None] = []
+
+    async def record_ua(ctx: VerificationContext) -> bool:
+        seen_uas.append(ctx.user_agent)
+        return True
+
+    app = FastAPI()
+    transport = InProcessTransport()
+    gate = CaptchaGate(
+        transport,
+        MemoryVerificationStore(),
+        require_captcha=False,
+        extra_checks=[PredicateCheck("record-ua", record_ua)],
+    )
+    app.include_router(build_captcha_router(gate=gate))
+
+    with TestClient(app) as client:
+        req = asyncio.run(gate.create_verification(user_id=1, purpose="x"))
+        client.post(
+            f"/api/captcha/gate/{req.token}/verify",
+            json={},
+            headers={"user-agent": "my-test-agent/1.0"},
+        )
+
+    assert seen_uas == ["my-test-agent/1.0"]
 
 
 def test_two_gates_can_be_mounted_at_once_via_explicit_gate_param() -> None:

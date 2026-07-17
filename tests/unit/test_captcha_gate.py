@@ -416,6 +416,37 @@ async def test_client_ip_reaches_a_custom_check_for_your_own_ip_reputation() -> 
     assert ok.verified is True
 
 
+async def test_user_agent_reaches_a_custom_check() -> None:
+    """Same reasoning as client_ip: user_agent is a server-observed value
+    (the request's own User-Agent header), threaded through verify() into
+    VerificationContext for a custom check (or the bundled
+    signals.reject_headless_user_agent) to read."""
+
+    async def reject_curl(ctx: VerificationContext) -> bool:
+        return "curl" not in (ctx.user_agent or "").lower()
+
+    gate = CaptchaGate(
+        InProcessTransport(),
+        MemoryVerificationStore(),
+        MathCaptchaProvider(MemoryCaptchaStore()),
+        extra_checks=[PredicateCheck("no-curl", reject_curl)],
+    )
+    store: MemoryCaptchaStore = gate.provider.store  # type: ignore[union-attr]
+
+    bad_req = await gate.create_verification(user_id=100, purpose="x")
+    bad_pending = await store.get(bad_req.challenge.challenge_id)
+    assert bad_pending is not None
+    blocked = await gate.verify(bad_req.token, bad_pending.answer, user_agent="curl/8.0.0")
+    assert blocked.verified is False
+    assert blocked.failed_check == "no-curl"
+
+    good_req = await gate.create_verification(user_id=100, purpose="x")
+    good_pending = await store.get(good_req.challenge.challenge_id)
+    assert good_pending is not None
+    ok = await gate.verify(good_req.token, good_pending.answer, user_agent="Mozilla/5.0")
+    assert ok.verified is True
+
+
 def test_require_captcha_without_a_provider_raises() -> None:
     import pytest
 

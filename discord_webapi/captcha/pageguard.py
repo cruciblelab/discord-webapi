@@ -45,6 +45,7 @@ from typing import Any
 from fastapi import Request
 
 from discord_webapi.captcha.adaptive import AdaptiveCaptchaGate
+from discord_webapi.captcha.signals import DEFAULT_HEADLESS_UA_PATTERNS
 
 DEFAULT_COOKIE_NAME = "dwa_visitor_id"
 DEFAULT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365  # 1 year
@@ -189,3 +190,28 @@ def missing_accept_language(request: Request) -> bool:
     alone, which is exactly what `PageGuard` does (this only adds to,
     never replaces, the reputation check)."""
     return not request.headers.get("accept-language")
+
+
+def suspicious_user_agent(patterns: tuple[str, ...] | None = None) -> Callable[[Request], bool]:
+    """Builds an `extra_suspicious` predicate for `PageGuard` matching
+    `discord_webapi.captcha.signals.reject_headless_user_agent`'s default
+    denylist against the request's own `User-Agent` header -- the same
+    server-side, checkable-before-the-page-renders signal as
+    `missing_accept_language`, catching a well-known headless-browser/
+    automation tool's *default* identity (same honest caveat: trivially
+    spoofed by anyone who bothers to set their own `User-Agent`).
+
+    Unlike `missing_accept_language` (already a ready-to-use predicate),
+    this is a *factory* -- call it to get the predicate, so you can
+    override `patterns` without reaching into
+    `discord_webapi.captcha.signals` directly:
+
+        PageGuard(gate, verify_url=..., extra_suspicious=suspicious_user_agent())
+    """
+    needles = tuple(p.lower() for p in (patterns or DEFAULT_HEADLESS_UA_PATTERNS))
+
+    def _predicate(request: Request) -> bool:
+        ua = request.headers.get("user-agent", "").lower()
+        return any(needle in ua for needle in needles)
+
+    return _predicate

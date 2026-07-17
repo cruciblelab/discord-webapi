@@ -1,6 +1,58 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Tüm kütüphanenin paralel-ajan denetimi (bu oturum)
+## Captcha sağlamlaştırma + hızlı kullanım ekstraları (bu oturum)
+
+Kütüphane denetiminden hemen sonra kullanıcının verdiği talimat: "Şimdi
+capctha sistemine sağlamlaştırma ve capctha sistemi için ekstralara hızlı
+kullanımlar için tam özelleştirilebilir hibrit modele açık yeni şeyler
+ekleyelim." İki soru sordum (sağlamlaştırma cephesi, ekstra kapsamı) --
+kullanıcı HER İKİSİNDE de "hepsi"ni seçti: sağlamlaştırma için 4 cephenin
+tamamı, ekstralar için hem hazır komut hem Cloudflare-tarzı preset,
+serbestçe genişletme yetkisi vererek ("nasıl ettikleri önemsiz, temeli
+sağlam verelim, sen aç genişlet").
+
+Mevcut captcha altyapısını (`AdaptiveCaptchaGate`, `PageGuard`,
+`scoring.py`'nin dürüst "bu bir bot dedektörü değil, transparan bir
+heuristik" felsefesi, `replay_guard.py`'nin trajectory-fingerprint
+tekrar-tespiti) önce baştan sona okudum -- zaten çok olgun, bu tur SADECE
+üzerine ekledi, hiçbir şeyi yeniden yazmadı.
+
+**Teslim edilen 6 parça** (detaylı gerekçeler CHANGELOG.md'de):
+1. Anti-bot sinyalleri: `VerificationContext.user_agent` (yeni,
+   `client_ip` ile aynı "sunucu-gözlemli, client_ip gibi ayrı bir güven
+   seviyesi" mantığı), `honeypot_field_empty()`, `reject_headless_user_
+   agent()`, PageGuard için `suspicious_user_agent()` fabrikası.
+2. Rate-limit sağlamlaştırma: `/challenge`'a (önceden hiç limiti yoktu)
+   ve `/gate/{token}/verify`'a (önceden SADECE token bazında limitliydi,
+   bir IP farklı token'lara saldırırsa yakalanmıyordu) yeni IP-bazlı
+   limiter'lar.
+3. `TurnstileProvider` (Cloudflare Turnstile, reCAPTCHA/hCaptcha ile
+   birebir aynı desen) + `FallbackCaptchaProvider` (birden fazla
+   sağlayıcıyı sırayla dener, `challenge_id`'ye index prefix'i ekleyerek
+   hangi alt sağlayıcının hangi challenge'ı verdiğini takip eder).
+4. `SQLCaptchaStore`'a opsiyonel Fernet şifreleme (varsayılan kapalı,
+   tam geriye uyumlu) + 4 SQL store'a `purge_expired()` (kendi cron
+   job'unuza bağlanacak, kütüphane kendi zamanlayıcısını çalıştırmıyor).
+5. `extras/captcha_verify.py` -- hazır `/verify` komutu, `warn.py`/
+   `ban.py` ile aynı `setup(bot, **kwargs)` konvansiyonu.
+6. `captcha/presets.py::build_cloudflare_style_guard()` -- kullanıcının
+   tarif ettiği tam akışı (IP itibarı → varsayılan PathTrace captchası →
+   davranışsal skorlama → IP değişince tekrar captcha) tek çağrıda kuran,
+   her parçası değiştirilebilir bir quickstart.
+
+**Doğrulama disiplini**: bu tur çoğunlukla YENİ özellik ekliyor (önceki
+denetim turundaki gibi "eski koddaki bug'ı reprodükle" kalıbı burada
+uygulanamaz, çünkü kırılacak eski davranış yok) -- bunun yerine her
+parça için gerçek testler yazıldı ve çalıştırıldı; en az bir örnekte
+(captcha_verify'nin DM-fallback'i) testin GERÇEKTEN o kod yoluna bağlı
+olduğunu kanıtlamak için kodu bilerek bozup testin kırmızıya döndüğü,
+sonra düzeltilince yeşile döndüğü de doğrulandı.
+
+**Doğrulama**: yeni ~50 test dahil tüm captcha paketi (248 test) yeşil;
+`ruff check`, `mypy` (126 dosya), tam proje test paketi (801 test, 7
+skip, ilgisiz 1 Postgres testi deselect) -- hepsi temiz.
+
+## Tüm kütüphanenin paralel-ajan denetimi (önceki oturum)
 
 PageGuard bittikten sonra kullanıcının verdiği talimat (birebir): "Tüm
 kütüphaneyi parçalara ayır ve her parçayı ayrı ayrı kontrol et deneyle

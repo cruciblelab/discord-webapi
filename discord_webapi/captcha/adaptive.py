@@ -283,6 +283,7 @@ class AdaptiveCaptchaGate:
         authenticated_user_id: int | None = None,
         signals: dict[str, Any] | None = None,
         client_ip: str | None = None,
+        user_agent: str | None = None,
     ) -> CheckResult:
         """Same contract as `CaptchaGate.verify()`. Reuses whatever
         escalation decision `get_info()` already made for this token
@@ -336,6 +337,7 @@ class AdaptiveCaptchaGate:
                     captcha_response=response,
                     signals=signals or {},
                     client_ip=client_ip,
+                    user_agent=user_agent,
                 )
                 passed: list[str] = []
                 for check in checks:

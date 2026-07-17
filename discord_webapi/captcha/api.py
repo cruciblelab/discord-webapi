@@ -56,6 +56,8 @@ from discord_webapi.captcha.models import CaptchaChallenge
 from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 
 _DEFAULT_VERIFY_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+_DEFAULT_CHALLENGE_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+_DEFAULT_GATE_VERIFY_IP_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
 
 
 class GateLike(Protocol):
@@ -77,6 +79,7 @@ class GateLike(Protocol):
         authenticated_user_id: int | None = None,
         signals: dict[str, Any] | None = None,
         client_ip: str | None = None,
+        user_agent: str | None = None,
     ) -> CheckResult: ...
 
 
@@ -154,6 +157,8 @@ def build_captcha_router(
     *,
     gate: GateLike | None = None,
     verify_rate_limiter: TokenBucketLimiter | None = None,
+    challenge_rate_limiter: TokenBucketLimiter | None = None,
+    gate_verify_ip_rate_limiter: TokenBucketLimiter | None = None,
 ) -> APIRouter:
     """`gate=None` (the default) reads `app.state.discord_webapi_captcha_gate`
     at request time -- the single-gate case. Pass an explicit `gate=` to
@@ -161,12 +166,35 @@ def build_captcha_router(
     state, so you can mount the router more than once (each under its own
     `prefix=`) for more than one gate purpose at once -- see the module
     docstring. Works with either `CaptchaGate` or
-    `discord_webapi.captcha.adaptive.AdaptiveCaptchaGate`."""
+    `discord_webapi.captcha.adaptive.AdaptiveCaptchaGate`.
+
+    Three independent, all-optional rate limiters, each falling back to
+    its own generous default (20 calls/60s, same as every other dashboard
+    write endpoint in this library) if not given:
+
+    - `challenge_rate_limiter`: per client IP, on `GET /challenge` --
+      issuing a self-hosted challenge (Math/Text) writes a fresh
+      `CaptchaStore` row every call, with no limiter of any kind before
+      this; unbounded issuance is a cheap way to fill that store.
+    - `verify_rate_limiter`: per client IP on `POST /verify` (the plain
+      provider endpoint), per *token* on `POST /gate/{token}/verify` --
+      unchanged from before, kept for backward compatibility.
+    - `gate_verify_ip_rate_limiter`: per client IP, *additionally* on
+      `POST /gate/{token}/verify` -- `verify_rate_limiter`'s per-token
+      budget only ever bounds guesses against *one* token; it does
+      nothing to stop one IP from attempting many different tokens (each
+      gets its own fresh per-token budget). This closes that gap without
+      changing the per-token limiter's own behavior.
+    """
     limiter = verify_rate_limiter or _DEFAULT_VERIFY_LIMITER
+    challenge_limiter = challenge_rate_limiter or _DEFAULT_CHALLENGE_LIMITER
+    gate_verify_ip_limiter = gate_verify_ip_rate_limiter or _DEFAULT_GATE_VERIFY_IP_LIMITER
     router = APIRouter(prefix="/api/captcha", tags=["captcha"])
 
     @router.get("/challenge")
     async def create_challenge(kind: str, request: Request) -> CaptchaChallenge:
+        client_host = request.client.host if request.client else "unknown"
+        challenge_limiter.check(client_host)
         provider = _get_provider(request, kind)
         return await provider.issue()
 
@@ -205,6 +233,8 @@ def build_captcha_router(
         user: DiscordUser | None = Depends(get_current_user_optional),
     ) -> GateVerifyResult:
         limiter.check(token)
+        client_host = request.client.host if request.client else "unknown"
+        gate_verify_ip_limiter.check(client_host)
         resolved_gate = _get_gate(request, gate)
         result = await resolved_gate.verify(
             token,
@@ -212,6 +242,7 @@ def build_captcha_router(
             authenticated_user_id=user.id if user is not None else None,
             signals=body.signals,
             client_ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
         return GateVerifyResult(
             verified=result.verified, failed_check=result.failed_check, detail=result.detail

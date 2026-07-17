@@ -186,6 +186,7 @@ class CaptchaGate:
         authenticated_user_id: int | None = None,
         signals: dict[str, Any] | None = None,
         client_ip: str | None = None,
+        user_agent: str | None = None,
     ) -> CheckResult:
         """Runs every configured check; the verification passes only if
         they *all* pass. `response` is the captcha answer (ignored by a
@@ -196,6 +197,9 @@ class CaptchaGate:
         server's own observation of the connecting IP (unlike `signals`,
         not client-forgeable) -- see `VerificationContext.client_ip` for
         why this exists (writing your own IP-reputation check).
+        `user_agent` is the same kind of server-observed value, the
+        request's own `User-Agent` header -- see `VerificationContext.
+        user_agent` and `signals.reject_headless_user_agent`.
 
         Idempotent: verifying an already-verified token returns success
         without re-running the checks (a page refresh re-posting the same
@@ -235,6 +239,7 @@ class CaptchaGate:
                     captcha_response=response,
                     signals=signals or {},
                     client_ip=client_ip,
+                    user_agent=user_agent,
                 )
                 passed: list[str] = []
                 for check in self.checks:
