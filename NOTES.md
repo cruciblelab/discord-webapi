@@ -1,5 +1,81 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## Path-Trace: hız/zamanlama kinematiği + şüpheli-ise-daha-sıkı-tolerans (bu oturum, devam)
+
+Kullanıcının canvas-ölçek düzeltmesinin hemen ardından gelen isteği
+(birebir, yorumlanmış): "birebir aynı çizmek önemli değil, hafif
+sapmalar sorun değil, AMA aşırı kusursuz takip -- milisaniye/saliyelik
+bile ardışık hız değişmeyen, aynı ritim, aynı pürüzsüzlük -- şüpheli
+sayılmalı ve bir algoritmaya eklenmeli. Sistem bunu güvenilmez bulursa
+ikinci kez, bu sefer daha ince bir çizgiden (daha sıkı toleransla) test
+etsin. Hep aynı çizgi çıkması da riskli geliyor."
+
+**"Hep aynı çizgi" kısmı** bir önceki notta zaten netleştirildi (kasıtlı
+tasarım: `max_attempts` boyunca aynı challenge tekrar denenir, her
+denemede yeni eğri vermek "kaç hakkın kaldı" mantığını bozardı) --
+tekrar açıklamadım, kullanıcı zaten kabul etmişti.
+
+**Asıl istek**: mevcut Path-Trace kontrolü SADECE geometriye bakıyordu
+(çizgiye yakınlık + köşe kapsaması) -- izin NASIL üretildiğine (insan
+eli mi, sabit hızlı bir script mi) hiç bakmıyordu. Bu, `captcha/
+scoring.py`'nin tıklama-öncesi fare hareketi için zaten yaptığı ("insan
+reach hareketi çan eğrisi hız profiline sahiptir, script sabit hızlıdır"
+-- minimum-jerk model, Flash & Hogan 1985) ayrımın path-trace'e hiç
+uygulanmamış olmasıydı. Kullanıcının önerisi de tam olarak bu bilimsel
+gerekçeyle örtüşüyor.
+
+**Uygulama**:
+1. `widget.js`'in `toCanvasPoint(e)`'i artık `performance.now()` zaman
+   damgası da ekliyor (`[x, y, t_ms]`) -- `scoring.py`'nin
+   `mouse_trajectory` formatıyla aynı. Eski istemciler (2 elemanlı nokta
+   gönderenler) sadece kinematik kontrolü çekimser bırakıyor.
+2. `path_trace.py`'de `_looks_suspiciously_uniform(trace)`: segment
+   hızlarının VE örnekler-arası zaman aralıklarının varyasyon katsayısını
+   (coefficient of variation, `scoring.py`'nin `_mouse_velocity_variance`/
+   `_mouse_timing_variance`'ıyla aynı istatistik) hesaplıyor. İKİSİ DE
+   çok düşükse (< 0.05) şüpheli -- SADECE biri düşükse değil (yavaş ama
+   kararlı bir insan hareketi tek eksende doğal olarak düşük varyansa
+   sahip olabilir, iki eksende BİRDEN sıfıra yakın olmak asıl bot
+   imzası).
+3. `verify()`: şüpheli bulunursa DOĞRUDAN reddetmiyor (kullanıcının
+   özellikle istediği şey buydu -- "güvenilmez derse... 2. kez... daha
+   ince çizgiden geçiririz") -- bunun yerine (a)/(b) geometrik
+   kontrollerini `tolerance / 2` ile TEKRAR çalıştırıyor. Gerçekten çok
+   düzgün AMA aynı zamanda o kadar hassas bir el (stylus, çok kararlı bir
+   kullanıcı, yardımcı teknoloji) yine geçiyor -- kusursuzluk tek başına
+   cezalandırılmıyor, sadece daha yüksek hassasiyet isteniyor.
+
+**Dürüstlük notu** (docstring'e eklendi, `scoring.py`'nin aynı ilkesiyle
+tutarlı): bu da yumuşak bir sezgisel, bir "bot dedektörü" değil -- gerçek
+bir insan izinin kaydedilip zaman damgalarıyla birebir tekrar
+oynatılmasını (replay) yakalayamaz, modülün en üstteki docstring'i zaten
+bunu ("çizgi istemciye teslim ediliyor, kararlı bir script eşleşen bir
+iz üretebilir") dürüstçe kabul ediyor.
+
+**Doğrulama**: 4 yeni test yazıldı -- gerçek geometri kullanılarak
+(rastgele `provider.issue()` ile üretilen gerçek eğriler üzerinde,
+mock'lanmamış):
+- Geometrik olarak tam tolerans (24px) içinde ama YARISININ (12px)
+  dışında, SABİT hız+zamanlamayla (`_with_constant_velocity_and_timing`,
+  eşit yay-uzunluğu aralıklı noktalar + sabit `dt`) üretilen bir iz
+  REDDEDİLİYOR.
+- Aynı geometrik sapmaya sahip ama DOĞAL (düzensiz, alternatif
+  hızlı/yavaş) zamanlamalı bir iz (`_with_natural_jitter_timing`) KABUL
+  EDİLİYOR -- kinematik şüpheli değilse tolerans sıkılaştırılmıyor.
+- Sabit hız+zamanlama AMA çizginin tam üzerinde (offset=0) bir iz yine
+  KABUL EDİLİYOR -- kusursuzluk TEK BAŞINA reddetmiyor.
+- Yetersiz zaman damgalı örnekte (`_looks_suspiciously_uniform`
+  doğrudan) kontrol çekimser kalıyor (`False` -- ceza yok).
+
+Ayrıca gerçek headless Chromium (Playwright) ile GERÇEK bir fare
+sürüklemesi (tarayıcının kendi event-loop zamanlamasıyla, sentetik sabit
+adım değil) normal şekilde geçtiğini doğruladım -- yeni kontrol gerçek
+insan kullanımını yanlışlıkla cezalandırmıyor. `_resample_equal_arc_
+length` adlı yeni bir test yardımcısı yazıldı (`_sample_along`'dan
+farklı olarak segment uzunluklarına göre değil, gerçek yay uzunluğuna
+göre eşit aralıklı noktalar üretiyor -- "sabit hız" iddiasının
+matematiksel olarak doğru olması için gerekli).
+
 ## Path-Trace: canvas ölçek uyuşmazlığı -- gerçek çizgi bile reddediliyordu (bu oturum, devam)
 
 Sıralı test planının 3. adımında kullanıcı bildirdi: "baya farklı şey

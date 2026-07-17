@@ -2,6 +2,63 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Path-Trace: hız/zamanlama kinematiği eklendi -- aşırı kusursuz (bot-gibi) bir iz artık daha sıkı toleransla test ediliyor
+
+Kullanıcının önceki turdaki canvas-ölçek düzeltmesinin ardından gelen
+isteği (özet): "birebir aynı çizmek önemli değil, hafif sapmalar sorun
+değil, ama aşırı kusursuz takip -- milisaniye/saliyelik bile ardışık hız
+değişmeyen, aynı ritimde, aynı pürüzsüzlükte bir iz -- şüpheli olmalı.
+Eğer sistem bunu güvenilmez bulursa, ikinci kez daha ince bir toleransla
+(daha ince çizgiyle) test etsin." Haklı bir gözlem -- mevcut Path-Trace
+kontrolü SADECE geometriye (çizgiye yakınlık, köşe kapsaması) bakıyordu,
+izin NASIL çizildiğine (insan eli mi, script mi) hiç bakmıyordu.
+`captcha/scoring.py`'nin tıklama-öncesi fare hareketi için zaten yaptığı
+"minimum-jerk insan hareketi vs. sabit-hızlı bot" ayrımını buraya da
+uyguladık.
+
+### `discord_webapi/captcha/widget.js`
+
+- `toCanvasPoint(e)` artık her örneğe `performance.now()` zaman damgası
+  ekliyor (`[x, y, t_ms]`) -- `scoring.py`'nin `mouse_trajectory`'siyle
+  aynı format. Eski istemciler (zaman damgası göndermeyenler) sadece
+  kinematik kontrolü atlıyor, geometrik kontrol aynı şekilde çalışıyor.
+
+### `discord_webapi/captcha/providers/path_trace.py`
+
+- Yeni `_looks_suspiciously_uniform(trace)`: segment hızlarının ve
+  örnekler-arası zaman aralıklarının varyasyon katsayısını (coefficient
+  of variation) hesaplıyor; İKİSİ DE aşırı düşükse (< 0.05) "şüpheli
+  derecede düzgün" sayıyor -- yeterli zaman damgalı örnek yoksa (eski
+  istemci, çok az nokta) `False` dönüp cezalandırmıyor (scoring.py'nin
+  "eksik veri varsa cezalandırma, çekimser kal" ilkesiyle aynı).
+- `verify()`: şüpheli bulunursa DOĞRUDAN reddetmiyor -- kullanıcının
+  istediği tam olarak buydu -- bunun yerine (a)/(b) geometrik
+  kontrollerini `tolerance / 2` ile TEKRAR çalıştırıyor. Gerçekten çok
+  düzgün AMA aynı zamanda o kadar hassas bir el (stylus, çok kararlı bir
+  fare kullanıcısı, yardımcı bir cihaz) yine geçiyor; sabit hız/zamanlamayı
+  tutturmuş ama çizginin kendisinde piksel-hassas olmayan bir script
+  burada yakalanıyor.
+- Dürüstlük notu (docstring'e eklendi): bu da `scoring.py`'deki gibi
+  yumuşak bir sezgisel -- gerçek bir insan izinin kaydedilip birebir
+  tekrar oynatılmasını (aynı zaman damgalarıyla) yakalayamaz, o bir
+  "replay" saldırısı ve bu modülün en üstteki docstring'i bunu zaten
+  dürüstçe kabul ediyor.
+
+### Doğrulama
+
+4 yeni test: (1) geometrik olarak tam toleransın içinde ama yarısının
+dışında, SABİT hız+zamanlamayla üretilmiş bir iz REDDEDİLİYOR; (2) aynı
+geometrik sapmaya sahip ama DOĞAL (düzensiz) zamanlamalı bir iz KABUL
+EDİLİYOR (aynı sapma, sadece kinematik şüpheli değilse tolerans
+sıkılaştırılmıyor); (3) sabit hız+zamanlama AMA çizginin üzerinde tam
+hassas bir iz yine KABUL EDİLİYOR (kusursuzluk tek başına reddetmiyor,
+sadece daha hassas olmayı gerektiriyor); (4) yetersiz zaman damgalı
+örnekte kinematik kontrol çekimser kalıyor. Ayrıca gerçek headless
+Chromium (Playwright) ile GERÇEK bir fare sürüklemesi (kendi doğal
+zamanlama/jitter'ıyla, sentetik değil) normal şekilde geçtiğini
+doğruladım -- yeni kontrol gerçek insan kullanımını etkilemiyor.
+`ruff`/`mypy` temiz, `pytest` 706 passed (bilinen Postgres testi hariç).
+
 ## [Unreleased] — Path-Trace: canvas'ın görsel boyutu native çözünürlüğünden farklıysa çizim yanlış koordinatta kaydediliyordu (gerçek bug)
 
 Kullanıcı sıralı test planının 3. adımında bildirdi: normal şekilde,

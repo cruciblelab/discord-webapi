@@ -333,7 +333,13 @@
       var r = canvas.getBoundingClientRect();
       var scaleX = canvas.width / r.width;
       var scaleY = canvas.height / r.height;
-      return [(e.clientX - r.left) * scaleX, (e.clientY - r.top) * scaleY];
+      // The 3rd element (performance.now(), a monotonic clock, same as
+      // mouse_trajectory's t_ms elsewhere) lets the server tell a
+      // suspiciously constant-speed/constant-interval trace -- a script
+      // stepping along the known path at fixed increments -- apart from
+      // natural hand motion, which never holds perfectly steady speed or
+      // timing. See PathTraceProvider's docstring.
+      return [(e.clientX - r.left) * scaleX, (e.clientY - r.top) * scaleY, performance.now()];
     }
     canvas.addEventListener('pointerdown', function (e) {
       tracing = true; tracePoints = [];

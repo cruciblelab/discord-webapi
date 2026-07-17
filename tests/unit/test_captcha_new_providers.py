@@ -4,6 +4,7 @@ path-trace, no mocks."""
 
 import hashlib
 import json
+import math
 
 import pytest
 
@@ -168,3 +169,115 @@ async def test_path_trace_rejects_an_oversized_payload() -> None:
 
     huge = "[" + ",".join("[0,0]" for _ in range(60_000)) + "]"  # > 200k chars
     assert await provider.verify(challenge.challenge_id, huge) is False
+
+
+# -- kinematics: suspiciously-constant speed/timing demands tighter tolerance --
+
+
+def _resample_equal_arc_length(path: list[list[float]], n: int) -> list[list[float]]:
+    """Points spaced at equal ARC-LENGTH intervals along the polyline --
+    unlike `_sample_along` (equal per-*segment* subdivisions, which can
+    still bunch up on short segments and spread out on long ones), this
+    gives genuinely uniform per-step distance, a prerequisite for
+    constructing a synthetic "constant speed" trace."""
+    segment_lengths = [
+        math.hypot(path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1])
+        for i in range(len(path) - 1)
+    ]
+    total = sum(segment_lengths)
+    points = []
+    for k in range(n):
+        target = total * k / (n - 1)
+        covered = 0.0
+        for i, seg_len in enumerate(segment_lengths):
+            if covered + seg_len >= target or i == len(segment_lengths) - 1:
+                t = 0.0 if seg_len == 0 else (target - covered) / seg_len
+                ax, ay = path[i]
+                bx, by = path[i + 1]
+                points.append([ax + (bx - ax) * t, ay + (by - ay) * t])
+                break
+            covered += seg_len
+    return points
+
+
+def _offset_perpendicular_ish(points: list[list[float]], offset: float) -> list[list[float]]:
+    """Nudges every point by a constant amount in y -- enough to be off
+    the true line by `offset` px without changing the path's shape, so
+    the resulting trace is uniformly imprecise rather than off in a way
+    that would fail vertex-coverage outright."""
+    return [[x, y + offset] for x, y in points]
+
+
+def _with_constant_velocity_and_timing(points: list[list[float]], dt_ms: float) -> str:
+    """A trace with a fixed time step between equally-arc-length-spaced
+    points -- constant distance-per-sample AND constant time-per-sample,
+    i.e. exactly the "mathematically steady speed, perfectly even
+    timing" signature `_looks_suspiciously_uniform` is built to catch."""
+    return json.dumps([[x, y, i * dt_ms] for i, (x, y) in enumerate(points)])
+
+
+def _with_natural_jitter_timing(points: list[list[float]], dt_ms: float) -> str:
+    """Same spatial points, but with human-like irregular timing (jitter
+    on each interval) -- should NOT trigger the "too uniform" escalation,
+    so the same geometric imprecision that a too-perfect trace gets
+    rejected for should still pass here."""
+    t = 0.0
+    out = []
+    for i, (x, y) in enumerate(points):
+        out.append([x, y, t])
+        # Alternate a bit fast, a bit slow -- never a fixed interval twice
+        # in a row, which is all it takes to clear the CV threshold.
+        t += dt_ms * (1.6 if i % 2 == 0 else 0.5)
+    return json.dumps(out)
+
+
+async def test_path_trace_demands_tighter_tolerance_when_motion_looks_too_uniform() -> None:
+    store = MemoryCaptchaStore()
+    provider = PathTraceProvider(store)
+    challenge = await provider.issue()
+    path = challenge.params["path"]
+    tolerance = challenge.params["tolerance"]
+
+    # Offset comfortably inside the FULL tolerance but past HALF of it --
+    # a trace here should pass under normal geometry, but the halved
+    # tolerance a "too perfect" trace gets held to should reject it.
+    offset = tolerance * 0.7
+    points = _offset_perpendicular_ish(_resample_equal_arc_length(path, 30), offset)
+
+    too_perfect = _with_constant_velocity_and_timing(points, dt_ms=16.0)
+    assert await provider.verify(challenge.challenge_id, too_perfect) is False
+
+
+async def test_path_trace_same_imprecision_passes_with_natural_timing() -> None:
+    store = MemoryCaptchaStore()
+    provider = PathTraceProvider(store)
+    challenge = await provider.issue()
+    path = challenge.params["path"]
+    tolerance = challenge.params["tolerance"]
+
+    offset = tolerance * 0.7
+    points = _offset_perpendicular_ish(_resample_equal_arc_length(path, 30), offset)
+
+    natural = _with_natural_jitter_timing(points, dt_ms=16.0)
+    assert await provider.verify(challenge.challenge_id, natural) is True
+
+
+async def test_path_trace_accepts_uniform_motion_when_it_is_also_precise() -> None:
+    # Being "too perfect" only demands tighter geometry, it doesn't
+    # reject outright -- a trace that's suspiciously uniform in speed and
+    # timing but ALSO stays within the tighter (halved) tolerance still
+    # passes, e.g. a very steady hand, a stylus, or an assistive device.
+    store = MemoryCaptchaStore()
+    provider = PathTraceProvider(store)
+    challenge = await provider.issue()
+    path = challenge.params["path"]
+
+    points = _resample_equal_arc_length(path, 30)  # right on the line, no offset at all
+    too_perfect_but_precise = _with_constant_velocity_and_timing(points, dt_ms=16.0)
+    assert await provider.verify(challenge.challenge_id, too_perfect_but_precise) is True
+
+
+def test_looks_suspiciously_uniform_abstains_without_enough_timed_samples() -> None:
+    from discord_webapi.captcha.providers.path_trace import _looks_suspiciously_uniform
+
+    assert _looks_suspiciously_uniform([(0.0, 0.0, 0.0), (1.0, 1.0, 16.0)]) is False

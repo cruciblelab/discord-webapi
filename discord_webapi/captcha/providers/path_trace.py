@@ -67,6 +67,61 @@ def _chord_bulge(path: list[list[float]]) -> float:
     return max(_dist_point_to_segment((x, y), start, end) for x, y in path)
 
 
+_MIN_KINEMATIC_SAMPLES = 6
+# Below this coefficient-of-variation, speed/timing reads as "too
+# constant to be a hand" -- see `_looks_suspiciously_uniform`'s docstring
+# for the reasoning and honest limits.
+_SUSPICIOUS_VELOCITY_CV = 0.05
+_SUSPICIOUS_TIMING_CV = 0.05
+
+
+def _coefficient_of_variation(values: list[float]) -> float | None:
+    if len(values) < 3:
+        return None
+    mean = sum(values) / len(values)
+    if mean == 0:
+        return None
+    variance = sum((v - mean) ** 2 for v in values) / len(values)
+    return math.sqrt(variance) / mean
+
+
+def _looks_suspiciously_uniform(trace: list[tuple[float, float, float]]) -> bool:
+    """Geometry alone (staying near the line, covering every vertex) says
+    nothing about *how* the trace was produced -- a script that knows the
+    path can hit those same points with mathematically constant speed and
+    perfectly even timing, something a real hand essentially never does
+    (the same minimum-jerk-vs-linear-interpolation distinction
+    `captcha/scoring.py`'s mouse-kinematics heuristics are built on,
+    applied here to a dragged trace instead of a reach-then-click).
+    Returns `True` only when there are enough timestamped samples *and*
+    both the segment-velocity and inter-sample-timing coefficients of
+    variation are near zero -- i.e. suspiciously constant on both axes at
+    once, not just one (a slow, very deliberate but still human trace can
+    legitimately have low variance on one axis).
+
+    Honest limit, same as `scoring.py`'s: this is a soft heuristic, not a
+    detector. It flags naive constant-speed synthesis; it cannot catch a
+    literal replay of a previously recorded genuine human trace (that
+    recording *is* a real trace, timestamps and all) -- see this module's
+    top-level docstring on why the line being visible to the client caps
+    what any client-side interaction challenge can prove."""
+    if len(trace) < _MIN_KINEMATIC_SAMPLES:
+        return False
+    velocities: list[float] = []
+    intervals: list[float] = []
+    for (x0, y0, t0), (x1, y1, t1) in zip(trace, trace[1:], strict=False):
+        dt = t1 - t0
+        if dt <= 0:
+            continue
+        velocities.append(math.hypot(x1 - x0, y1 - y0) / dt)
+        intervals.append(dt)
+    velocity_cv = _coefficient_of_variation(velocities)
+    timing_cv = _coefficient_of_variation(intervals)
+    if velocity_cv is None or timing_cv is None:
+        return False
+    return velocity_cv < _SUSPICIOUS_VELOCITY_CV and timing_cv < _SUSPICIOUS_TIMING_CV
+
+
 class PathTraceProvider:
     """`CaptchaProvider` that issues a wavy line and passes if the pointer
     trace (a) never strays further than `tolerance` from the line and (b)
@@ -82,7 +137,19 @@ class PathTraceProvider:
     default tolerance, so `_make_path` regenerates until the bulge clears
     `tolerance * 1.5`; with that guarantee, the peak vertices sit far
     enough from the chord that check (b) inherently rejects a straight
-    shortcut."""
+    shortcut.
+
+    (a)/(b) alone say nothing about *how* the trace was drawn -- a script
+    that knows the path can hit the same points with mathematically
+    constant speed and perfectly even timing, which a real hand
+    essentially never does. When the bundled widget's timestamped samples
+    show that (`_looks_suspiciously_uniform`), `tolerance` is halved for
+    (a)/(b) rather than rejecting on kinematics alone -- a genuinely very
+    steady trace that's *also* that geometrically precise still passes; a
+    script that nailed constant speed/timing but wasn't pixel-perfect on
+    the curve itself gets caught. Same honest limit as everywhere else in
+    this package: a soft heuristic, not a detector, and it cannot catch a
+    literal replay of a real recorded human trace."""
 
     kind = "path-trace"
 
@@ -158,7 +225,10 @@ class PathTraceProvider:
         )
 
     async def verify(self, challenge_id: str, response: str) -> bool:
-        """`response` is a JSON array of `[x, y]` pointer samples."""
+        """`response` is a JSON array of pointer samples, each `[x, y]` or
+        `[x, y, t_ms]` (the bundled widget always sends the timestamped
+        form; a 2-element sample just skips the kinematics check below,
+        same "abstain on missing optional data" policy as `scoring.py`)."""
 
         def _verifier(pending: PendingCaptcha) -> bool:
             if len(response) > _MAX_RESPONSE_CHARS:
@@ -173,14 +243,18 @@ class PathTraceProvider:
                 trace = [(float(pt[0]), float(pt[1])) for pt in trace_raw]
             except (TypeError, ValueError, IndexError):
                 return False
+            timed_trace: list[tuple[float, float, float]] | None = None
+            try:
+                if all(isinstance(pt, list | tuple) and len(pt) >= 3 for pt in trace_raw):
+                    timed_trace = [(float(pt[0]), float(pt[1]), float(pt[2])) for pt in trace_raw]
+            except (TypeError, ValueError):
+                timed_trace = None
 
             spec = json.loads(pending.answer)
             tolerance = spec["tolerance"]
             path = [(float(x), float(y)) for x, y in spec["path"]]
 
             # (a) no wild excursions: every sample is near the line
-            if any(_dist_point_to_polyline(pt, path) > tolerance for pt in trace):
-                return False
             # (b) full coverage: every vertex has a nearby sample. Because
             # the issued wave is guaranteed to bulge > tolerance from its
             # own chord (see _make_path), covering every vertex here is
@@ -189,8 +263,28 @@ class PathTraceProvider:
             # away. So (a)+(b) together already force tracing the curve; no
             # separate "did it bulge enough" check is needed (and an earlier
             # attempt at one was dead code -- (b) passing already implies it).
+            #
+            # The tolerance used for both is normally `tolerance`, but
+            # halved when the motion that produced the trace looks
+            # suspiciously machine-uniform (see _looks_suspiciously_
+            # uniform) -- not an outright rejection on kinematics alone
+            # (a soft heuristic shouldn't hard-fail by itself), but a
+            # demand for tighter geometric proof before trusting it: a
+            # genuinely careful, very steady hand that's *also* that
+            # precise on the actual line still passes; a script that
+            # nailed constant speed/timing but wasn't pixel-perfect on the
+            # curve itself gets caught here.
+            effective_tolerance = tolerance
+            if timed_trace is not None and _looks_suspiciously_uniform(timed_trace):
+                effective_tolerance = tolerance / 2
+
+            if any(_dist_point_to_polyline(pt, path) > effective_tolerance for pt in trace):
+                return False
             for vertex in path:
-                if min(math.hypot(vertex[0] - t[0], vertex[1] - t[1]) for t in trace) > tolerance:
+                if (
+                    min(math.hypot(vertex[0] - t[0], vertex[1] - t[1]) for t in trace)
+                    > effective_tolerance
+                ):
                     return False
             return True
 
