@@ -1,0 +1,388 @@
+<title>discord-webapi captcha playground</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 16px; color: #1a1a1a; }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-top: 2.2rem; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  section { margin-bottom: 1.2rem; }
+  button { padding: 6px 12px; margin: 4px 4px 4px 0; cursor: pointer; }
+  input[type=text] { padding: 6px; width: 200px; }
+  #log { background: #111; color: #d5d5d5; font-family: ui-monospace, monospace; font-size: 0.82rem;
+         padding: 10px; border-radius: 6px; height: 320px; overflow-y: auto; white-space: pre-wrap; }
+  .ok { color: #6fdc6f; }
+  .bad { color: #ff8a8a; }
+  .muted { color: #888; }
+  #canvas-wrap { position: relative; display: inline-block; border: 1px solid #ccc; }
+  #trace-canvas { touch-action: none; cursor: crosshair; }
+  .kind-block { border: 1px solid #ddd; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
+  code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
+</style>
+
+<h1>discord-webapi -- captcha playground</h1>
+<p class="muted">
+  Tek sayfa, sunucu yok denecek kadar hafif. Her captcha modelini ve
+  görünmez davranış katmanını buradan gerçekten çalıştırıp aşağıdaki log
+  panelinde sonucu görebilirsiniz. "Logu kopyala" ile sonucu alıp
+  paylaşabilirsiniz.
+</p>
+
+<section>
+  <h2>1) Görünmez davranış katmanı (invisible layer)</h2>
+  <p class="muted">
+    Sayfa yüklendiği andan itibaren mouse hareketiniz arka planda
+    toplanıyor (<code>mouse_trajectory</code>). Aşağıdaki butona tıklayınca
+    o ana kadarki tüm sinyaller (webdriver, dil, saat dilimi, tıklama
+    konumu, etkileşim süresi, mouse kinematiği) sunucuya gönderilip
+    <code>reject_webdriver</code> / <code>require_min_interaction_ms</code> /
+    <code>SignalScoreCheck</code> / <code>RepeatedMovementCheck</code>
+    sırayla çalıştırılıyor.
+  </p>
+  <button id="btn-behavior" type="button">Davranış katmanını test et</button>
+  <button id="btn-behavior-replay" type="button">Aynı hareketi tekrar gönder (replay testi)</button>
+  <span id="behavior-summary" class="muted"></span>
+</section>
+
+<section>
+  <h2>2) Görsel captcha'lar (Math / Text)</h2>
+  <div class="kind-block">
+    <label>Model:
+      <select id="image-kind">
+        <option value="math">math</option>
+        <option value="text">text</option>
+      </select>
+    </label>
+    <button id="btn-image-new" type="button">Yeni captcha al</button>
+    <div id="image-holder"></div>
+    <input id="image-answer" type="text" placeholder="cevabınız" />
+    <button id="btn-image-submit" type="button">Gönder</button>
+  </div>
+</section>
+
+<section>
+  <h2>3) Proof-of-Work (görünmez, gerçek hashcash)</h2>
+  <p class="muted">Gerçek arama tarayıcıda <code>crypto.subtle.digest</code> ile yapılır -- sunucu tek hash ile doğrular.</p>
+  <button id="btn-pow-run" type="button">PoW çalıştır ve doğrula</button>
+  <span id="pow-status" class="muted"></span>
+</section>
+
+<section>
+  <h2>4) Çizgi-takip (path-trace)</h2>
+  <button id="btn-trace-new" type="button">Yeni çizgi al</button>
+  <div id="canvas-wrap"></div>
+  <br />
+  <button id="btn-trace-submit" type="button">Çizilen yolu gönder</button>
+</section>
+
+<section id="widget-section">
+  <h2>5) reCAPTCHA / hCaptcha (3. taraf)</h2>
+  <div id="recaptcha-block" class="kind-block" style="display:none">
+    <div class="g-recaptcha"></div>
+    <button id="btn-recaptcha-submit" type="button">reCAPTCHA doğrula</button>
+  </div>
+  <div id="hcaptcha-block" class="kind-block" style="display:none">
+    <div class="h-captcha"></div>
+    <button id="btn-hcaptcha-submit" type="button">hCaptcha doğrula</button>
+  </div>
+  <p id="widget-unconfigured" class="muted"></p>
+</section>
+
+<h2>Log</h2>
+<button id="btn-copy-log" type="button">Logu kopyala</button>
+<button id="btn-clear-log" type="button">Logu temizle</button>
+<div id="log"></div>
+
+<script>
+'use strict';
+
+// ---- shared log panel ----
+const logEl = document.getElementById('log');
+function log(label, ok, detail) {
+  const time = new Date().toLocaleTimeString();
+  const cls = ok === null ? 'muted' : (ok ? 'ok' : 'bad');
+  const mark = ok === null ? '...' : (ok ? 'PASS' : 'FAIL');
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = `[${time}] ${mark}  ${label}${detail ? '  -- ' + detail : ''}`;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+document.getElementById('btn-copy-log').onclick = () => {
+  navigator.clipboard.writeText(logEl.innerText).then(() => log('log kopyalandı', null));
+};
+document.getElementById('btn-clear-log').onclick = () => { logEl.innerHTML = ''; };
+
+// ---- collect behavioral signals from page load onward ----
+const pageLoadedAt = performance.now();
+let lastPointerType = 'mouse';
+const trajectory = []; // [x, y, t_ms]
+const MAX_TRAJECTORY = 500;
+
+function pushSample(x, y, t, pointerType) {
+  lastPointerType = pointerType;
+  trajectory.push([x, y, t]);
+  if (trajectory.length > MAX_TRAJECTORY) trajectory.shift();
+}
+
+window.addEventListener('pointermove', (e) => {
+  pushSample(e.clientX, e.clientY, performance.now(), e.pointerType);
+});
+window.addEventListener('pointerdown', (e) => {
+  pushSample(e.clientX, e.clientY, performance.now(), e.pointerType);
+});
+
+let lastClickOffset = null;
+document.getElementById('btn-behavior').addEventListener('click', (e) => {
+  const rect = e.target.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  lastClickOffset = Math.hypot(e.clientX - cx, e.clientY - cy);
+});
+
+function currentSignals() {
+  return {
+    webdriver: navigator.webdriver === true,
+    language: navigator.language,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    pointer_type: lastPointerType,
+    pointer_moves: trajectory.length,
+    mouse_trajectory: trajectory.slice(),
+    click_offset: lastClickOffset,
+    interaction_ms: performance.now() - pageLoadedAt,
+  };
+}
+
+let lastSubmittedTrajectory = null;
+
+async function runBehaviorCheck(signals, label) {
+  log(label, null);
+  const resp = await fetch('/api/playground/behavior-check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signals }),
+  });
+  const body = await resp.json();
+  for (const r of body.results) {
+    log(`  check: ${r.name}`, r.passed, r.detail);
+  }
+  log(`${label} -- genel sonuç`, body.overall_passed);
+  document.getElementById('behavior-summary').textContent =
+    body.overall_passed ? 'son sonuç: GEÇTİ' : 'son sonuç: KALDI';
+  return body;
+}
+
+document.getElementById('btn-behavior').addEventListener('click', async () => {
+  const signals = currentSignals();
+  lastSubmittedTrajectory = signals.mouse_trajectory;
+  await runBehaviorCheck(signals, 'davranış katmanı');
+});
+
+document.getElementById('btn-behavior-replay').addEventListener('click', async () => {
+  if (!lastSubmittedTrajectory) {
+    log('replay testi', false, 'önce "Davranış katmanını test et" ile bir hareket gönderin');
+    return;
+  }
+  // Aynı trajectory'i AYNEN tekrar gönderiyoruz -- RepeatedMovementCheck
+  // bunu global olarak (kullanıcı/IP fark etmeksizin) daha önce görülmüş
+  // bir parmak izi olarak yakalayıp reddetmeli.
+  const signals = currentSignals();
+  signals.mouse_trajectory = lastSubmittedTrajectory;
+  await runBehaviorCheck(signals, 'replay testi (aynı hareket ikinci kez)');
+});
+
+// ---- 2) Math / Text image captchas ----
+let currentImageChallenge = null;
+
+document.getElementById('btn-image-new').addEventListener('click', async () => {
+  const kind = document.getElementById('image-kind').value;
+  const resp = await fetch(`/api/captcha/challenge?kind=${kind}`);
+  if (!resp.ok) { log(`${kind} captcha alma`, false, await resp.text()); return; }
+  currentImageChallenge = await resp.json();
+  const holder = document.getElementById('image-holder');
+  holder.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = currentImageChallenge.image_data_uri;
+  img.alt = currentImageChallenge.prompt;
+  holder.appendChild(img);
+  log(`${kind} captcha alındı`, null, currentImageChallenge.prompt);
+});
+
+document.getElementById('btn-image-submit').addEventListener('click', async () => {
+  if (!currentImageChallenge) { log('görsel captcha gönder', false, 'önce yeni captcha alın'); return; }
+  const kind = document.getElementById('image-kind').value;
+  const response = document.getElementById('image-answer').value;
+  const resp = await fetch('/api/captcha/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind, challenge_id: currentImageChallenge.challenge_id, response }),
+  });
+  const body = await resp.json();
+  log(`${kind} captcha doğrulama`, body.verified);
+});
+
+// ---- 3) Proof-of-Work: real hashcash search in the browser ----
+async function sha256LeadingZeroBits(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  const bytes = new Uint8Array(buf);
+  let bits = 0;
+  for (const byte of bytes) {
+    if (byte === 0) { bits += 8; continue; }
+    let b = byte, leading = 0;
+    for (let i = 7; i >= 0; i--) {
+      if ((b >> i) & 1) break;
+      leading++;
+    }
+    bits += leading;
+    break;
+  }
+  return bits;
+}
+
+document.getElementById('btn-pow-run').addEventListener('click', async () => {
+  const status = document.getElementById('pow-status');
+  status.textContent = 'challenge alınıyor...';
+  const resp = await fetch('/api/captcha/challenge?kind=pow');
+  if (!resp.ok) { log('pow captcha alma', false, await resp.text()); return; }
+  const challenge = await resp.json();
+  const { prefix, difficulty } = challenge.params;
+  status.textContent = `arıyor... (zorluk ${difficulty} bit)`;
+  const start = performance.now();
+  let nonce = 0;
+  while (true) {
+    const bits = await sha256LeadingZeroBits(`${prefix}${nonce}`);
+    if (bits >= difficulty) break;
+    nonce++;
+    if (nonce % 500 === 0) await new Promise((r) => setTimeout(r, 0)); // don't freeze the tab
+  }
+  const elapsedMs = Math.round(performance.now() - start);
+  status.textContent = `bulundu: nonce=${nonce} (${elapsedMs}ms)`;
+  log('pow arama tamamlandı', null, `nonce=${nonce}, ${elapsedMs}ms`);
+  const verifyResp = await fetch('/api/captcha/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ kind: 'pow', challenge_id: challenge.challenge_id, response: String(nonce) }),
+  });
+  const verifyBody = await verifyResp.json();
+  log('pow doğrulama', verifyBody.verified);
+});
+
+// ---- 4) Path-trace: draw the line, capture the real pointer path ----
+let currentTraceChallenge = null;
+let tracePoints = [];
+let tracing = false;
+
+async function loadNewTrace() {
+  const resp = await fetch('/api/captcha/challenge?kind=path-trace');
+  if (!resp.ok) { log('path-trace alma', false, await resp.text()); return; }
+  currentTraceChallenge = await resp.json();
+  tracePoints = [];
+  const { path, width, height, tolerance } = currentTraceChallenge.params;
+  const wrap = document.getElementById('canvas-wrap');
+  wrap.innerHTML = '';
+  const canvas = document.createElement('canvas');
+  canvas.id = 'trace-canvas';
+  canvas.width = width;
+  canvas.height = height;
+  wrap.appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+
+  function redraw() {
+    ctx.clearRect(0, 0, width, height);
+    ctx.strokeStyle = '#bbb';
+    ctx.lineWidth = tolerance * 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    path.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.stroke();
+    ctx.strokeStyle = '#2b6fff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    tracePoints.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.stroke();
+  }
+  redraw();
+
+  canvas.addEventListener('pointerdown', (e) => {
+    tracing = true;
+    tracePoints = [];
+    const r = canvas.getBoundingClientRect();
+    tracePoints.push([e.clientX - r.left, e.clientY - r.top]);
+    redraw();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (!tracing) return;
+    const r = canvas.getBoundingClientRect();
+    tracePoints.push([e.clientX - r.left, e.clientY - r.top]);
+    redraw();
+  });
+  window.addEventListener('pointerup', () => { tracing = false; });
+
+  log('path-trace çizgisi alındı', null, `${path.length} nokta, tolerans ${tolerance}px`);
+}
+
+document.getElementById('btn-trace-new').addEventListener('click', loadNewTrace);
+
+document.getElementById('btn-trace-submit').addEventListener('click', async () => {
+  if (!currentTraceChallenge) { log('path-trace gönder', false, 'önce yeni çizgi alın'); return; }
+  const resp = await fetch('/api/captcha/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      kind: 'path-trace',
+      challenge_id: currentTraceChallenge.challenge_id,
+      response: JSON.stringify(tracePoints),
+    }),
+  });
+  const body = await resp.json();
+  log('path-trace doğrulama', body.verified, `${tracePoints.length} nokta çizildi`);
+});
+
+// ---- 5) reCAPTCHA / hCaptcha, only if the server has real keys ----
+(async () => {
+  const resp = await fetch('/api/playground/config');
+  const config = await resp.json();
+
+  if (config.recaptcha_site_key) {
+    document.getElementById('recaptcha-block').style.display = 'block';
+    document.querySelector('#recaptcha-block .g-recaptcha').setAttribute('data-sitekey', config.recaptcha_site_key);
+    const s = document.createElement('script');
+    s.src = 'https://www.google.com/recaptcha/api.js';
+    s.async = true; s.defer = true;
+    document.body.appendChild(s);
+    document.getElementById('btn-recaptcha-submit').addEventListener('click', async () => {
+      const response = window.grecaptcha ? window.grecaptcha.getResponse() : '';
+      const resp2 = await fetch('/api/captcha/verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'recaptcha', challenge_id: config.recaptcha_site_key, response }),
+      });
+      const body = await resp2.json();
+      log('reCAPTCHA doğrulama', body.verified);
+    });
+  }
+  if (config.hcaptcha_site_key) {
+    document.getElementById('hcaptcha-block').style.display = 'block';
+    document.querySelector('#hcaptcha-block .h-captcha').setAttribute('data-sitekey', config.hcaptcha_site_key);
+    const s = document.createElement('script');
+    s.src = 'https://js.hcaptcha.com/1/api.js';
+    s.async = true; s.defer = true;
+    document.body.appendChild(s);
+    document.getElementById('btn-hcaptcha-submit').addEventListener('click', async () => {
+      const el = document.querySelector('[name="h-captcha-response"]');
+      const response = el ? el.value : '';
+      const resp2 = await fetch('/api/captcha/verify', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'hcaptcha', challenge_id: config.hcaptcha_site_key, response }),
+      });
+      const body = await resp2.json();
+      log('hCaptcha doğrulama', body.verified);
+    });
+  }
+  if (!config.recaptcha_site_key && !config.hcaptcha_site_key) {
+    document.getElementById('widget-unconfigured').textContent =
+      'RECAPTCHA_SITE_KEY/HCAPTCHA_SITE_KEY env değişkenleri ayarlanmadı -- bu ikisi atlandı.';
+  }
+})();
+
+log('sayfa yüklendi, mouse hareketiniz toplanmaya başladı', null);
+</script>

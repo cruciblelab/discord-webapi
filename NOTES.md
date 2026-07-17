@@ -1,5 +1,61 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: homing-correction'ı yine de ekle + tıklanabilir test sitesi (bu oturumda)
+
+Kullanıcının isteği: önceki turda test edip "bağımsız değer katmıyor,
+eklemiyorum" dediğim homing-correction sezgiselini yine de ekleyeyim,
+kendisi test etsin ("belki yanlış anlamışsındır"); ayrıca tüm captcha
+sistemini (görsel + PoW + path-trace + davranış katmanı + replay-tespiti)
+kendi tarayıcısından tıklayarak deneyebileceği bir sayfa isteyip
+sonuçları PASS/FAIL loglayıp bana geri vereceğini söyledi.
+
+**Homing-correction, dürüstlüğü koruyarak eklendi**: önceki bulgu (kendi
+insan-örneğimde bile sıfır overshoot çıkması) hâlâ geçerli, o yüzden
+sezgiseli **asla ceza vermeyecek** şekilde tasarladım -- overshoot
+bulursa `1.0`, bulamazsa `0.0` değil **`None` (çekimser)**. Yani bu artık
+"varsa bonus kanıt, yoksa nötr" mantığında; önceki turda tespit ettiğim
+yanlış-pozitif riski (düzgün, overshoot'suz gerçek insan hareketlerini
+cezalandırma) ortadan kalkıyor. Test edip doğruladım: gerçek overshoot'lu
+elle kurulmuş bir trajectory `1.0` veriyor, önceki "düzgün insan"
+örneğim ve lineer bot örneğim ikisi de `None` (çekimser) -- ikisi de
+overshoot içermiyor, ikisi de haksız cezalandırılmıyor. `default_behavior_heuristics()`'e
+ağırlık 1.0 (düşük -- durumsal bir sinyal) ile eklendi.
+
+**`examples/captcha_playground/`** (yeni): Discord bot'u/OAuth'u
+GEREKTİRMEYEN, tek sayfalık, gerçekten çalışan bir test sitesi:
+- `main.py`: `MathCaptchaProvider`/`TextCaptchaProvider`/`ProofOfWorkProvider`/
+  `PathTraceProvider`'ı `build_captcha_router()` üzerinden sunuyor;
+  isteğe bağlı `RECAPTCHA_SITE_KEY`/`HCAPTCHA_SITE_KEY` env'leri varsa
+  onları da ekliyor. Davranış katmanı için `CaptchaGate` kurmadan, direkt
+  `VerificationCheck.run()` çağıran hafif bir `/api/playground/behavior-check`
+  endpoint'i -- `reject_webdriver`, `require_min_interaction_ms`,
+  `SignalScoreCheck` (tüm sezgiseller dahil mouse-kinematiği +
+  homing-correction), `RepeatedMovementCheck` sırayla çalışıp her birinin
+  PASS/FAIL + detay'ı ayrı ayrı dönüyor.
+- `playground.html`: sayfa yüklendiği andan itibaren gerçek
+  `pointermove`/`pointerdown` olaylarından `mouse_trajectory` topluyor;
+  PoW için gerçek hashcash aramasını tarayıcının kendi
+  `crypto.subtle.digest`'ıyla yapıyor (mock değil, gerçek iş); path-trace
+  için gerçek bir `<canvas>` üzerinde çizilen yolu yakalıyor; "aynı
+  hareketi tekrar gönder" butonu `RepeatedMovementCheck`'in ikinci
+  gönderimde FAIL'e dönmesini canlı gösteriyor. Her sonuç ekrandaki log
+  paneline yazılıyor + "logu kopyala" butonu var.
+
+**Elle uçtan uca doğrulama yaptım** (kullanıcıya vermeden önce): sunucuyu
+gerçekten ayağa kaldırıp (`uvicorn`) curl/Python ile her endpoint'i tek
+tek denedim -- math doğru/yanlış cevap, gerçek PoW nonce araması (Python
+tarafında JS'in yapacağı aynı hashcash aramasını taklit ederek) ve
+doğrulama, path-trace geçerli/geçersiz iz, ve en önemlisi
+behavior-check + replay: aynı `mouse_trajectory` ikinci kez
+gönderildiğinde `no-repeated-movement` check'i gerçekten FAIL'e döndü,
+ilkinde PASS'ti. Hepsi beklenen sonucu verdi, sunucu kapatıldı
+(kullanıcı kendi ortamında çalıştıracak).
+
+3 yeni test (homing-correction: gerçek overshoot'u puanlıyor, düzgün
+insan hareketinde/lineer bot hareketinde çekimser kalıyor -- ikisinde de
+ceza yok). Tüm suite yeşil (bilinen Postgres ortam hatası hariç),
+ruff+mypy temiz (`examples/captcha_playground` dahil).
+
 ## captcha: replay-tespiti (RepeatedMovementCheck) + granülerlik netliği (bu oturumda)
 
 Kullanıcının önceki mesajdaki ChatGPT önerilerine verdiğim cevaptan sonra

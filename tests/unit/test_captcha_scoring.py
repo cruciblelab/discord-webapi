@@ -254,6 +254,45 @@ def test_curvature_abstains_on_too_short_a_move() -> None:
     assert score is None
 
 
+_OVERSHOOT_TRAJECTORY = [
+    [0, 0, 0], [30, 10, 40], [70, 22, 80], [120, 26, 120], [160, 24, 160],
+    [210, 12, 210], [222, 5, 250], [214, -2, 290], [204, 1, 330], [200, 0, 380],
+]  # deliberately overshoots past the final point (x=200) then corrects back
+
+
+def test_homing_correction_scores_a_genuine_overshoot() -> None:
+    from discord_webapi.captcha.scoring import _mouse_homing_correction
+
+    score = _mouse_homing_correction(
+        {"pointer_type": "mouse", "mouse_trajectory": _OVERSHOOT_TRAJECTORY}
+    )
+
+    assert score == 1.0
+
+
+def test_homing_correction_abstains_rather_than_penalizes_a_smooth_approach() -> None:
+    """The hand-built human trajectory used elsewhere in this file never
+    overshoots (plenty of real human movement doesn't) -- this must abstain,
+    not score it 0, or it would unfairly punish smooth, precise movement."""
+    from discord_webapi.captcha.scoring import _mouse_homing_correction
+
+    score = _mouse_homing_correction(
+        {"pointer_type": "mouse", "mouse_trajectory": _HUMAN_TRAJECTORY}
+    )
+
+    assert score is None
+
+
+def test_homing_correction_abstains_for_a_linear_bot_too() -> None:
+    from discord_webapi.captcha.scoring import _mouse_homing_correction
+
+    score = _mouse_homing_correction(
+        {"pointer_type": "mouse", "mouse_trajectory": _BOT_TRAJECTORY}
+    )
+
+    assert score is None
+
+
 def test_kinematics_heuristics_appear_in_the_breakdown() -> None:
     check = SignalScoreCheck()
     signals = dict(_HUMAN, mouse_trajectory=_HUMAN_TRAJECTORY)

@@ -2,6 +2,40 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: homing-correction sezgiseli (fail-open) + tıklanabilir test sitesi
+
+Kullanıcı, daha önce test edip "bağımsız değer katmıyor, eklemiyorum"
+dediğim homing-correction sezgiselini yine de eklememi ve tüm captcha
+sistemini kendi tarayıcısında elle test edebileceği bir sayfa hazırlamamı
+istedi ("sonuçları sana vereyim").
+
+### Değişenler
+
+- **`mouse-homing-correction` eklendi** (`captcha/scoring.py`), önceki
+  turdaki bulgu dikkate alınarak **asla puan düşürmeyecek** şekilde: mesafe-
+  hedef eğrisinde en az bir gerçek "aşma ve düzeltme" (overshoot) anı
+  bulursa `1.0`, bulamazsa `0.0` değil **çekimser (`None`)** döner. Bunun
+  sebebi: overshoot yokluğu insan olmadığının kanıtı değil (yavaş/hassas
+  hareketlerde hiç görülmeyebilir) -- sadece varlığı ek pozitif kanıt.
+  Varsayılan ağırlık 1.0 (düşük, durumsal bir sinyal olduğu için).
+- **`examples/captcha_playground/`** (yeni örnek): bot/OAuth gerektirmeyen,
+  tek sayfalık, tıklanabilir bir test sitesi -- Math/Text/PoW/Path-trace
+  captcha'larının hepsi + reCAPTCHA/hCaptcha (gerçek site key varsa) +
+  görünmez katmanın tamamı (`reject_webdriver`, `require_min_interaction_ms`,
+  tüm sezgiselleriyle `SignalScoreCheck`, `RepeatedMovementCheck`) tek
+  ekrandan gerçekten çalıştırılıp PASS/FAIL log paneline yazılıyor. PoW
+  gerçek hashcash aramasını tarayıcının kendi `crypto.subtle.digest`'ıyla
+  yapıyor (mock değil). "Aynı hareketi tekrar gönder" butonu, replay
+  tespitinin ikinci gönderimde FAIL'e döndüğünü canlı gösteriyor -- elle
+  uçtan uca doğrulandı (curl ile tüm endpoint'ler tek tek denendi: math
+  doğru/yanlış cevap, pow gerçek nonce araması, path-trace geçerli/geçersiz
+  iz, behavior-check + replay -- hepsi beklenen sonucu verdi).
+
+3 yeni test (`mouse-homing-correction`'ın gerçek overshoot'u puanlaması,
+düzgün insan hareketinde cezalandırmadan çekimser kalması, lineer bot
+hareketinde de çekimser kalması). Tüm suite yeşil (bilinen Postgres ortam
+hatası hariç), ruff+mypy temiz.
+
 ## [Unreleased] — captcha: replay-tespiti (`RepeatedMovementCheck`) + granüler açma/kapama
 
 Kullanıcının iki isteği: (1) her özelliğin/algoritmanın tek tek

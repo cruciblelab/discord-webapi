@@ -252,6 +252,33 @@ def _mouse_timing_variance(signals: dict[str, Any]) -> float | None:
     return max(0.0, min(1.0, cv / _TIMING_CV_SPAN))
 
 
+_HOMING_NOISE_FLOOR = 1.0  # px -- ignore float/sampling noise, only count a real step back
+
+
+def _mouse_homing_correction(signals: dict[str, Any]) -> float | None:
+    """Looks for at least one "overshoot and correct" moment: the distance
+    to the final (click) point briefly *increasing* before it keeps
+    shrinking -- a signature of ballistic human reaching. Tested against a
+    hand-built minimum-jerk trajectory that never overshoots (a real,
+    common human pattern for slow/precise movements) and it abstains
+    rather than penalizing, on purpose: overshoot is bonus evidence when
+    present, but its *absence* proves nothing (plenty of genuine human
+    movement never overshoots), so this can only ever help a score, never
+    hurt one. Weighted low by default precisely because it's a weaker,
+    situational signal, not because it's unreliable when it does fire."""
+    points = _parse_trajectory(signals)
+    if points is None:
+        return None
+    tx, ty, _ = points[-1]
+    if math.hypot(points[0][0] - tx, points[0][1] - ty) < _MIN_STRAIGHT_LINE_PX:
+        return None
+    distances = [math.hypot(x - tx, y - ty) for x, y, _ in points]
+    overshoots = sum(
+        1 for a, b in zip(distances, distances[1:], strict=False) if b > a + _HOMING_NOISE_FLOOR
+    )
+    return 1.0 if overshoots > 0 else None
+
+
 def default_behavior_heuristics() -> list[ScoringHeuristic]:
     """The built-in heuristic set. Copy and edit it (drop entries,
     reweight, append your own `ScoringHeuristic`) to tune the score to your
@@ -267,6 +294,7 @@ def default_behavior_heuristics() -> list[ScoringHeuristic]:
         ScoringHeuristic("mouse-curvature", 2.0, _mouse_path_curvature),
         ScoringHeuristic("mouse-velocity-variance", 2.5, _mouse_velocity_variance),
         ScoringHeuristic("mouse-timing-variance", 1.0, _mouse_timing_variance),
+        ScoringHeuristic("mouse-homing-correction", 1.0, _mouse_homing_correction),
     ]
 
 

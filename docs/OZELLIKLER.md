@@ -306,6 +306,11 @@ Sağlayıcı aileleri:
   emekli script'lerin -- ki gerçekte karşılaşılanın büyük kısmı budur --
   maliyetini ciddi yükseltiyor) ama yine PoW + hesap-bağlama ile katmanlanan
   şeffaf bir sezgisel, tek başına "insan kanıtı" değil.
+  Ayrıca **`mouse-homing-correction`** var: hedefe yaklaşırken en az bir
+  "aşma ve düzeltme" (overshoot) anı bulursa `1.0`, bulamazsa **`0.0`
+  değil çekimser** -- overshoot'un yokluğu insan olmadığının kanıtı
+  değil (yavaş/hassas hareketlerde hiç görülmeyebilir), sadece varlığı
+  ek pozitif kanıt. Bu yüzden asla puan düşürmez, sadece yükseltebilir.
 - **Basit görsel captcha'lar** (`MathCaptchaProvider`/`TextCaptchaProvider`)
   hâlâ duruyor ama **dürüstçe**: modern OCR/vision bunları kolay çözüyor,
   bu yüzden bunlar sadece "son çare / düşük-değerli" katman -- asıl güven
@@ -334,6 +339,14 @@ Sağlayıcı aileleri:
   -- aksi halde bir load balancer arkasında replay farklı bir replica'ya
   düşünce yakalanmayabilir). Varsayılan olarak hiçbir gate'e bağlı değil --
   `extra_checks=[RepeatedMovementCheck(store)]` ile isteyen ekler.
+
+**Tıklayarak test etmek isteyenler için**: `examples/captcha_playground/` --
+Discord bot'u/OAuth'u gerektirmeden, tarayıcıda tek sayfada tüm
+provider'ları (Math/Text/PoW/Path-trace + varsa reCAPTCHA/hCaptcha) VE
+görünmez katmanın tamamını (davranış skoru, replay-tespiti) gerçekten
+çalıştırıp PASS/FAIL log paneline yazan bir örnek. "Aynı hareketi tekrar
+gönder" butonu, replay tespitinin ikinci gönderimde FAIL'e döndüğünü
+canlı gösteriyor.
 
 Rate limiter/escalation'ın aksine `DiscordWebAPI` hiçbir captcha
 sağlayıcısını otomatik kurmaz (hangi sağlayıcı, hangi reCAPTCHA
