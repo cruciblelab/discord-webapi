@@ -60,9 +60,14 @@ def _dist_point_to_polyline(p: tuple[float, float], polyline: list[tuple[float, 
 
 class PathTraceProvider:
     """`CaptchaProvider` that issues a wavy line and passes if the pointer
-    trace (a) never strays further than `tolerance` from the line and (b)
+    trace (a) never strays further than `tolerance` from the line, (b)
     passes within `tolerance` of every vertex (so the user traced the whole
-    line, not just a piece)."""
+    line, not just a piece), and (c) actually bulges away from the
+    straight start->end line by nearly as much as the real curve does --
+    an earlier version only checked (a) and (b), which a near-straight
+    diagonal can satisfy whenever the curve's amplitude happens to be
+    small relative to `tolerance`, without ever really tracing the
+    wave."""
 
     kind = "path-trace"
 
@@ -150,6 +155,20 @@ class PathTraceProvider:
             # (b) full coverage: every vertex has a nearby sample
             for vertex in path:
                 if min(math.hypot(vertex[0] - t[0], vertex[1] - t[1]) for t in trace) > tolerance:
+                    return False
+            # (c) genuinely followed the curve's shape rather than cutting a
+            # straight shortcut between the endpoints: the curve bulges away
+            # from the straight start->end chord by some real amount (its
+            # amplitude); the trace has to bulge out by nearly as much too.
+            # Without this, (a)+(b) alone can be satisfied by a near-straight
+            # diagonal whenever the curve's amplitude happens to be smaller
+            # than `tolerance` -- a shortcut that never really traced the
+            # wave. `tolerance` slack keeps this as forgiving as (a)/(b).
+            start, end = path[0], path[-1]
+            curve_bulge = max(_dist_point_to_segment(v, start, end) for v in path)
+            if curve_bulge > tolerance:
+                trace_bulge = max(_dist_point_to_segment(pt, start, end) for pt in trace)
+                if trace_bulge < curve_bulge - tolerance:
                     return False
             return True
 

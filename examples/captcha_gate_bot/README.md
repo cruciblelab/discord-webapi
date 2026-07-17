@@ -180,12 +180,14 @@ linking all of them.
    `/api/test/block-my-ip`/`unblock-my-ip` debug endpoints) as Scenario
    5's `/join-adaptive`, but through a *second*, no-login-required
    `AdaptiveCaptchaGate` -- a real anonymous-traffic gate has no account
-   to require. Passing that first check is not automatically the end:
-   a stricter second-tier behavior-only gate (`test4_strict_gate`) runs
-   next, and only if that one *also* looks suspicious does a third,
-   final Path-Trace widget appear -- a genuine double-escalation chain,
-   composed the same "page JS reveals the next gate on failure" way as
-   every other escalation in this file, not a new library feature.
+   to require. Deliberately just **two** tiers, not three: silent check,
+   then -- only if the IP is blocked -- one real, visible Math captcha,
+   exactly what `AdaptiveCaptchaGate` already does on its own. An
+   earlier version of this page bolted on an extra *silent* behavior
+   check between those two steps to simulate "double escalation" -- that
+   was cut: a second silent check a bot already passed once tells you
+   nothing new, it's not a real additional defense, just an extra
+   pointless step for a genuine user.
 5. **`/test-index`** -- links all of the above (plus the Discord-side
    commands) with a one-line description of each.
 

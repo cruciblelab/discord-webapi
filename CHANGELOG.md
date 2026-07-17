@@ -2,6 +2,71 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — fiziksel test geri bildirimi: 4 gerçek bug/tasarım hatası düzeltildi
+
+Kullanıcı önceki turdaki 5 test sayfasını gerçekten deneyip dört somut
+sorun bildirdi -- hepsi araştırılıp gerçek bulunanlar düzeltildi:
+
+1. **"Test 1'de sadece tıklamaya bakmak yanlış"** -- haklı: Test 1
+   `require_captcha=False` ile SADECE davranış skorunu (`SignalScoreCheck`)
+   tek başına gate olarak kullanıyordu. Bu tam olarak `scoring.py`'nin
+   kendi docstring'inin uyardığı hata -- istemci sinyalleri "speed bump",
+   tek başına insan/robot hükmü değil. Doğrudan doğrulandı: düzeltmeden
+   önce elle uydurulmuş "iyi görünen" sinyaller (gerçekçi eğri/hız/zaman
+   varyansına sahip sahte bir fare izi) `require_captcha=False` gate'ini
+   TEK BAŞINA geçiyordu -- kullanıcının sorduğu tam olarak buydu.
+   Düzeltme: Test 1 artık her yerdeki diğer "görünmez" gate'ler gibi
+   gerçek Proof-of-Work + davranış skorunu birlikte istiyor
+   (`require_captcha=False` yerine `ProofOfWorkProvider`). Aynı sahte
+   "iyi" sinyaller artık PoW çözümü olmadan `"captcha"` kontrolünde
+   reddediliyor -- doğrudan doğrulandı.
+2. **"Çizgi çok düzleşiyor, olduğu gibi işlemeli"** -- gerçek bir
+   doğrulama zafiyetiydi: `PathTraceProvider.verify()` sadece (a) her
+   nokta polyline'a `tolerance` içinde mi ve (b) her köşeye yakın bir
+   nokta var mı kontrol ediyordu -- eğrinin genliği `tolerance`'a göre
+   küçük kaldığında bu ikisini, eğriyi hiç takip etmeden, dümdüz bir
+   köşegen çizerek de geçmek mümkündü. Eklenen üçüncü kontrol: çizilen
+   izin düz kirişten (start->end) sapması, gerçek eğrinin kirişten
+   sapmasına (genliğine) yakın olmalı -- `tests/unit/test_captcha_new_
+   providers.py::test_path_trace_rejects_a_straight_shortcut_even_
+   within_tolerance` ile doğrudan doğrulandı (düzeltmeden önce geçen bir
+   düz-çizgi kısayolu artık reddediliyor), mevcut 11 path-trace testi
+   değişmeden yeşil kaldı.
+3. **"/giveaway-test'te butona tıklayınca 'etkileşim başarısız oldu'"** --
+   büyük olasılıkla kök neden: buton callback'i Discord'un ~3 saniyelik
+   etkileşim yanıt penceresi içinde `interaction.response.send_message()`
+   çağırmadan ÖNCE üç ayrı `create_verification()` çağrısını bekliyordu;
+   herhangi bir gecikme/hata bu pencereyi kaçırıp "etkileşim başarısız
+   oldu"ya sebep olabilirdi. Düzeltme: artık en başta
+   `interaction.response.defer(ephemeral=True, thinking=True)` çağrılıyor
+   (yanıt penceresi hemen kapatılıyor), asıl iş bittikten sonra
+   `interaction.followup.send()` ile gerçek cevap gönderiliyor; DM
+   gönderimi de artık `discord.Forbidden`'a karşı korunuyor (DM'leri kapalı
+   bir kullanıcıya sessizce patlamak yerine linki ephemeral cevapta da
+   gösteriyor).
+4. **"/test-cloudflare'de 2 kontrol yapmayalım, ilk tıklamaya kadar 1.
+   kontrol, 2.si görsel captcha olsun, saçma/profesyonel değil"** --
+   haklı: önceki turda eklenen "üçüncü, daha katı sessiz kontrol" gerçek
+   bir savunma katmanı değildi -- bir botun zaten geçtiği sessiz kontrolü
+   ikinci kez sessizce tekrar çalıştırmak hiçbir yeni bilgi vermiyordu,
+   sadece gerçek bir kullanıcıya anlamsız bir ekstra adım ekliyordu.
+   `test4_strict_gate` ve üçüncü Path-Trace katmanı tamamen kaldırıldı --
+   `/test-cloudflare` artık `AdaptiveCaptchaGate`'in zaten kendi başına
+   yaptığı iki katmanlı deseni (IP temizse sessizce geç, kara listedeyse
+   tek bir gerçek Math captcha'sı göster) hiçbir sayfa-JS zincirlemesi
+   olmadan doğrudan kullanıyor.
+
+Kullanıcının ayrıca sorduğu iki nokta (test-join sayfasında "3 captcha
+diyor ama 2 tane görünüyor" ve "captcha geçince otomatik katılsın,
+kuyrukta bekleme süresi olsun, Discord girişi istesin") kod incelemesiyle
+doğrulanamadı -- `/test-widgets` şablonu üç ayrı `<div class="dwa-
+captcha-widget">` içeriyor ve her biri kendi token'ıyla bağımsız
+render ediliyor; ve Scenario 3 (`/test-join`) bilinçli olarak "3 captcha
+türünü yan yana karşılaştır" demosu olarak tasarlandı, gerçek bir
+giveaway akışı değil (o zaten Scenario 4/`/giveaway-test`'te -- orada
+gerçekten Discord girişi ZORUNLU ve captcha geçince gerçekten otomatik
+katılıyor). Kullanıcıdan ekran görüntüsü/tam adım istenip netleştirilecek.
+
 ## [Unreleased] — `examples/captcha_gate_bot`: 5 test sayfası + gerçek giveaway katılımcı kaydı + kendi "Cloudflare"imiz
 
 Kullanıcı isteği (özet, Türkçe): "5 farklı test sayfası ekle: (1) sadece

@@ -77,13 +77,13 @@ general pattern for physical-testing an example bot):
                                      hardcoded bot-shaped signals directly,
                                      proving detection isn't cosmetic
     /test-cloudflare              -> our own Cloudflare-style "verifying
-                                     you are human" interstitial: blocking
-                                     your own IP (via /api/test/block-my-ip)
-                                     triggers a real AdaptiveCaptchaGate
-                                     challenge, and even passing it chains
-                                     into a stricter second check and,
-                                     if that's still suspicious, a final
-                                     Path-Trace widget
+                                     you are human" interstitial: a clean
+                                     IP passes silently, blocking your own
+                                     IP (via /api/test/block-my-ip) makes
+                                     the same AdaptiveCaptchaGate show one
+                                     real Math captcha -- exactly the two
+                                     tiers AdaptiveCaptchaGate does on its
+                                     own, no extra chaining
 """
 
 from __future__ import annotations
@@ -520,6 +520,17 @@ class _GiveawayTestJoinView(discord.ui.View):
     async def join_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
+        # Acknowledge the interaction FIRST, before any other awaited work.
+        # Discord gives a component interaction only ~3 seconds to get a
+        # response; doing the token-minting below (three separate
+        # create_verification calls) *before* responding meant any hiccup
+        # there (or just being on the slow side) surfaced to the user as
+        # "This interaction failed" with no way to retry other than
+        # re-clicking. Deferring immediately removes that deadline -- the
+        # real response goes out via `followup.send()` once the work (and
+        # the DM, which can independently fail if the user has DMs off)
+        # is actually done.
+        await interaction.response.defer(ephemeral=True, thinking=True)
         user_id = interaction.user.id
         metadata = {"giveaway_id": self.giveaway_id}
         invisible_req = await giveaway_test_invisible_gate.create_verification(
@@ -537,11 +548,19 @@ class _GiveawayTestJoinView(discord.ui.View):
             f"&pathtrace={pathtrace_req.token}"
             f"&original={original_req.token}"
         )
-        # Ephemeral -- invisible to everyone else in the channel.
-        await interaction.response.send_message(
+        try:
+            await interaction.user.send(f"Çekilişe katılmak için doğrulan: {url}")
+        except discord.Forbidden:
+            # Ephemeral -- invisible to everyone else in the channel.
+            await interaction.followup.send(
+                "DM'ine ulaşamadım (DM'lerin kapalı olabilir) -- doğrulama "
+                f"linkin: {url}",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
             "Kontrol ediliyor... DM'ine bir doğrulama linki gönderdim!", ephemeral=True
         )
-        await interaction.user.send(f"Çekilişe katılmak için doğrulan: {url}")
 
 
 @bot.hybrid_command(
@@ -735,10 +754,25 @@ async def unblock_my_ip(request: Request) -> dict:
 # account requirement here on purpose -- this page is about testing the
 # *detection*, not account-binding (already covered by the giveaway/
 # appeal gates above).
+#
+# This gate deliberately still requires real Proof-of-Work alongside the
+# behavior score, NOT `require_captcha=False` on its own -- an earlier
+# version of this test page used the behavior score as the only gate,
+# which is exactly the mistake `scoring.py`'s own module docstring warns
+# against: client-submitted signals (curvature, velocity variance,
+# timing variance, a single click's offset from center, ...) are a
+# *soft* signal, "a speed bump," never a standalone human/bot verdict --
+# a single click, however many heuristics you run over it, is still one
+# weak, forgeable data point. PoW is the one thing here with a real,
+# unfakeable cost; the behavior score rides alongside it as an extra
+# check, not as the sole judge.
 # ---------------------------------------------------------------------
 
 test1_behavior_gate = CaptchaGate(
-    transport, MemoryVerificationStore(), require_captcha=False, extra_checks=_behavior_checks()
+    transport,
+    MemoryVerificationStore(),
+    ProofOfWorkProvider(_captcha_store),
+    extra_checks=_behavior_checks(),
 )
 test1_pathtrace_gate = CaptchaGate(
     transport, MemoryVerificationStore(), PathTraceProvider(_captcha_store)
@@ -904,12 +938,22 @@ async function sendBad() {{
 # /join-adaptive uses, via the same /api/test/block-my-ip debug endpoint)
 # makes this page show a "verifying you are human" screen. Unlike
 # /join-adaptive this needs no Discord login at all (a real Cloudflare-
-# style gate runs in front of anonymous traffic) -- so a second,
-# no-login AdaptiveCaptchaGate is used here. Passing that first check is
-# not automatically the end: a stricter second-tier behavior-only check
-# runs next, and only if *that* also looks suspicious does a final
-# Path-Trace widget show up -- a genuine double-escalation chain, not
-# just one gate.
+# style gate runs in front of anonymous traffic) -- so a second, no-login
+# `AdaptiveCaptchaGate` is used here.
+#
+# This is deliberately TWO tiers, not three: a real, honest escalation is
+# "silent check, then -- only if that looks suspicious -- one real
+# visible captcha," exactly what `AdaptiveCaptchaGate` already does
+# natively (an earlier version of this page bolted on a second *silent*
+# check between those two steps purely to have something to show for
+# "double escalation" -- that's not a serious defense, it's theater: a
+# bot that got past the first silent check would sail through an
+# identical second one for the same reason, and a real user gets an
+# extra pointless step for nothing). If the connecting IP is clean, this
+# gate shows no captcha at all; if it's blocked, it shows one real Math
+# challenge -- no manual page-JS chaining needed here at all, since this
+# is exactly the single library primitive `AdaptiveCaptchaGate` exists
+# for, the same as /join-adaptive minus the login requirement.
 # ---------------------------------------------------------------------
 
 test4_adaptive_gate = AdaptiveCaptchaGate(
@@ -919,15 +963,7 @@ test4_adaptive_gate = AdaptiveCaptchaGate(
     MathCaptchaProvider(_captcha_store),
     MemoryAdaptiveDecisionStore(),
 )
-test4_strict_gate = CaptchaGate(
-    transport, MemoryVerificationStore(), require_captcha=False, extra_checks=_behavior_checks()
-)
-test4_pathtrace_gate = CaptchaGate(
-    transport, MemoryVerificationStore(), PathTraceProvider(_captcha_store)
-)
 app.include_router(build_captcha_router(gate=test4_adaptive_gate), prefix="/test4-adaptive")
-app.include_router(build_captcha_router(gate=test4_strict_gate), prefix="/test4-strict")
-app.include_router(build_captcha_router(gate=test4_pathtrace_gate), prefix="/test4-pathtrace")
 
 
 @app.get("/test-cloudflare")
@@ -936,12 +972,6 @@ async def test_cloudflare_page() -> HTMLResponse:
     adaptive_req = await test4_adaptive_gate.create_verification(
         user_id=user_id, purpose="test4_adaptive"
     )
-    strict_req = await test4_strict_gate.create_verification(
-        user_id=user_id, purpose="test4_strict"
-    )
-    pathtrace_req = await test4_pathtrace_gate.create_verification(
-        user_id=user_id, purpose="test4_pathtrace"
-    )
     return HTMLResponse(f"""<!doctype html>
 <title>Test 4 -- kendi Cloudflare'imiz</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -949,50 +979,15 @@ async def test_cloudflare_page() -> HTMLResponse:
 padding:0 16px;background:#f2f4f5">
 <h2>Doğrulanıyor: bir insan mısın?</h2>
 <p style="font-size:.85rem;color:#555">
-Önce IP itibarına göre karar veriliyor (kara listeye kendi IP'ni eklemek için
+IP itibarına göre karar veriliyor -- kara listeye kendi IP'ni eklemek için
 <a href="/api/test/block-my-ip">/api/test/block-my-ip</a>, çıkarmak için
-<a href="/api/test/unblock-my-ip">/api/test/unblock-my-ip</a>). Bu geçse
-bile ikinci, daha katı bir davranış testi çalışır -- o da şüpheliyse üçüncü
-adım olarak çizgi-takip captcha'sı çıkar.
+<a href="/api/test/unblock-my-ip">/api/test/unblock-my-ip</a>. IP'n
+temizse bu kutu hiç captcha göstermeden geçer; kara listedeysen gerçek
+bir Math sorusu çıkar.
 </p>
-<div id="adaptive-widget" class="dwa-captcha-widget" data-token="{adaptive_req.token}"
+<div class="dwa-captcha-widget" data-token="{adaptive_req.token}"
      data-api-base="/test4-adaptive"></div>
-<div id="strict-widget-holder"></div>
-<div id="pathtrace-widget-holder"></div>
-
-<script src="/static/discord-webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
-<script>
-var ADAPTIVE_TOKEN = {adaptive_req.token!r};
-var STRICT_TOKEN = {strict_req.token!r};
-var PATHTRACE_TOKEN = {pathtrace_req.token!r};
-
-function onWidgetVerified(result) {{
-  if (result.token === ADAPTIVE_TOKEN) {{
-    if (!result.verified) return;  // widget itself already shows the failure
-    document.getElementById("adaptive-widget").insertAdjacentHTML(
-      "afterend", "<p>İlk kontrol geçti -- ikinci, daha katı kontrol çalışıyor...</p>"
-    );
-    document.getElementById("strict-widget-holder").innerHTML =
-      "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + STRICT_TOKEN +
-      "\\" data-api-base=\\"/test4-strict\\"></div>";
-    if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
-    return;
-  }}
-  if (result.token === STRICT_TOKEN) {{
-    if (result.verified) {{
-      document.getElementById("strict-widget-holder").insertAdjacentHTML(
-        "beforeend", "<p>İkinci kontrol de geçti -- insansın.</p>"
-      );
-      return;
-    }}
-    document.getElementById("pathtrace-widget-holder").innerHTML =
-      "<p>Hâlâ şüpheli -- son adım: aşağıdaki çizgiyi çiz.</p>" +
-      "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + PATHTRACE_TOKEN +
-      "\\" data-api-base=\\"/test4-pathtrace\\"></div>";
-    if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
-  }}
-}}
-</script>
+<script src="/static/discord-webapi-captcha-widget.js"></script>
 </body>""")
 
 
@@ -1018,10 +1013,10 @@ kanıtlar.</li>
 <li>Test 3 -- Discord'da <code>/giveaway-test</code> komutu: gerçek bir
 çekiliş botu gibi bir "Katıl" mesajı, doğrulanınca gerçekten katılımcı
 listesine ekler (<code>/giveaway-test-participants</code> ile kontrol et).</li>
-<li><a href="/test-cloudflare">Test 4 -- kendi Cloudflare'imiz</a>: IP'ni
-kara listeye ekleyip (<a href="/api/test/block-my-ip">block-my-ip</a>)
-"insan mısın" ekranını tetikle; geçsen bile ikinci, daha katı bir test ve
-gerekirse üçüncü bir çizgi-takip testi seni bekliyor.</li>
+<li><a href="/test-cloudflare">Test 4 -- kendi Cloudflare'imiz</a>: IP'n
+temizse sessizce geçersin; kara listeye ekleyince
+(<a href="/api/test/block-my-ip">block-my-ip</a>) "insan mısın" ekranı tek
+bir gerçek Math captcha'sı sorar.</li>
 <li>Diğer senaryolar için Discord'da <code>/join</code>, <code>/appeal</code>,
 <code>/test-join</code>, <code>/join-adaptive</code> komutlarını dene.</li>
 </ul>

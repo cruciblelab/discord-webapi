@@ -127,6 +127,26 @@ async def test_path_trace_is_one_time_use() -> None:
     assert await provider.verify(challenge.challenge_id, trace) is False
 
 
+async def test_path_trace_rejects_a_straight_shortcut_even_within_tolerance() -> None:
+    # A regression check for a real bug: with only "every sample stays
+    # within `tolerance` of the polyline" + "every vertex has a nearby
+    # sample", a near-straight diagonal between the endpoints can satisfy
+    # both, because the vertices in the middle of a wavy path can still
+    # land within `tolerance` of the straight chord depending on how the
+    # amplitude and tolerance compare -- passing without ever really
+    # tracing the wave. `PathTraceProvider`'s default amplitude (30-50px)
+    # comfortably clears its default 24px tolerance, so a dead-straight
+    # chord between the two endpoints reproduces exactly that shortcut.
+    store = MemoryCaptchaStore()
+    provider = PathTraceProvider(store)
+    challenge = await provider.issue()
+    path = challenge.params["path"]
+
+    start, end = path[0], path[-1]
+    straight_chord = json.dumps(_sample_along([start, end], per_segment=20))
+    assert await provider.verify(challenge.challenge_id, straight_chord) is False
+
+
 async def test_path_trace_rejects_an_oversized_payload() -> None:
     store = MemoryCaptchaStore()
     provider = PathTraceProvider(store)
