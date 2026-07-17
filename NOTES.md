@@ -1,5 +1,113 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## PageGuard: Cloudflare deseni artık HERHANGİ bir sayfayı koruyabiliyor (bu oturum, devam)
+
+Path-Trace kinematik düzeltmesinden sonra kullanıcı bambaşka, çok daha
+büyük bir isteğe geçti (birebir özet, yazım hatalarıyla): "altyapı olarak
+verelim, mesela cloudflare gibi her sayfaya yazar ya da gerekli
+sayfalara veya isterse kendi admin paneli açar; o sayfaya girişte
+otomatik ip itibarı, tarayıcı dil bilgisi kontrolü olur, kullanıcı
+görmez bile; girerken ip itibarı kötüyse direkt captchaya yollar; doğru
+bilirse belli süre kaydeder; cihazın ip değişme sıklığı -- bir ip'den
+bağlandı sonra başka ip'den bağlanırsa hemen captcha; discord
+yetkilendirmesinden önce de captcha ekleme olsun, bunu da test edelim;
+yeni sayfada zaten yetkilendirdiyse çıkış yapma butonu olsun; captcha'yı
+biz daha tam kapsamlı seçelim test sağlam olsun; tabii ki isteğe bağlı,
+biz sunuyoruz, isterse kullanır isterse kendi mekanizmasını kullanır."
+
+**Mimari karar öncesi onay istedim** (proje genelinde ağır mimari
+kararlarda izlenen desen -- `AdaptiveCaptchaGate`'in kendisi de aynı
+şekilde onaylanıp yapılmıştı): iki soru sordum --
+1. IP değişince tekrar captcha istemek için "hangi IP'den geldi" bilgisi
+   nerede tutulsun -- mevcut `TrustStore`'u genişletmek mi, tamamen yeni
+   bir sistem mi. Kullanıcı: mevcut `TrustStore`'u genişlet (önerdiğim
+   seçenek).
+2. Giriş yapmamış/anonim ziyaretçiyi (IP-değişim takibi buna bağlı)
+   nasıl tanıyalım -- yeni bir çerez mi, sadece IP'ye mi güvenelim.
+   Kullanıcı: yeni, ayrı bir çerez (önerdiğim seçenek).
+
+**`TrustStore` genişletmesi**: `is_trusted(user_id, *, ip=None)` /
+`trust(user_id, *, ttl, ip=None)` -- `ip=None` eski davranışı tamamen
+koruyor (geriye uyumlu, mevcut tüm testler değişmeden geçti).
+`trust(..., ip=X)` hangi IP'nin güveni kazandığını kaydediyor;
+`is_trusted(..., ip=Y)` -- SADECE çağıran isterse (`AdaptiveCaptchaGate
+(bind_trust_to_ip=True)`) -- kayıtlı IP'nin hâlâ eşleştiğini şart
+koşuyor. `MemoryTrustStore` artık `dict[user_id, (expires_at,
+bound_ip)]`; `SQLTrustStore`'a `bound_ip` kolonu eklendi.
+`AdaptiveCaptchaGate`'e `bind_trust_to_ip: bool = False` + yeni public
+`is_currently_trusted(user_id, *, client_ip=None)` metodu eklendi (bir
+token mint etmeden "şu an güvenilir mi" sorusuna cevap veriyor --
+`PageGuard`'ın token oluşturmadan önce ihtiyaç duyduğu tam olarak bu).
+
+**Yeni dosya: `discord_webapi/captcha/pageguard.py` -- `PageGuard`.**
+`AdaptiveCaptchaGate` TEK bir doğrulama linkini koruyor (bir bot
+komutunun mint ettiği token); `PageGuard` bunu HERHANGİ bir route'un
+önüne koyabilen genel bir katmana genişletiyor. Akış: (1) ziyaretçi
+kimliği -- giriş yapılmışsa gerçek Discord `user_id`, yoksa rastgele
+httpOnly bir çerezdeki değer (Discord OAuth'tan ÖNCE çalışabilmesinin
+sebebi -- o noktada henüz gerçek bir `user_id` yok); (2) zaten
+güvenilirse (ve IP-bağlıysa hâlâ aynı IP'den geliyorsa) sayfa hiçbir şey
+göstermeden yükleniyor; (3) değilse IP itibarı + opsiyonel
+`extra_suspicious` sinyali kontrol ediliyor -- temizse sessizce geç,
+şüpheliyse taze bir doğrulama linkine yönlendir.
+
+**Gerçek bir FastAPI tuzağı keşfedip tasarımı buna göre yaptım (kod
+yazmadan önce, testte değil).** İlk aklıma gelen tasarım, enjekte edilen
+bir `Response` parametresine cookie yazıp endpoint'in kendi
+`HTMLResponse`'unu döndürmesiydi -- ama FastAPI'de bu SESSİZCE İŞE
+YARAMIYOR: enjekte edilen `Response` nesnesinin header/cookie'leri
+SADECE endpoint kendi Response nesnesini DÖNMEDİĞİNDE (örn. bir dict/
+model dönüp FastAPI kendi response'unu inşa ettiğinde) uygulanıyor;
+endpoint açıkça `return HTMLResponse(...)` yaparsa enjekte edilen
+nesnenin cookie'leri YOK SAYILIYOR. Bu projedeki HER sayfa kendi
+`HTMLResponse`'unu döndürdüğü için bu tuzağa düşerdim. Bunun yerine
+`require_human()` cookie'yi `str | None` olarak GERİ DÖNDÜRÜYOR,
+çağıranın kendi response'una uygulaması gerekiyor (dokümante edildi).
+Bu tasarım kararını YAZDIKTAN SONRA test yazarken de aynı hatayı YAPIP
+(test route'unda cookie'yi response'a uygulamayı unutup) 2 test
+başarısız oldu -- kendi belgelediğim tuzağa test kodumda düştüm, hemen
+düzelttim. İyi bir hatırlatma: dokümante etmek, yazarken hataya
+düşmeyeceğin anlamına gelmiyor.
+
+**`missing_accept_language(request)`**: opsiyonel `extra_suspicious`
+fonksiyonu -- "tarayıcı dil bilgisi" isteğinin karşılığı. Gerçek
+tarayıcılar neredeyse her zaman bir `Accept-Language` başlığı gönderir;
+eksikliği zayıf ama dürüst, JS gerektirmeyen bir sinyal, IP itibarıyla
+BİRLİKTE kullanılıyor (tek başına değil -- projedeki her sezgisel gibi).
+
+**`_pseudo_user_id(raw)`**: anonim çerez değerini kararlı bir 64-bit
+tamsayıya çeviriyor (sha256'nın ilk 8 baytı) -- `VerificationRequest.
+user_id: int` modelini `int | str`'ye gevşetmeden anonim ziyaretçilerin
+mevcut `AdaptiveCaptchaGate`/`TrustStore` altyapısıyla çalışmasını
+sağlıyor, izole bir çözüm.
+
+**`examples/captcha_gate_bot`'a Test 5 (`/test-full-guard`) ve Test 6
+(`/test-secure-login`) eklendi.** İkisi de aynı `full_guard_gate`
+(`PathTraceProvider` -- "biz daha tam kapsamlı seçelim" isteğine göre
+Math yerine en kapsamlı captcha türü seçildi -- + `_behavior_checks()` +
+`bind_trust_to_ip=True`, aynı paylaşılan `blocklist`) + `PageGuard`
+kombinasyonunu kullanıyor. `/test-secure-login`, "Discord ile giriş
+yap" linkinin KENDİSİNDEN önce guard'ı çalıştırarak "yetkilendirmeden
+önce captcha" isteğini karşılıyor; zaten giriş yapmışsa çıkış yap butonu
+var (`/auth/discord/logout` POST-only olduğu için `fetch()` ile).
+
+**Doğrulama** (`TestClient`, `client=(ip, port)` ile farklı IP'ler
+simüle edilerek): temiz IP sessizce 200 dönüyor, ziyaretçi çerezi
+sadece ilk seferde basılıyor, ikinci ziyarette tekrar basılmıyor; IP
+kara listeye eklenince 307 ile gerçek bir Path-Trace linkine
+yönlendiriliyor; GERÇEK geometrik+kinematik olarak sadık bir iz
+(`good_signals` + doğal düzensiz zamanlama) çözülünce aynı ziyaretçi+IP
+sessizce geçiyor; FARKLI bir ziyaretçi çerezi aynı (hâlâ kara listede)
+IP'den yine yönlendiriliyor; AYNI ziyaretçi çerezi FARKLI (o da kara
+listede) bir IP'den bağlanınca yine yönlendiriliyor -- bu son ikisi
+`bind_trust_to_ip`'in gerçekten çalıştığını (fresh-visitor VE IP-change
+ayrı ayrı) kanıtlıyor. `/test-secure-login`: temiz IP login linkini
+hemen gösteriyor, kara listeli IP o link render edilmeden ÖNCE
+captcha'ya yönlendiriliyor. Entegrasyon testleri
+(`tests/integration/test_captcha_pageguard.py`, 6 test) + adaptive/store
+seviyesinde IP-bağlama testleri (4 yeni test) eklendi. `ruff`/`mypy`
+temiz, `pytest` 716 passed (bilinen Postgres testi hariç).
+
 ## Path-Trace: hız/zamanlama kinematiği + şüpheli-ise-daha-sıkı-tolerans (bu oturum, devam)
 
 Kullanıcının canvas-ölçek düzeltmesinin hemen ardından gelen isteği

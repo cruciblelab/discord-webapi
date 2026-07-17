@@ -308,6 +308,7 @@ class TrustRow(Base):
 
     user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     trusted_until: Mapped[datetime] = mapped_column(_TIMESTAMP)
+    bound_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class SQLTrustStore:
@@ -322,7 +323,7 @@ class SQLTrustStore:
         async with self._engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
-    async def is_trusted(self, user_id: int) -> bool:
+    async def is_trusted(self, user_id: int, *, ip: str | None = None) -> bool:
         async with self._sessionmaker() as db:
             row = await db.get(TrustRow, user_id)
             if row is None:
@@ -331,14 +332,17 @@ class SQLTrustStore:
                 await db.delete(row)
                 await db.commit()
                 return False
+            if ip is not None and row.bound_ip is not None and row.bound_ip != ip:
+                return False
             return True
 
-    async def trust(self, user_id: int, *, ttl: timedelta) -> None:
+    async def trust(self, user_id: int, *, ttl: timedelta, ip: str | None = None) -> None:
         async with self._sessionmaker() as db:
             row = await db.get(TrustRow, user_id)
             trusted_until = datetime.now(UTC) + ttl
             if row is None:
-                db.add(TrustRow(user_id=user_id, trusted_until=trusted_until))
+                db.add(TrustRow(user_id=user_id, trusted_until=trusted_until, bound_ip=ip))
             else:
                 row.trusted_until = trusted_until
+                row.bound_ip = ip
             await db.commit()

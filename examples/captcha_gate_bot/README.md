@@ -205,7 +205,10 @@ linking all of them.
    was cut: a second silent check a bot already passed once tells you
    nothing new, it's not a real additional defense, just an extra
    pointless step for a genuine user.
-5. **`/test-index`** -- links all of the above (plus the Discord-side
+5. **`/test-full-guard`** and **`/test-secure-login`** -- see
+   `discord_webapi.captcha.pageguard.PageGuard` below, the real
+   reusable infrastructure version of `/test-cloudflare`.
+6. **`/test-index`** -- links all of the above (plus the Discord-side
    commands) with a one-line description of each.
 
 Verified directly with `TestClient` (no live Discord connection needed
@@ -215,6 +218,66 @@ for any of these five, since none require login): page 1 and 2's shared
 (`failed_check: "no-webdriver"`); `/api/test/block-my-ip` genuinely
 flips what `/test-cloudflare`'s first widget requires, same as it does
 for `/join-adaptive`.
+
+## `PageGuard` -- Cloudflare in front of a whole page, not one link (`/test-full-guard`, `/test-secure-login`)
+
+`AdaptiveCaptchaGate` (Scenario 5 above, `/test-cloudflare`) protects one
+already-minted verification link. `discord_webapi.captcha.pageguard.
+PageGuard` is the same IP-reputation-driven escalation applied at
+PAGE-LOAD time instead -- put it in front of *any* route (whatever your
+own admin panel decides needs it), including a page that comes *before*
+Discord OAuth login even starts, which is exactly what a real request
+from testing asked for: "cloudflare gibi tam kapasite geniş bir
+altyapıda verelim... discord yetkilendirmesinden önce de captcha."
+
+On every guarded request:
+
+1. The visitor is identified -- the signed-in Discord account if there
+   is one, otherwise a random value in an httpOnly cookie (minted
+   invisibly on first visit, no page shown for it).
+2. If already trusted -- and, since this demo's guard sets
+   `bind_trust_to_ip=True` on its `AdaptiveCaptchaGate`, still connecting
+   from the *same* IP that earned that trust (a real request from
+   testing: "ip değişme sıklığı... başka ipden bağlanırsa hemen
+   captcha") -- the page loads with nothing shown at all.
+3. Otherwise: IP reputation is checked, plus one extra, honest,
+   zero-JS server-side signal this demo wires up --
+   `pageguard.missing_accept_language` (real browsers virtually always
+   send an `Accept-Language` header; its absence is a mild, non-JS bot
+   signal, combined with IP reputation, never relied on alone -- the
+   "tarayıcı dil bilgisi" signal asked for in testing). Clean -> loads
+   silently, same as a trusted visitor. Suspicious -> redirected to a
+   real Path-Trace challenge (the most comprehensive captcha in this
+   project, chosen deliberately for "make the test solid" over the
+   plain Math captcha) instead of ever seeing the page; solving it
+   redirects straight back to where you started.
+
+`/test-secure-login` applies the exact same guard to a page that offers
+nothing but a "log in with Discord" link (or a logout button, if
+already signed in) -- demonstrating the guard running *before* any
+Discord OAuth interaction, not after.
+
+Same "use it or don't" rule as everywhere else: `PageGuard` is a small,
+optional, composable class, not wired into `DiscordWebAPI.install()` or
+any route automatically -- every guarded route in this file calls
+`guard.require_human()` itself, and nothing stops you from writing your
+own equivalent, using reCAPTCHA/Turnstile instead, or skipping page-level
+guarding entirely.
+
+Verified directly with `TestClient` (`client=(ip, port)` to simulate
+different connecting IPs, no live Discord needed): a clean IP loads the
+page with `200` and no redirect, minting a visitor cookie only once;
+blocking the IP redirects (`307`) to a real Path-Trace challenge instead
+of showing the page; solving it (a real geometrically- and
+kinematically-faithful trace, `client_ip` matching) lets the *same*
+visitor+IP through silently afterward; a *different* visitor cookie on
+the *same* still-blocked IP is redirected again; and the *same* visitor
+cookie connecting from a *different* (also blocked) IP is redirected
+again too -- proving `bind_trust_to_ip` actually forces a re-check on IP
+change, not just on a fresh visitor. `/test-secure-login` was verified
+the same way: a clean IP sees the Discord login link immediately, a
+blocked IP is redirected to the captcha *before* that link is ever
+rendered.
 
 ## Showing who you're signed in as, and catching a forwarded link early
 

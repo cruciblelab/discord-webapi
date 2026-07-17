@@ -339,6 +339,17 @@ async def test_sql_trust_store_records_and_checks(engine: AsyncEngine) -> None:
     assert await store.is_trusted(100) is True
 
 
+async def test_sql_trust_store_ip_binding(engine: AsyncEngine) -> None:
+    store = SQLTrustStore(engine)
+    await store.create_all()
+
+    await store.trust(100, ttl=timedelta(hours=1), ip="1.2.3.4")
+
+    assert await store.is_trusted(100, ip="1.2.3.4") is True
+    assert await store.is_trusted(100, ip="6.6.6.6") is False
+    assert await store.is_trusted(100) is True  # no ip check requested -- unaffected
+
+
 async def test_sql_trust_store_expires(engine: AsyncEngine) -> None:
     store = SQLTrustStore(engine)
     await store.create_all()

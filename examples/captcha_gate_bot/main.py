@@ -86,17 +86,34 @@ general pattern for physical-testing an example bot):
                                      real Math captcha -- exactly the two
                                      tiers AdaptiveCaptchaGate does on its
                                      own, no extra chaining
+    /test-full-guard              -> discord_webapi.captcha.pageguard.
+                                     PageGuard -- the real, reusable
+                                     "put this in front of ANY page"
+                                     infrastructure (not one minted
+                                     link): auto IP-reputation + missing-
+                                     Accept-Language check, no captcha
+                                     shown at all if clean, a real
+                                     Path-Trace challenge if not, and
+                                     trust that's bound to the connecting
+                                     IP -- change IP and you're asked
+                                     again
+    /test-secure-login            -> the same PageGuard applied BEFORE
+                                     the "log in with Discord" link is
+                                     even shown -- a captcha ahead of
+                                     OAuth login itself, with a logout
+                                     button if you're already signed in
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
+from urllib.parse import quote
 
 import discord
 from discord.ext import commands
 from fastapi import Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from discord_webapi import DiscordWebAPI
 from discord_webapi.auth.dependencies import get_current_user_optional
@@ -111,6 +128,7 @@ from discord_webapi.captcha.api import build_captcha_router
 from discord_webapi.captcha.events import CaptchaVerified
 from discord_webapi.captcha.gate import CaptchaGate
 from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
+from discord_webapi.captcha.pageguard import PageGuard, PageGuardRedirect, missing_accept_language
 from discord_webapi.captcha.providers.math_captcha import MathCaptchaProvider
 from discord_webapi.captcha.providers.path_trace import PathTraceProvider
 from discord_webapi.captcha.providers.proof_of_work import ProofOfWorkProvider
@@ -1136,7 +1154,206 @@ bir Math sorusu çıkar.
 
 
 # ---------------------------------------------------------------------
-# Test page 5 -- an index/hub page linking every test scenario in this
+# Test 5 -- discord_webapi.captcha.pageguard.PageGuard: the real,
+# reusable INFRASTRUCTURE version of Test 4. Test 4 protects one single
+# minted verification link; PageGuard protects an ARBITRARY route --
+# "put this in front of whichever pages you (or your own admin panel)
+# decide need it," the actual "Cloudflare in front of the whole site"
+# request from testing. It's still entirely opt-in -- nothing here is
+# wired into DiscordWebAPI.install() or any other page in this file;
+# every route below explicitly calls guard.require_human() itself.
+#
+# On every request to a guarded page:
+#   1. The visitor is identified -- the signed-in Discord account if
+#      there is one, otherwise a random value in an httpOnly cookie
+#      (minted on first visit, invisibly, no page shown for it).
+#   2. If already trusted (and, since bind_trust_to_ip=True below, still
+#      connecting from the SAME IP that earned that trust -- a real
+#      request from testing: "ip değişme sıklığı... başka ipden
+#      bağlanırsa hemen captcha"), the page loads with nothing shown at
+#      all.
+#   3. Otherwise: IP reputation is checked, PLUS one extra, honest,
+#      zero-JS server-side signal (a missing Accept-Language header --
+#      real browsers virtually always send one; the "tarayıcı dil
+#      bilgisi" signal asked for in testing). Clean -> loads silently,
+#      same as a trusted visitor. Suspicious -> redirected to a REAL
+#      Path-Trace challenge (the most comprehensive one this project
+#      has, chosen deliberately for this "make the test solid" scenario
+#      over the plain Math captcha) instead of ever seeing the page.
+# ---------------------------------------------------------------------
+
+full_guard_gate = AdaptiveCaptchaGate(
+    transport,
+    MemoryVerificationStore(),
+    blocklist,  # the SAME shared blocklist /join-adaptive and /test-cloudflare use
+    PathTraceProvider(_captcha_store),
+    MemoryAdaptiveDecisionStore(),
+    extra_checks=_behavior_checks(),
+    trust_store=MemoryTrustStore(),
+    bind_trust_to_ip=True,
+)
+app.include_router(build_captcha_router(gate=full_guard_gate), prefix="/full-guard")
+
+
+def _full_guard_verify_url(token: str, return_to: str) -> str:
+    return f"{_base_url}/verify/full-guard/{token}?return_to={quote(return_to, safe='')}"
+
+
+full_guard = PageGuard(
+    full_guard_gate,
+    verify_url=_full_guard_verify_url,
+    extra_suspicious=missing_accept_language,
+)
+
+
+@app.exception_handler(PageGuardRedirect)
+async def _page_guard_redirect(request: Request, exc: PageGuardRedirect) -> RedirectResponse:
+    resp = RedirectResponse(exc.location, status_code=307)
+    if exc.new_cookie_value is not None:
+        resp.set_cookie(
+            exc.cookie_name,
+            exc.new_cookie_value,
+            httponly=True,
+            samesite="lax",
+            max_age=exc.cookie_max_age,
+        )
+    return resp
+
+
+@app.get("/verify/full-guard/{token}")
+async def verify_full_guard_page(token: str, return_to: str = "/test-full-guard") -> HTMLResponse:
+    return HTMLResponse(f"""<!doctype html>
+<title>Doğrulanıyor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 16px">
+<h2>Doğrulanıyor: bir insan mısın?</h2>
+<p style="font-size:.85rem;color:#666">Şüpheli bulundun -- lütfen aşağıdaki
+çizgiyi çiz. Geçince otomatik olarak geldiğin sayfaya geri döneceksin.</p>
+<div class="dwa-captcha-widget" data-token="{token}" data-api-base="/full-guard"></div>
+<script src="/static/discord-webapi-captcha-widget.js" data-callback="onVerified"></script>
+<script>
+function onVerified(result) {{
+  if (result.verified) {{
+    window.location.href = {return_to!r};
+  }} else {{
+    document.body.insertAdjacentHTML("beforeend",
+      "<p>Doğrulanamadı: " + (result.detail || result.failed_check) + "</p>");
+  }}
+}}
+</script>
+</body>""")
+
+
+@app.get("/test-full-guard")
+async def test_full_guard_page(
+    request: Request, user: DiscordUser | None = Depends(get_current_user_optional)
+) -> HTMLResponse:
+    new_cookie_value = await full_guard.require_human(
+        request, authenticated_user_id=user.id if user is not None else None
+    )
+    who = (
+        f"<p>Giriş yaptın: <strong>{user.username}</strong>.</p>"
+        '<p><button onclick="logout()">Çıkış yap</button></p>'
+        if user is not None
+        else '<p><a href="/auth/discord/login" target="_blank" rel="noopener">'
+        "Discord ile giriş yap</a></p>"
+    )
+    resp = HTMLResponse(f"""<!doctype html>
+<title>Test 5 -- PageGuard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:460px;margin:40px auto;padding:0 16px">
+<h2>Bu sayfaya ulaştıysan zaten insansın</h2>
+<p style="font-size:.85rem;color:#666">
+Bu sayfayı yüklemek, IP itibarın temizse (ve tarayıcın normal bir
+<code>Accept-Language</code> başlığı gönderiyorsa) hiçbir captcha
+gerektirmedi -- kontrol arka planda, görünmeden yapıldı. IP'ni kara
+listeye eklersen (<a href="/api/test/block-my-ip">block-my-ip</a>) bu
+sayfaya BİR DAHA GİRERKEN gerçek bir çizgi-takip captcha'sına
+yönlendirilirsin; çözünce buraya otomatik dönersin ve bir süre tekrar
+sorulmaz -- ama SADECE bu IP'den. Farklı bir IP'den gelirsen (gerçek
+hayatta cihaz/ağ değiştirmek gibi) güven hiç geçerli olmaz, tekrar
+sorulursun.
+</p>
+{who}
+<script>
+async function logout() {{
+  await fetch("/auth/discord/logout", {{ method: "POST" }});
+  location.reload();
+}}
+</script>
+</body>""")
+    if new_cookie_value is not None:
+        resp.set_cookie(
+            full_guard.cookie_name,
+            new_cookie_value,
+            httponly=True,
+            samesite="lax",
+            max_age=full_guard.cookie_max_age,
+        )
+    return resp
+
+
+# ---------------------------------------------------------------------
+# Test 6 -- the same PageGuard, but applied BEFORE Discord OAuth login
+# even starts, not after. A real request from testing: "discord
+# yetkilendirmesinden önce de captcha ekleme olsun bunu da test edelim."
+# Visiting this page at all (whether you end up clicking "log in" or
+# you're already logged in and just want to log out) goes through the
+# same guard first -- there is no Discord `user_id` yet for a fresh
+# anonymous visitor, which is exactly the case PageGuard's cookie-based
+# visitor identity exists for.
+# ---------------------------------------------------------------------
+
+
+@app.get("/test-secure-login")
+async def test_secure_login_page(
+    request: Request, user: DiscordUser | None = Depends(get_current_user_optional)
+) -> HTMLResponse:
+    new_cookie_value = await full_guard.require_human(
+        request, authenticated_user_id=user.id if user is not None else None
+    )
+    body = (
+        f"<p>Zaten giriş yaptın: <strong>{user.username}</strong>.</p>"
+        '<p><button onclick="logout()">Çıkış yap</button></p>'
+        if user is not None
+        else "<p>Buraya kadar ulaştın demek ki captcha kontrolünü (varsa) "
+        "geçtin -- şimdi Discord ile giriş yapabilirsin.</p>"
+        '<p><a href="/auth/discord/login" target="_blank" rel="noopener">'
+        "Discord ile giriş yap</a></p>"
+    )
+    resp = HTMLResponse(f"""<!doctype html>
+<title>Test 6 -- girişten önce captcha</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:460px;margin:40px auto;padding:0 16px">
+<h2>Girişten önce insan mısın kontrolü</h2>
+<p style="font-size:.85rem;color:#666">
+Bu sayfa "Discord ile giriş yap" linkini göstermeden ÖNCE aynı
+PageGuard'ı çalıştırıyor -- IP'n şüpheliyse Discord'a hiç ulaşmadan
+önce bir captcha çözmen isteniyor. IP'ni kara listeye ekleyip
+(<a href="/api/test/block-my-ip">block-my-ip</a>) bu sayfayı yeniden
+yükle.
+</p>
+{body}
+<script>
+async function logout() {{
+  await fetch("/auth/discord/logout", {{ method: "POST" }});
+  location.reload();
+}}
+</script>
+</body>""")
+    if new_cookie_value is not None:
+        resp.set_cookie(
+            full_guard.cookie_name,
+            new_cookie_value,
+            httponly=True,
+            samesite="lax",
+            max_age=full_guard.cookie_max_age,
+        )
+    return resp
+
+
+# ---------------------------------------------------------------------
+# Test page 7 -- an index/hub page linking every test scenario in this
 # file together, so you don't have to remember every URL/command.
 # ---------------------------------------------------------------------
 
@@ -1161,6 +1378,14 @@ listesine ekler (<code>/giveaway-test-participants</code> ile kontrol et).</li>
 temizse sessizce geçersin; kara listeye ekleyince
 (<a href="/api/test/block-my-ip">block-my-ip</a>) "insan mısın" ekranı tek
 bir gerçek Math captcha'sı sorar.</li>
+<li><a href="/test-full-guard">Test 5 -- gerçek altyapı: PageGuard</a>:
+Test 4'ün tek bir link'i değil, HERHANGİ bir sayfayı koruyan genel
+sürümü -- IP itibarı + tarayıcı dil bilgisi otomatik kontrol edilir,
+temizse hiçbir şey görmezsin, şüpheliyse çizgi-takip captcha'sına
+yönlendirilirsin, IP değişirse güven sıfırlanır.</li>
+<li><a href="/test-secure-login">Test 6 -- Discord girişinden önce
+captcha</a>: "Discord ile giriş yap" linkine tıklamadan önce bile aynı
+PageGuard devreye girer; zaten giriş yaptıysan çıkış yap butonu var.</li>
 <li>Diğer senaryolar için Discord'da <code>/join</code>, <code>/appeal</code>,
 <code>/test-compare-captchas</code> (gerçek katılım değil, sadece
 karşılaştırma), <code>/join-adaptive</code> komutlarını dene.</li>

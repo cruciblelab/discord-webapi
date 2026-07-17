@@ -166,6 +166,55 @@ async def test_trust_expires_after_ttl() -> None:
     assert await trust_store.is_trusted(100) is False
 
 
+async def test_bind_trust_to_ip_requires_the_same_connecting_ip() -> None:
+    """A real request from testing: "bir IP'den bağlandı sonra başka
+    IP'den bağlanırsa hemen captcha" -- with bind_trust_to_ip=True, trust
+    earned from one IP must not carry over to a different one."""
+    trust_store = MemoryTrustStore()
+    gate = _make_gate(trust_store=trust_store, bind_trust_to_ip=True)
+
+    request1 = await gate.create_verification(user_id=100, purpose="signup")
+    info1 = await gate.get_info(request1.token, client_ip="1.2.3.4")
+    assert info1 is not None and info1["requires_captcha"] is True
+    store: MemoryCaptchaStore = gate.escalation_provider.store  # type: ignore[union-attr]
+    pending1 = await store.get(info1["challenge"].challenge_id)
+    assert pending1 is not None
+    await gate.verify(request1.token, pending1.answer, client_ip="1.2.3.4")
+    assert await gate.is_currently_trusted(100, client_ip="1.2.3.4") is True
+
+    # Same account, but the connection now comes from a DIFFERENT
+    # (also-suspicious) IP -- trust earned on 1.2.3.4 must not carry
+    # over, even though the account itself hasn't changed.
+    assert await gate.is_currently_trusted(100, client_ip="6.6.6.6") is False
+    request2 = await gate.create_verification(user_id=100, purpose="signup")
+    blocklist: StaticBlocklistReputationChecker = gate.reputation  # type: ignore[assignment]
+    blocklist.block("6.6.6.6")
+    info2 = await gate.get_info(request2.token, client_ip="6.6.6.6")
+    assert info2 is not None and info2["requires_captcha"] is True
+
+
+async def test_without_bind_trust_to_ip_trust_follows_the_account_anywhere() -> None:
+    """Default behavior (bind_trust_to_ip=False, the pre-existing
+    contract) is unchanged: trust earned on one IP still applies from a
+    different one."""
+    trust_store = MemoryTrustStore()
+    gate = _make_gate(trust_store=trust_store)  # bind_trust_to_ip defaults to False
+
+    request1 = await gate.create_verification(user_id=100, purpose="signup")
+    info1 = await gate.get_info(request1.token, client_ip="1.2.3.4")
+    store: MemoryCaptchaStore = gate.escalation_provider.store  # type: ignore[union-attr]
+    pending1 = await store.get(info1["challenge"].challenge_id)  # type: ignore[union-attr]
+    assert pending1 is not None
+    await gate.verify(request1.token, pending1.answer, client_ip="1.2.3.4")
+
+    assert await gate.is_currently_trusted(100, client_ip="6.6.6.6") is True
+
+
+async def test_is_currently_trusted_false_without_a_trust_store() -> None:
+    gate = _make_gate()  # no trust_store passed
+    assert await gate.is_currently_trusted(100, client_ip="1.2.3.4") is False
+
+
 async def test_verify_of_unknown_token_fails_gracefully() -> None:
     gate = _make_gate()
 

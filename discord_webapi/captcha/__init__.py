@@ -41,6 +41,13 @@ from discord_webapi.captcha.events import EVENT_TYPE_CAPTCHA_VERIFIED, CaptchaVe
 from discord_webapi.captcha.gate import CaptchaGate, CheckResult
 from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
+from discord_webapi.captcha.pageguard import (
+    DEFAULT_COOKIE_MAX_AGE,
+    DEFAULT_COOKIE_NAME,
+    PageGuard,
+    PageGuardRedirect,
+    missing_accept_language,
+)
 from discord_webapi.captcha.providers.hcaptcha import HCaptchaProvider
 from discord_webapi.captcha.providers.math_captcha import MathCaptchaProvider
 from discord_webapi.captcha.providers.path_trace import PathTraceProvider
@@ -76,6 +83,8 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "DEFAULT_COOKIE_MAX_AGE",
+    "DEFAULT_COOKIE_NAME",
     "DEFAULT_WIDGET_MOUNT_PATH",
     "EVENT_TYPE_CAPTCHA_VERIFIED",
     "AccountMatchCheck",
@@ -98,6 +107,8 @@ __all__ = [
     "MemoryTrajectoryFingerprintStore",
     "MemoryTrustStore",
     "MemoryVerificationStore",
+    "PageGuard",
+    "PageGuardRedirect",
     "PathTraceProvider",
     "PendingCaptcha",
     "PredicateCheck",
@@ -123,6 +134,7 @@ __all__ = [
     "build_captcha_widget_router",
     "default_behavior_heuristics",
     "fingerprint_trajectory",
+    "missing_accept_language",
     "reject_webdriver",
     "require_min_interaction_ms",
     "require_signal_flag",

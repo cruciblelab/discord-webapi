@@ -567,6 +567,51 @@ geçmişiniz) de implemente edebilirsiniz. Somut, çalışan bir örnek:
 /api/test/block-my-ip` ile kendi IP'nizi engelleyip escalation'ı canlı
 izleyebiliyorsunuz.
 
+**`PageGuard` -- aynı Cloudflare deseni ama TEK BİR link için değil,
+HERHANGİ bir sayfa için (`discord_webapi.captcha.pageguard`, opt-in):**
+`AdaptiveCaptchaGate` tek bir doğrulama linkini koruyor; `PageGuard` bunu
+sayfa-yükleme anında, keyfi bir route'un önüne koyabilecek şekilde
+genelleştiriyor -- "cloudflare gibi tam kapasite geniş bir altyapı,
+Discord yetkilendirmesinden önce de captcha ekleyebilelim" isteğinin
+karşılığı:
+
+```python
+from discord_webapi.captcha.pageguard import PageGuard, PageGuardRedirect, missing_accept_language
+
+guard = PageGuard(
+    adaptive_gate,  # bir AdaptiveCaptchaGate -- bind_trust_to_ip=True ile IP değişince tekrar sorar
+    verify_url=lambda token, return_to: f"/verify/{token}?return_to={return_to}",
+    extra_suspicious=missing_accept_language,  # opsiyonel, ek bir sinyal
+)
+
+@app.exception_handler(PageGuardRedirect)
+async def _redirect(request, exc):
+    resp = RedirectResponse(exc.location)
+    if exc.new_cookie_value is not None:
+        resp.set_cookie(exc.cookie_name, exc.new_cookie_value, httponly=True, samesite="lax")
+    return resp
+
+@app.get("/protected")
+async def protected(request: Request):
+    new_cookie = await guard.require_human(request)  # şüpheliyse burada redirect fırlatır
+    resp = HTMLResponse("...")
+    if new_cookie:
+        resp.set_cookie(guard.cookie_name, new_cookie, httponly=True, samesite="lax")
+    return resp
+```
+
+Giriş yapılmamış (Discord OAuth'tan ÖNCE) ziyaretçiler için bile
+çalışır -- rastgele, httpOnly bir çerezle "bu ziyaretçi" kimliği
+tutuluyor (giriş yapılmışsa gerçek Discord `user_id`'si kullanılıyor).
+`AdaptiveCaptchaGate.bind_trust_to_ip=True` ile birlikte kullanılırsa,
+bir kez doğrulanan bir ziyaretçi/hesap FARKLI bir IP'den bağlanınca
+güven geçerli olmuyor, tekrar captcha isteniyor ("ip değişme sıklığı"
+isteğinin karşılığı) -- `TrustStore.trust()`/`is_trusted()` artık
+opsiyonel bir `ip=` parametresi alıyor (geriye uyumlu, `ip=None` eski
+davranışı korur). Somut, çalışan örnek: `examples/captcha_gate_bot`'taki
+`/test-full-guard` (herhangi bir sayfayı koruma) ve `/test-secure-login`
+(Discord girişinden önce koruma).
+
 **Katman içi granülerlik -- tek tek özellik açıp kapatmak da mümkün, sadece
 kat seviyesinde değil.** Yukarıdaki "bir check'i tamamen kullan/kullanma"
 seçiminin bir seviye altında: her katmanın kendi içinde de neyi

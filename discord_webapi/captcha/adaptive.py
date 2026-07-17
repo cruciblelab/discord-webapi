@@ -96,30 +96,42 @@ class TrustStore(Protocol):
     submitted device signal) -- deliberately the same trust anchor
     `AccountMatchCheck` uses elsewhere in this package, not a fingerprint
     that could be spoofed the way `captcha.scoring`'s heuristics can be.
-    """
 
-    async def is_trusted(self, user_id: int) -> bool: ...
+    `ip` is optional and does two independent things depending on which
+    call it's passed to: `trust(..., ip=...)` records which IP earned the
+    trust; `is_trusted(..., ip=...)` -- only when the *caller* opts into
+    IP-binding (`AdaptiveCaptchaGate(bind_trust_to_ip=True)`) -- requires
+    that recorded IP to still match, so a session that was cleared from
+    one IP doesn't silently carry over to a different one (a real request
+    from testing: "bir IP'den bağlandı sonra başka IP'den bağlanırsa
+    hemen captcha"). `ip=None` on either call preserves the original,
+    IP-agnostic behavior -- trust follows the account everywhere."""
 
-    async def trust(self, user_id: int, *, ttl: timedelta) -> None: ...
+    async def is_trusted(self, user_id: int, *, ip: str | None = None) -> bool: ...
+
+    async def trust(self, user_id: int, *, ttl: timedelta, ip: str | None = None) -> None: ...
 
 
 class MemoryTrustStore:
     """Dict-backed `TrustStore`. Zero infrastructure -- the default."""
 
     def __init__(self) -> None:
-        self._trusted_until: dict[int, datetime] = {}
+        self._trusted: dict[int, tuple[datetime, str | None]] = {}
 
-    async def is_trusted(self, user_id: int) -> bool:
-        expires_at = self._trusted_until.get(user_id)
-        if expires_at is None:
+    async def is_trusted(self, user_id: int, *, ip: str | None = None) -> bool:
+        entry = self._trusted.get(user_id)
+        if entry is None:
             return False
+        expires_at, bound_ip = entry
         if datetime.now(UTC) > expires_at:
-            del self._trusted_until[user_id]
+            del self._trusted[user_id]
+            return False
+        if ip is not None and bound_ip is not None and bound_ip != ip:
             return False
         return True
 
-    async def trust(self, user_id: int, *, ttl: timedelta) -> None:
-        self._trusted_until[user_id] = datetime.now(UTC) + ttl
+    async def trust(self, user_id: int, *, ttl: timedelta, ip: str | None = None) -> None:
+        self._trusted[user_id] = (datetime.now(UTC) + ttl, ip)
 
 
 class AdaptiveCaptchaGate:
@@ -164,6 +176,7 @@ class AdaptiveCaptchaGate:
         extra_checks: Sequence[VerificationCheck] | None = None,
         trust_store: TrustStore | None = None,
         trust_ttl: timedelta = timedelta(hours=24),
+        bind_trust_to_ip: bool = False,
         ttl: timedelta = timedelta(minutes=15),
     ) -> None:
         self.transport = transport
@@ -175,7 +188,21 @@ class AdaptiveCaptchaGate:
         self.extra_checks: list[VerificationCheck] = list(extra_checks or [])
         self.trust_store = trust_store
         self.trust_ttl = trust_ttl
+        self.bind_trust_to_ip = bind_trust_to_ip
         self.ttl = ttl
+
+    async def is_currently_trusted(self, user_id: int, *, client_ip: str | None = None) -> bool:
+        """Whether `user_id` is trusted *right now*, without minting or
+        touching any verification token -- the piece `PageGuard` needs to
+        decide "does this visitor even need a fresh verification link" at
+        all, before creating one. `False` if there's no `trust_store`
+        configured. Honors `bind_trust_to_ip` the same way `_resolve_
+        decision` does."""
+        if self.trust_store is None:
+            return False
+        return await self.trust_store.is_trusted(
+            user_id, ip=client_ip if self.bind_trust_to_ip else None
+        )
 
     async def create_verification(
         self,
@@ -279,7 +306,11 @@ class AdaptiveCaptchaGate:
         await self.store.mark_verified(token)
         await self.decision_store.delete(token)
         if self.trust_store is not None:
-            await self.trust_store.trust(request.user_id, ttl=self.trust_ttl)
+            await self.trust_store.trust(
+                request.user_id,
+                ttl=self.trust_ttl,
+                ip=client_ip if self.bind_trust_to_ip else None,
+            )
         await self.transport.publish(
             Event(
                 type=EVENT_TYPE_CAPTCHA_VERIFIED,
@@ -321,9 +352,7 @@ class AdaptiveCaptchaGate:
         if existing is not None:
             return existing
 
-        trusted = False
-        if self.trust_store is not None:
-            trusted = await self.trust_store.is_trusted(request.user_id)
+        trusted = await self.is_currently_trusted(request.user_id, client_ip=client_ip)
 
         requires_captcha = False
         challenge = None
