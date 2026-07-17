@@ -1,5 +1,69 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## dörtlü fiziksel test raporu -- ayrıştırma + 2 gerçek bug + 2 netleştirme (bu oturum, devam)
+
+Kullanıcının tek mesajda bildirdiği dört ayrı gözlem, tek tek incelenip
+ayrıştırıldı (hepsini aynı torbaya koymadan):
+
+**1. Gerçek bug: `/join-adaptive`'e "giriş yapmama gerek olmadan captcha
+oldu".** Kod incelemesi: `_verify_page` `require_account=True` olan
+gate'lerde bile widget'ı HER ZAMAN render ediyordu, login yoksa sadece
+YANINDA bir login linki gösteriyordu -- yani giriş yapmadan bir Math
+captcha çözmek veya PoW'u beklemek mümkündü, sadece en sonunda
+`AccountMatchCheck` başarısız oluyordu (`verify()` anında). Bu, hem
+zaman/kaynak israfı hem kafa karıştırıcı bir UX -- kullanıcı captcha'yı
+çözdü ama neden işe yaramadığını anlamıyor. `/giveaway-test/verify`
+zaten doğru davranıyordu (`if user is None: return login-only page`) --
+o deseni `_verify_page`'e de taşıdım: `if gate.require_account and user
+is None: return _login_required_page()`. Doğrudan doğrulandı: giriş
+yapılmadan `/verify/adaptive/{token}` artık `dwa-captcha-widget` hiç
+içermiyor.
+
+**2. Gerçek bug: `/giveaway-test`'te "2sinde de captcha çözdüm ama bir
+şey olmuyor, ama `/giveaway-test-participants` beni listeliyor".** Bu
+ifade aslında mekanizmanın ÇALIŞTIĞINI kanıtlıyor (katılımcı kaydı doğru)
+-- eksik olan sadece kullanıcıya geri bildirimdi. `_on_giveaway_test_
+joined` handler'ı sadece `_giveaway_test_participants` dict'ine
+ekliyordu, hiçbir DM/mesaj yoktu -- Scenario 1'in `_on_giveaway_verified`'ı
+her zaman "Doğrulandı! ... çekilişine katıldın." DM'i atarken, Scenario
+4'ün handler'ı sessizdi. Düzeltme: aynı deseni ekledim -- `bot.fetch_
+user` + `user.send("Katıldın! **{title}** için doğrulaman başarıyla
+tamamlandı.")`, sadece İLK başarılı doğrulamada (idempotent ikinci
+`verify()` çağrısında tekrar göndermemek için `is_new` kontrolü),
+`discord.Forbidden`'a karşı `contextlib.suppress` ile korunmuş (DM'leri
+kapalı kullanıcı sessizce atlanıyor, tüm akış patlamıyor). Doğrudan
+doğrulandı: `bot.fetch_user`/`user.send` mock'lanıp `verify()` çağrıldı,
+DM'in gerçekten gönderildiği ve "Katıldın! **Test Çekilişi**..." içeriğini
+taşıdığı kanıtlandı.
+
+**3. Netleştirme, bug değil: `/test-join` (Scenario 3).** Kullanıcı ısrarla
+"katıldım, otomatik katılma mesajı gelmedi" diye bildirmeye devam etti
+(bu üçüncü kez aynı konu) -- ama Scenario 3 TASARIM GEREĞİ gerçek bir
+katılım akışı değil, üç captcha türünü karşılaştırma demosu (README'de
+zaten böyle belgeliydi). Sorun koddan değil, "Katıl" butonu/`test-join`
+komut adının kendisinin yanlış beklenti yaratmasından kaynaklanıyordu --
+üç kez aynı yanlış anlaşılma yaşanınca bunu koddan çözmeye karar verdim:
+komut `/test-compare-captchas`'a, view sınıfı `_JoinTestView` ->
+`_CompareCaptchaTypesView`'a, buton "Katıl" -> "Karşılaştır"a yeniden
+adlandırıldı, ephemeral cevaba "bu gerçek bir katılım değil, giriş
+gerektirmiyor, onay mesajı gelmeyecek, gerçek akış için /giveaway-test'e
+bak" notu eklendi. README'nin Scenario 3 bölümü de bunu açıkça
+belirtecek şekilde güncellendi.
+
+**4. Netleştirme, kasıtlı tasarım: `/join`'e rastgele isim yazınca
+kabul ediyor.** Kullanıcı "bazıları bilerek testte absürt tutulan
+yerler mi" diye sordu -- evet, bu biri. `giveaway_name` bu demo'da
+sadece DM mesajında gösterilen bir metadata alanı, gerçek bir çekiliş
+kataloğu/kayıt sistemi yok (Scenario 1'in amacı hesap-bağlama+PoW+
+davranış gate'ini göstermek, çekiliş yönetimi değil). Koda açıklayıcı
+bir yorum eklendi, davranış değiştirilmedi.
+
+**Doğrulama özeti**: `TestClient` ile giriş-öncesi/sonrası widget
+görünürlüğü doğrudan test edildi; `giveaway_test_original_gate.verify()`
+doğrudan çağrılıp mock'lanmış `bot.fetch_user`/`user.send` ile DM'in
+gerçekten gittiği kanıtlandı; `ruff`/`mypy` temiz, `pytest` 702 passed
+(bilinen Postgres testi hariç).
+
 ## verify sayfaları: kullanıcı adı gösterimi + erken hesap-sahiplik kontrolü (bu oturum, devam)
 
 Kullanıcının isteği (sıralı test planına geçmeden önce): "Ondan önce

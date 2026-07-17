@@ -33,12 +33,21 @@ for your own moderation history -- swap `_ban_count_for` for a real
 for this demo's lifetime (a real bot would persist that, not use an
 in-memory `set`).
 
-## Scenario 3 -- side-by-side captcha comparison (`/test-join`, `/test-participants`)
+## Scenario 3 -- side-by-side captcha comparison (`/test-compare-captchas`, `/test-participants`)
 
 ```
-/test-join            -- DMs a button; clicking it replies with one link
-/test-participants     -- lists everyone who has completed any of the 3 below
+/test-compare-captchas -- DMs a button; clicking it replies with one link
+/test-participants      -- lists everyone who has completed any of the 3 below
 ```
+
+**Not a real join flow** -- deliberately no login requirement and no
+"you're in!" confirmation (a real bug report from testing was confusion
+over exactly this: solving the captchas here does nothing visible
+because there's nothing to join, no giveaway, no account binding. The
+command used to be named `/test-join` with a "Katıl" (Join) button,
+which implied otherwise -- renamed to make clear this is purely a
+side-by-side comparison of *captcha configurations*. The real
+login-required, auto-join-on-success flow is Scenario 4 below).
 
 Clicking the button mints three fresh tokens (one per `CaptchaGate`
 config below) and hands back a single link to `/test-widgets`, which

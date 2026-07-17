@@ -38,11 +38,13 @@ general pattern for physical-testing an example bot):
     /appeal reason:...           -> refuses until BAN_THRESHOLD is
                                      simulated (see _ban_count_for below)
                                      and a separate link is completed
-    /test-join                  -> DMs a button; clicking it hands back a
-                                     link to /test-widgets, which shows
-                                     three genuinely different captcha
-                                     configurations stacked on one page
-                                     (Path-Trace / "safety mode" combining
+    /test-compare-captchas       -> DMs a button (NOT a real join -- no
+                                     login, no confirmation, purely a
+                                     side-by-side comparison); clicking it
+                                     hands back a link to /test-widgets,
+                                     which shows three genuinely different
+                                     captcha configurations stacked on one
+                                     page (Path-Trace / "safety mode" combining
                                      a visible captcha with the invisible
                                      layer / the plain original baseline)
                                      for direct side-by-side comparison
@@ -88,6 +90,7 @@ general pattern for physical-testing an example bot):
 
 from __future__ import annotations
 
+import contextlib
 import os
 
 import discord
@@ -168,6 +171,12 @@ giveaway_gate.on_verified(_on_giveaway_verified, purpose="giveaway_entry")
 
 @bot.hybrid_command(name="join", description="Bir çekilişe katıl")
 async def join(ctx: commands.Context, giveaway_name: str) -> None:
+    # `giveaway_name` is intentionally free text here -- this demo has no
+    # real giveaway catalog/registry to validate it against (that's not
+    # what this scenario is demonstrating; it's carried through purely as
+    # `metadata` so `_on_giveaway_verified` can mention it in the DM).
+    # Accepting any string, including a made-up one, is by design, not a
+    # missing validation bug.
     request = await giveaway_gate.create_verification(
         user_id=ctx.author.id,
         guild_id=ctx.guild.id if ctx.guild else None,
@@ -278,6 +287,19 @@ giriş yap, ya da bu linki oluşturan komutu doğru hesabınla tekrar
 </body>""")
 
 
+def _login_required_page() -> HTMLResponse:
+    return HTMLResponse("""<!doctype html>
+<title>Önce giriş yap</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 16px">
+<h2>Önce giriş yap</h2>
+<p>Bu doğrulama linki bir Discord hesabına bağlı -- kutuyu görebilmen
+için önce giriş yapman gerekiyor. Giriş yaptıktan sonra bu linke
+(adres çubuğundakine) geri dön.</p>
+<p><a href="/auth/discord/login" target="_blank" rel="noopener">Discord ile giriş yap</a></p>
+</body>""")
+
+
 async def _verify_page(
     token: str, api_base: str, gate: CaptchaGate | AdaptiveCaptchaGate, user: DiscordUser | None
 ) -> HTMLResponse:
@@ -287,6 +309,20 @@ async def _verify_page(
     # Since the widget's own fetch calls already carry that cookie once
     # it exists, the flow is: log in once, come back to this same
     # verify link (still in your DMs), then click the widget.
+    #
+    # A real bug reported from testing: for a gate with
+    # require_account=True, this used to render the widget div REGARDLESS
+    # of login state (only showing a login link alongside it) -- so a
+    # signed-out visitor could click through and solve a real Math
+    # captcha / wait out a real Proof-of-Work, only to have it fail
+    # afterward on the "account" check with no login ever having
+    # happened. `AccountMatchCheck` was always going to reject this at
+    # `verify()` time, but wasting the effort first is bad UX; hiding the
+    # widget entirely until signed in (matching how /giveaway-test/verify
+    # already behaved) is honest about what's actually required.
+    if gate.require_account and user is None:
+        return _login_required_page()
+
     if user is not None:
         expected_user_id = await _expected_user_id(gate, token)
         if expected_user_id is not None and expected_user_id != user.id:
@@ -402,17 +438,26 @@ async def test_participants(ctx: commands.Context) -> None:
     )
 
 
-class _JoinTestView(discord.ui.View):
+class _CompareCaptchaTypesView(discord.ui.View):
     """The button-in-a-DM flow: clicking doesn't verify anything by
     itself (a Discord interaction can't run JS/collect mouse signals) --
     it mints three fresh tokens for *this* user and hands back the one
-    link that shows all three widgets stacked."""
+    link that shows all three widgets stacked.
+
+    Deliberately labeled "Karşılaştır" (Compare), not "Katıl" (Join) --
+    a real bug report from testing was confusion over this scenario not
+    sending any "you're in!" confirmation and not requiring login. Both
+    are correct: this command is a side-by-side comparison of three
+    *captcha configurations*, not a real join flow (that's Scenario 4,
+    `/giveaway-test`, which does require login and does DM a
+    confirmation) -- renamed so the button itself doesn't imply
+    otherwise."""
 
     def __init__(self) -> None:
         super().__init__(timeout=300)
 
-    @discord.ui.button(label="Katıl", style=discord.ButtonStyle.primary)
-    async def join_button(
+    @discord.ui.button(label="Karşılaştır", style=discord.ButtonStyle.primary)
+    async def compare_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         user_id = interaction.user.id
@@ -432,17 +477,25 @@ class _JoinTestView(discord.ui.View):
             f"&original={original_req.token}"
         )
         await interaction.response.send_message(
-            f"Üç captcha türünü karşılaştırmak için: {url}", ephemeral=True
+            f"Üç captcha türünü karşılaştırmak için: {url}\n"
+            "(Bu gerçek bir katılım değil -- sadece üç farklı captcha "
+            "yapılandırmasını yan yana denemen için; hiçbir hesaba "
+            "kaydolmuyorsun ve bir onay mesajı gelmeyecek. Gerçek "
+            "giriş-zorunlu + otomatik-katıl akışı için /giveaway-test'e bak.)",
+            ephemeral=True,
         )
 
 
 @bot.hybrid_command(
-    name="test-join", description="Demo: DM'e buton gönder, 3 captcha türünü karşılaştır"
+    name="test-compare-captchas",
+    description="Demo: DM'e buton gönder, 3 captcha türünü karşılaştır (gerçek katılım değil)",
 )
-async def test_join(ctx: commands.Context) -> None:
+async def test_compare_captchas(ctx: commands.Context) -> None:
     await ctx.author.send(
-        "Aşağıdaki butona tıkla, üç farklı captcha türünü yan yana test edeceğin linki alacaksın.",
-        view=_JoinTestView(),
+        "Aşağıdaki butona tıkla, üç farklı captcha türünü yan yana test edeceğin linki "
+        "alacaksın. Bu bir karşılaştırma demosu -- gerçek bir katılım değil, giriş "
+        "gerektirmiyor ve bir onay mesajı gelmeyecek.",
+        view=_CompareCaptchaTypesView(),
     )
     await ctx.reply("Sana DM attım, butona tıkla!", ephemeral=True)
 
@@ -538,11 +591,26 @@ async def _on_giveaway_test_joined(event: CaptchaVerified) -> None:
     Path-Trace escalation, or the plain original one) counts as "solved a
     captcha to join" -- both are independent, sufficient proof on their
     own, matching how the two widgets were designed as separate slots
-    rather than a chain you must complete both of."""
+    rather than a chain you must complete both of.
+
+    Also DMs a confirmation, matching Scenario 1's `_on_giveaway_verified`
+    -- a real bug reported from testing: this handler used to only touch
+    the in-memory participant set with no feedback to the user at all, so
+    solving a widget looked like "nothing happened" even though
+    `/giveaway-test-participants` proved the join was recorded. A real
+    giveaway bot needs to actually tell you you're in.
+    """
     giveaway_id = event.metadata.get("giveaway_id")
     if giveaway_id is None:
         return
-    _giveaway_test_participants.setdefault(giveaway_id, set()).add(event.user_id)
+    is_new = event.user_id not in _giveaway_test_participants.setdefault(giveaway_id, set())
+    _giveaway_test_participants[giveaway_id].add(event.user_id)
+    if not is_new:
+        return  # already confirmed once (e.g. the idempotent second verify() call)
+    title = _giveaway_test_titles.get(giveaway_id, "çekiliş")
+    user = await bot.fetch_user(event.user_id)
+    with contextlib.suppress(discord.Forbidden):
+        await user.send(f"Katıldın! **{title}** için doğrulaman başarıyla tamamlandı.")
 
 
 giveaway_test_invisible_gate.on_verified(
@@ -1079,6 +1147,7 @@ temizse sessizce geçersin; kara listeye ekleyince
 (<a href="/api/test/block-my-ip">block-my-ip</a>) "insan mısın" ekranı tek
 bir gerçek Math captcha'sı sorar.</li>
 <li>Diğer senaryolar için Discord'da <code>/join</code>, <code>/appeal</code>,
-<code>/test-join</code>, <code>/join-adaptive</code> komutlarını dene.</li>
+<code>/test-compare-captchas</code> (gerçek katılım değil, sadece
+karşılaştırma), <code>/join-adaptive</code> komutlarını dene.</li>
 </ul>
 </body>""")
