@@ -77,22 +77,31 @@ Discord login **first** -- the page checks server-side and shows nothing
 but a login link until you're signed in, then shows two independent
 verification slots:
 
-1. **Adaptive** -- starts invisible (behavior score only,
-   `require_captcha=False`). If the signals look suspicious, a *second*
-   widget appears below it asking you to draw a line (Path-Trace).
-   `CaptchaGate` has no built-in escalation feature -- this composes
-   **two separate gates** via the page's own JS (try the invisible one,
-   only reveal the Path-Trace one if that fails), the same
-   "compose your own" pattern the whole library follows.
+1. **Adaptive** -- starts invisible: real Proof-of-Work (the server
+   recomputes the hash, so "I did the work" can't be faked) plus the
+   behavior score plus account-binding. **Behavior signals alone are not
+   enough** -- they're client-submitted, so anyone who knows the scoring
+   rules can send values that pass, which is exactly what this repo's own
+   verification below did on purpose to exercise the logic. That's why
+   PoW is in the mix: it's the one thing here that isn't just a claim. If
+   the signals still look suspicious after that, a *second* widget
+   appears below asking you to draw a line (Path-Trace). `CaptchaGate`
+   has no built-in escalation feature -- this composes **two separate
+   gates** via the page's own JS (try the invisible one, only reveal the
+   Path-Trace one if that fails), the same "compose your own" pattern the
+   whole library follows.
 2. **Original** -- a single, always-required Math captcha, independent
    of the above.
 
 Verified directly against the gates (bypassing the OAuth round-trip,
 which needs a live browser): bot-like signals (`webdriver: true`, no
-pointer movement, near-instant) fail the invisible gate; human-like
-signals pass it; and the Path-Trace fallback genuinely verifies a real
-drawn line. The page itself was also confirmed to show no captcha at all
-before login.
+pointer movement, near-instant) fail immediately, before Proof-of-Work
+even matters; hand-crafted human-like signals *without* a solved PoW
+response still fail (on the `"captcha"` check) -- proving good-looking
+signals alone aren't sufficient; only human-like signals *plus* a
+genuinely solved PoW nonce pass. The Path-Trace fallback separately
+verifies a real drawn line. The page itself was also confirmed to show
+no captcha at all before login.
 
 ## Why multiple gates need multiple URL prefixes
 

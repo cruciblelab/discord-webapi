@@ -1,5 +1,44 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: "insan-benzeri sinyaller geçti, kötü değil mi" sorusu -- demo'nun gerçek eksiğini buldu (bu oturumda, devam)
+
+Kullanıcının sorusu birebir: "Bu kötü değil mi insan benzeri sinayelleri
+simüle ettin ve geçti normalde hiçbir şekilde geçmemesi gerekmez mi?"
+
+**Cevap, iki parçalı**: (1) Hayır, bu yeni bir açık değil -- davranış
+skorunun en baştan beri (bu oturumun ilk fazlarından itibaren)
+belgelenen, kasıtlı sınırı bu. `scoring.py`'nin docstring'i açıkça
+"kuralları bilen kararlı bir bot insan-gibi puanlanan sinyaller
+gönderebilir" diyor. Ben o testte `good_signals`'ı elle, kontrol
+kurallarını bilerek yazdım (`webdriver:false, pointer_moves:20, ...`) --
+bu tam olarak "sahtelenebilirlik" kavramının canlı kanıtı, davranış
+sinyalleri istemci tarafından gönderiliyor, istemci kim olursa olsun.
+(2) AMA kullanıcı gerçek bir eksiği de yakaladı: `/giveaway-test`'in
+"uyarlanabilir" gate'i (`giveaway_test_invisible_gate`)
+`require_captcha=False` ile kurulmuştu -- yani SADECE hesap-bağlama +
+davranış skoru vardı, diğer gate'lerdeki (`giveaway_gate`/`appeal_gate`)
+gerçek PoW maliyeti hiç yoktu. Bu, demo'nun (kütüphanenin değil) gerçek
+bir zayıflığıydı -- "invisible" derken PoW'suz bırakmışım.
+
+**Düzeltme**: `giveaway_test_invisible_gate`'e `ProofOfWorkProvider`
+eklendi (`require_captcha=False` yerine). "Görünmez" olmak, maliyetsiz
+olmak demek değil -- sadece görünür bir bulmaca olmaması demek (tıpkı
+`giveaway_gate`/`appeal_gate`'in zaten yaptığı gibi). Sayfadaki açıklama
+metni de güncellendi: davranış sinyallerinin tek başına sahtelenebilir
+olduğunu, PoW'un sahtelenemeyen kısım olduğunu açıkça yazıyor artık.
+
+**Yeniden doğrulama**: bot-benzeri sinyaller hâlâ anında reddediliyor
+(PoW'a gerek kalmadan, `no-webdriver` check'inde). Elle hazırlanmış
+insan-benzeri sinyaller AMA PoW çözülmemişse artık GEÇMİYOR --
+`"captcha"` check'inde reddediliyor. Sadece insan-benzeri sinyaller +
+gerçekten çözülmüş bir PoW nonce'u birlikte geçiyor
+(`passed=['account','no-webdriver','behavior-score','no-repeated-movement','captcha']`).
+Yani kullanıcının sorusu gerçek bir konfigürasyon zayıflığı buldu, sadece
+teorik bir soru sormadı -- bu turda düzeltildi.
+
+Kütüphaneye dokunulmadı, sadece örnek dosyası (`examples/captcha_gate_bot/main.py`)
+ve doküman metinleri değişti. Tüm suite yeşil, ruff+mypy temiz.
+
 ## captcha: gerçek çekiliş simülasyonu (adaptive escalation) + math zorluk bug'ı (bu oturumda, devam)
 
 Kullanıcının geri bildirimi iki parçaydı: "16×19 sordu ciddi misin"

@@ -2,6 +2,38 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `/giveaway-test`: "uyarlanabilir" gate'e gerçek PoW maliyeti eklendi
+
+Kullanıcı, bir önceki turda "insan-benzeri sinyaller geçti" testimi
+görünce haklı bir soru sordu: "bu kötü değil mi, normalde hiç geçmemesi
+gerekmez mi?" Cevap: hayır, bu YENİ bir açık değil -- davranış skorunun
+en baştan beri dürüstçe belgelenen sınırı bu (`scoring.py`: "a determined
+bot that knows these rules can send signals that score as human"). Ben
+elle, kuralları bilerek "iyi görünen" sinyaller yazdım -- tam olarak
+sahtelenebilirliğin ne demek olduğunu kanıtlayan şey. Ama kullanıcı gerçek
+bir eksik de buldu: `/giveaway-test`'in "uyarlanabilir" gate'i
+`require_captcha=False` ile kurulmuştu, yani SADECE hesap + davranış
+skoru vardı -- diğer gate'lerdeki (`giveaway_gate`/`appeal_gate`) gerçek
+PoW maliyeti hiç yoktu.
+
+### Değişen
+
+- **`giveaway_test_invisible_gate` artık `ProofOfWorkProvider` kullanıyor**
+  (`require_captcha=False` değil) -- "görünmez" olması, hiç maliyet
+  olmaması anlamına gelmiyor, sadece görünür bir bulmaca olmaması
+  anlamına geliyor. Artık gerçekten sahtelenemeyen bir katman (sunucu
+  hash'i kendisi yeniden hesaplıyor) + hesap-bağlama + davranış skoru
+  birlikte gerekiyor.
+- Doğrulama yeniden yapıldı: bot-benzeri sinyaller hâlâ anında reddediliyor
+  (PoW'a bile gerek kalmadan); elle hazırlanmış insan-benzeri sinyaller
+  AMA çözülmemiş bir PoW ile artık ARTIK GEÇMİYOR (`"captcha"` check'inde
+  reddediliyor) -- "iyi görünen sinyaller tek başına yetmiyor" iddiası
+  gerçekten kanıtlandı; sadece insan-benzeri sinyaller + gerçekten
+  çözülmüş bir PoW nonce'u birlikte geçiyor.
+
+Kod değişikliği kütüphaneye dokunmuyor, sadece örnek. Test suite'e etkisi
+yok; ruff+mypy temiz.
+
 ## [Unreleased] — captcha: gerçek çekiliş botu simülasyonu (adaptive escalation) + Math zorluk düzeltmesi
 
 Kullanıcı iki şey bildirdi: (1) son testte math captcha "16 × 19" sordu --

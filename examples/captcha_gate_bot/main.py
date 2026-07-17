@@ -410,7 +410,15 @@ diğerinin yerine geçmiyor.
 giveaway_test_invisible_gate = CaptchaGate(
     transport,
     MemoryVerificationStore(),
-    require_captcha=False,
+    # ProofOfWorkProvider, not require_captcha=False -- "invisible" means
+    # no visible puzzle, not no real cost. A behavior score alone is pure
+    # client-submitted data: anyone who knows the scoring rules can send
+    # values that pass it, same as this file's own test script does on
+    # purpose to exercise the logic. PoW is the one thing here that isn't
+    # just a claim -- the server recomputes the hash itself, so "I did
+    # the work" can't be faked the way "here are some good-looking
+    # signals" can.
+    ProofOfWorkProvider(_captcha_store),
     require_account=True,
     extra_checks=_behavior_checks(),
 )
@@ -506,8 +514,10 @@ gerekiyor. Giriş yaptıktan sonra bu linke (adres çubuğundakine) geri dön.</
 
 <h3>1) Uyarlanabilir (görünmez katmandan başlar)</h3>
 <p style="font-size:.85rem;color:#666">
-Önce sessizce davranış skorunu dener. Şüpheli görünürse aşağıda ikinci bir
-widget belirip çizgiyi çizmeni ister.
+Önce sessizce gerçek bir arka plan işi (Proof-of-Work) + davranış skorunu
+dener -- davranış sinyalleri istemci tarafından gönderildiği için tek
+başına sahtelenebilir, PoW'un maliyeti sahtelenemez. Şüpheli görünürse
+aşağıda ikinci bir widget belirip çizgiyi çizmeni ister.
 </p>
 <div id="invisible-widget" class="dwa-captcha-widget" data-token="{invisible}"
      data-api-base="/giveaway-test-invisible"></div>
