@@ -1,5 +1,46 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: davranışsal skor + flash-tap kaldırıldı (bu oturumda)
+
+Kullanıcı flash-tap'i (yanıp-sönen nokta) "saçma" bulup kaldırmamı,
+görünmez backend katmanını sağlamlaştırmamı ve *davranışsal* bir skor
+tablosu eklememi istedi (skorlama tıklamada değil mouse'un widget'a
+yaklaşımında başlar; tıklama konumu -- tam ortaya tıklamak bot şüphesi --,
+dil, saat dilimi vb.). Bug/kırılma taraması da istedi.
+
+**Yapılanlar**:
+- **`FlashTapProvider` silindi** (dosya, export, testler, docs). Doğru
+  karar: challenge verisi (nokta düzeni + sekans) zaten istemciye
+  gidiyordu, yani gerçek bir güvenlik değeri yoktu, sadece karmaşıklıktı.
+- **Bug taraması**: captcha kodunu (PoW/gate/checks/_shared) tekrar okudum;
+  gerçek bir bug çıkmadı (kapsamlı test edilmişti). Tek gerçek sertleştirme:
+  `PathTraceProvider`'a `json.loads`'tan önce ham yanıt boyut sınırı
+  (`_MAX_RESPONSE_CHARS`) -- çok-megabaytlık bir gövdeyi ayrıştırmaya
+  zorlanma (DoS) önlendi. (PoW'un `_leading_zero_bits`'i, one-time-use,
+  expiry, attempts hepsi doğru; concurrency non-atomic ama in-memory için
+  kabul edilebilir ve one-time-use delete asıl koruma.)
+- **`SignalScoreCheck`** (`captcha/scoring.py`): kullanıcının "skor tablosu"
+  isteği. `signals` bag'i üzerinde ağırlıklı, çekimser-olabilen sezgisellerle
+  bir skor [0,1] üretip eşiği geçip geçmediğine bakan bir `VerificationCheck`.
+  Sezgiseller çekimser dönerse (None) ağırlıklı ortalamadan çıkarılır --
+  böylece mobil dokunma "mouse izi yok" diye cezalanmaz. `compute()` skor +
+  kalem-kalem döküm veriyor. Varsayılan set: webdriver-yok / tıklama-öncesi
+  hareket / tam-ortada-değil (offset<2px = bot) / dil / saat-dilimi /
+  etkileşim-süresi. Tamamen tunable (ağırlık/sezgisel değiştir, kendini ekle).
+
+**Dürüstlük duruşu (yine kritik)**: skorlama tamamen client-submitted
+sinyal üzerinde -- istemci uydurabilir. Docstring'de ve docs'ta açıkça
+"bu bot dedektörü/ML DEĞİL, şeffaf sezgisel skor; kuralları bilen bot
+insan-gibi puan alabilir; her zaman PoW (maliyet) + hesap-bağlama (kimlik)
+ile birlikte" dedim. reCAPTCHA v3/Turnstile'ın kavramsal olarak yaptığını
+yapıyor ama "ML sihri" gibi sunmuyorum -- şeffaf ve dürüst. Sahte bir
+kesinlik iddia etmektense gerçek sınırı yazdım.
+
+Elle runtime doğrulaması: human sinyalleri 1.00 geçer, bot sinyalleri 0.00
+kalır, mobil-touch mouse-izi çekimseriyle geçer, boş sinyaller 0.35 kalır.
+Sonra kalıcı testlere döküldü. path-trace + PoW korundu (kullanıcı sadece
+flash-tap'i kaldır dedi; path-trace opsiyonel sürtünme olarak duruyor).
+
 ## captcha: yeni modeller -- PoW + etkileşimli (bu oturumda)
 
 Kullanıcı Cloudflare-Turnstile tarzı görünmez katman (arka planda PoW +

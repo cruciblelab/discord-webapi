@@ -30,6 +30,10 @@ from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha
 _WIDTH = 320
 _HEIGHT = 160
 _MAX_TRACE_POINTS = 5000  # reject an implausibly huge payload rather than chew on it
+# A hard cap on the raw string BEFORE json.loads, so a multi-megabyte body
+# can't force us to parse it just to then reject it on point count. 5000
+# points of "[123.4,56.7]," is well under this.
+_MAX_RESPONSE_CHARS = 200_000
 
 
 def _dist_point_to_segment(
@@ -123,6 +127,8 @@ class PathTraceProvider:
         """`response` is a JSON array of `[x, y]` pointer samples."""
 
         def _verifier(pending: PendingCaptcha) -> bool:
+            if len(response) > _MAX_RESPONSE_CHARS:
+                return False
             try:
                 trace_raw = json.loads(response)
             except (TypeError, ValueError):

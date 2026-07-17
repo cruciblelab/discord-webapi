@@ -14,11 +14,11 @@ class CaptchaChallenge(BaseModel):
       `data:image/png;base64,...` URI, ready for an `<img src="...">`).
     - **Third-party widgets** (reCAPTCHA/hCaptcha) set `site_key` -- their
       own JS embed does the rendering.
-    - **Parameterized providers** (proof-of-work, path-trace, flash-tap)
-      set `params` -- a structured, provider-defined bag the frontend
-      reads to run the challenge itself (the PoW prefix/difficulty, the
-      line to trace, the dot layout, ...). This is also the extension
-      point for your own provider: put whatever your JS needs in `params`.
+    - **Parameterized providers** (proof-of-work, path-trace) set `params`
+      -- a structured, provider-defined bag the frontend reads to run the
+      challenge itself (the PoW prefix/difficulty, the line to trace, ...).
+      This is also the extension point for your own provider: put whatever
+      your JS needs in `params`.
     """
 
     challenge_id: str

@@ -2,7 +2,46 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
-## [Unreleased] — captcha: yeni modeller (proof-of-work, çizgi-takip, yanıp-sönen nokta)
+## [Unreleased] — captcha: davranışsal skor + flash-tap kaldırıldı
+
+Kullanıcı geri bildirimi: yanıp-sönen-nokta (flash-tap) modeli gerçek bir
+değer katmadığı için saçma; onu kaldır. Basit görsel captcha'lar zaten
+zayıf (kabul edildi). Asıl yatırım yapılacak yer backend'de arka planda
+çalışan görünmez katman -- onu sağlamlaştır ve *davranışsal* bir skor ekle:
+skorlama kullanıcı butona tıkladığında değil, mouse'u widget'a
+**yaklaştırırken** başlar; tıklama konumundan (tam ortaya tıklamak bot
+şüphesi), dilden, saat diliminden vb. bir skor tablosu çıkar.
+
+### Değişenler
+
+- **`FlashTapProvider` kaldırıldı** -- karanlık-ekran-yanıp-sönen-nokta
+  modeli. Gerçek bir güvenlik değeri katmadan (challenge verisi zaten
+  istemciye gidiyordu) yalnızca karmaşıklık ekliyordu. `kind="flash-tap"`
+  artık yok.
+- **`SignalScoreCheck` eklendi** (`discord_webapi.captcha.scoring`):
+  görünmez katmanın "gerçek tarayıcı/insan gibi mi" yarısı. İstemcinin
+  gönderdiği `signals` üzerinde **ağırlıklı, şeffaf sezgisellerle** bir
+  skor üretip bir eşiği geçip geçmediğine bakan bir `VerificationCheck`.
+  Varsayılan sezgiseller: `navigator.webdriver` yok, tıklama-öncesi
+  pointer hareketi var (mobil dokunmada çekimser -- haksız cezalandırmaz),
+  tıklama tam-ortada-değil (offset ~0 = fazla kusursuz = bot), dil var,
+  saat dilimi var, makul etkileşim süresi. Her sezgisel ve ağırlık
+  değiştirilebilir; kendi sinyalinizle kendi sezgiselinizi ekleyebilirsiniz
+  (`ScoringHeuristic`/`default_behavior_heuristics()`). `compute(signals)`
+  skor + kalem-kalem döküm veriyor (loglama/eşik ayarı için). **Dürüst
+  not:** her girdi istemci JS'inde toplanır ve uydurulabilir -- bu bir
+  bot dedektörü ya da ML DEĞİL, şeffaf bir sezgisel skor; her zaman PoW
+  (gerçek maliyet) + hesap-bağlama (gerçek kimlik) ile birlikte kullanın.
+- **`PathTraceProvider` sertleştirildi**: `json.loads`'tan önce ham yanıt
+  boyutu sınırı (çok-megabaytlık bir gövdeyi ayrıştırmaya zorlanmayı önler).
+
+Yeni testler dahil (davranış skoru: insan geçer / bot kalır / mobil
+dokunma cezalanmaz / tam-orta tıklama skoru düşürür / özel sezgiseller;
+skorer'ın gate'e extra_check olarak oturması; path-trace boyut sınırı).
+Flash-tap testleri kaldırıldı. Kalan captcha testleri yeşil, ruff+mypy
+temiz.
+
+## [Unreleased] — captcha: yeni modeller (proof-of-work, çizgi-takip)
 
 Kullanıcı Cloudflare-Turnstile tarzı görünmez bir katman + görsel
 captcha'ların "yapay zeka kolay çözüyor" zayıflığına karşı daha zor
@@ -22,10 +61,8 @@ kurdum (aşırı iddiadan kaçınarak).
   kullanıcı fare/parmakla takip ediyor. Sunucu izin çizgiye tolerans içinde
   kalıp (kaçış yok) tüm vertex'leri kapsayıp kapsamadığını **gerçek
   geometriyle** doğruluyor (nokta-poliçizgi mesafesi). Sadece stdlib.
-- **`FlashTapProvider`** (`kind="flash-tap"`): karanlık ekranda noktalar
-  yanıp sönüyor; kullanıcı yandıkları sırada dokunuyor. Sunucu tıklanan
-  konumların yanıp sönen noktalarla sırayla ve `hit_radius` içinde
-  eşleşmesini doğruluyor. Sadece stdlib.
+  (Not: bir sonraki değişiklikle `FlashTapProvider` -- yanıp-sönen nokta --
+  değer katmadığı için kaldırıldı; yukarıdaki en üst girdiye bakın.)
 - **`discord_webapi.captcha.signals`**: instrumentation için üç şeffaf
   `PredicateCheck` yardımcısı (`reject_webdriver`, `require_signal_flag`,
   `require_min_interaction_ms`) -- görünmez katmanın "gerçek tarayıcı mı"
@@ -33,15 +70,15 @@ kurdum (aşırı iddiadan kaçınarak).
   değil (client-submitted sinyal, backend güvenilir insan/bot ayrımı
   yapamaz).
 - `CaptchaChallenge`'a `params: dict` alanı: parametreli sağlayıcıların
-  (PoW/path-trace/flash-tap) frontend'e yapılandırılmış challenge verisi
-  geçmesi için -- kendi sağlayıcınız için de genişletme noktası. Bu
-  sağlayıcıların hiçbiri Pillow gerektirmiyor (görsel captcha'ların
-  aksine), yani `discord-webapi[captcha]` olmadan çalışıyorlar.
+  (PoW/path-trace) frontend'e yapılandırılmış challenge verisi geçmesi için
+  -- kendi sağlayıcınız için de genişletme noktası. Bu sağlayıcıların
+  hiçbiri Pillow gerektirmiyor (görsel captcha'ların aksine), yani
+  `discord-webapi[captcha]` olmadan çalışıyorlar.
 
 **Dürüstlük notu (dokümante edildi)**: mevcut görsel captcha'lar modern
 OCR/vision modellerince kolay çözülüyor ("basit" katman olarak kalıyorlar).
-Etkileşimli modeller (path-trace/flash-tap) statik OCR'dan daha zor
-*sürtünme* katmanları ama kriptografik garanti değil -- challenge verisi
+Etkileşimli model (path-trace) statik OCR'dan daha zor
+*sürtünme* katmanı ama kriptografik garanti değil -- challenge verisi
 çizilebilmek için istemciye gittiğinden kararlı bir script okuyup eşleşen
 cevap üretebilir. "Bot/AI çözemez" DEMİYORUZ; asıl sertlik PoW (maliyet) +
 hesap-bağlama (kimlik) katmanlarından geliyor, doğru kullanım bunları

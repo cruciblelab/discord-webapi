@@ -260,27 +260,37 @@ Sağlayıcı aileleri:
   yükseltir; hesap-bağlama ile katmanlayın. Tasarlanan akış: önce bunu
   sessizce çalıştır, sadece hâlâ şüpheli isteklerde görünür bir captcha'ya
   düş.
-- **Zorlaştırılmış etkileşimli captcha'lar** -- `PathTraceProvider` (ekranda
-  kalın bir çizgi çıkar, kullanıcı fare/parmakla takip eder; sunucu izin
-  çizgiye tolerans içinde kalıp kalmadığını ve baştan sona kapsayıp
-  kapsamadığını geometrik olarak doğrular), `FlashTapProvider` (karanlık
-  ekranda noktalar yanıp söner, kullanıcı yandıkları sırada onlara dokunur).
-  Ek bağımlılık gerektirmez. **Dürüst not:** bunlar statik OCR'dan daha zor
-  *etkileşim* sürtünmesidir, kriptografik garanti DEĞİL -- challenge verisi
-  (çizgi/nokta düzeni) çizilebilmesi için istemciye gönderildiğinden kararlı
-  bir script onu okuyup eşleşen bir cevap üretebilir. "Bot çözemez" değil;
-  PoW (maliyet) + hesap-bağlama (kimlik) ile birlikte katman olarak
-  kullanın.
+- **Davranışsal skor tablosu** (`SignalScoreCheck`, görünmez katmanın
+  "gerçek tarayıcı/insan mı" yarısı): PoW "CPU harcandı" der; bu katman
+  ise *nasıl* etkileşildiğine bakıp bir skor üretir. İstemci JS'i, kullanıcı
+  mouse'u widget'a **yaklaştırırken** (tıklamadan önce) hareket örnekleri
+  toplar, tıklama/dokunma konumunu (tam ortaya tıklamak insan için fazla
+  kusursuz = bot şüphesi), `navigator.language`, saat dilimi, etkileşim
+  süresi vb.'yi `signals`'a koyar; sunucu bunları **ağırlıklı şeffaf
+  sezgisellerle** puanlar ve bir eşiği geçip geçmediğine bakar. Mobilde
+  dokunma varsa mouse-izi sezgiseli çekimser kalır (haksız cezalandırmaz).
+  Her sezgisel ve ağırlık değiştirilebilir; kendi sinyalinizle kendi
+  sezgiselinizi ekleyebilirsiniz. `check.compute(signals)` skoru +
+  kalem-kalem dökümü döndürür (loglama/eşik ayarı için). **Dürüst not
+  (önemli):** buradaki her girdi istemci JS'inde toplanır, istemci bunu
+  değiştirebilir/uydurabilir -- bu bir bot dedektörü ya da ML DEĞİL, şeffaf
+  bir sezgisel skordur. Kuralları bilen kararlı bir bot "insan gibi"
+  puanlanan sinyaller gönderebilir. Değeri: düşük-emekli otomasyonun
+  maliyetini yükseltmek ve size ayarlanabilir bir düğme vermek -- **her
+  zaman PoW (gerçek maliyet) + hesap-bağlama (gerçek kimlik) ile birlikte**,
+  tek başına gate olarak değil. (Daha basit ikili kontroller için
+  `captcha.signals`'da `reject_webdriver`/`require_signal_flag`/
+  `require_min_interaction_ms` de var.)
+- **Basit görsel captcha'lar** (`MathCaptchaProvider`/`TextCaptchaProvider`)
+  hâlâ duruyor ama **dürüstçe**: modern OCR/vision bunları kolay çözüyor,
+  bu yüzden bunlar sadece "son çare / düşük-değerli" katman -- asıl güven
+  PoW + davranış skoru + hesap-bağlamadan gelmeli. `PathTraceProvider`
+  (çizgi-takip) opsiyonel bir etkileşim sürtünmesi olarak duruyor ama aynı
+  dürüst uyarıyla: challenge verisi istemciye gittiğinden kararlı bir script
+  okuyup eşleşen cevap üretebilir. (Yanıp-sönen-nokta modeli, gerçek bir
+  değer katmadığı için kaldırıldı.)
 - **Üçüncü-taraf widget'lar** -- `ReCaptchaProvider`, `HCaptchaProvider`
   (kendi site_key/secret_key'iniz). Sadece `httpx` (zaten çekirdek).
-- **Tarayıcı instrumentation'ı** (görünmez katmanın "gerçek tarayıcı mı"
-  yarısı): DOM/navigator sinyalleri istemci JS'inde toplanır -- backend
-  sadece istemcinin gönderdiği sinyali *şeffaf* kurallarla değerlendirebilir
-  (`captcha.signals`'daki `reject_webdriver`/`require_signal_flag`/
-  `require_min_interaction_ms` `PredicateCheck`'leri, ya da kendi
-  yazdığınız). Bunlar kolayca atlatılabilir hız engelleridir, bot
-  dedektörü değil -- kimse client-submitted sinyalden sunucu tarafında
-  insan/bot ayrımını güvenilir yapamaz; PoW + hesap ile birlikte kullanın.
 
 Rate limiter/escalation'ın aksine `DiscordWebAPI` hiçbir captcha
 sağlayıcısını otomatik kurmaz (hangi sağlayıcı, hangi reCAPTCHA

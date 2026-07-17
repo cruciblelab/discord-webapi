@@ -1,6 +1,6 @@
-"""Exercises the proof-of-work, path-trace, and flash-tap providers
-against their real verification logic -- a genuine hashcash search for
-PoW, real geometry for the interactive ones, no mocks."""
+"""Exercises the proof-of-work and path-trace providers against their real
+verification logic -- a genuine hashcash search for PoW, real geometry for
+path-trace, no mocks."""
 
 import hashlib
 import json
@@ -8,7 +8,6 @@ import json
 import pytest
 
 from discord_webapi.captcha.memory import MemoryCaptchaStore
-from discord_webapi.captcha.providers.flash_tap import FlashTapProvider
 from discord_webapi.captcha.providers.path_trace import PathTraceProvider
 from discord_webapi.captcha.providers.proof_of_work import ProofOfWorkProvider, _leading_zero_bits
 
@@ -128,66 +127,10 @@ async def test_path_trace_is_one_time_use() -> None:
     assert await provider.verify(challenge.challenge_id, trace) is False
 
 
-# -- flash tap --
-
-
-async def test_flash_tap_accepts_the_flashed_dots_in_order() -> None:
+async def test_path_trace_rejects_an_oversized_payload() -> None:
     store = MemoryCaptchaStore()
-    provider = FlashTapProvider(store, num_dots=6, sequence_length=3)
+    provider = PathTraceProvider(store)
     challenge = await provider.issue()
 
-    assert challenge.kind == "flash-tap"
-    dots = challenge.params["dots"]
-    sequence = challenge.params["sequence"]
-    taps = json.dumps([dots[i] for i in sequence])
-    assert await provider.verify(challenge.challenge_id, taps) is True
-
-
-async def test_flash_tap_accepts_taps_within_the_hit_radius() -> None:
-    store = MemoryCaptchaStore()
-    provider = FlashTapProvider(store, num_dots=6, sequence_length=3, hit_radius=32.0)
-    challenge = await provider.issue()
-    dots = challenge.params["dots"]
-    sequence = challenge.params["sequence"]
-
-    jittered = json.dumps([[dots[i][0] + 10, dots[i][1] - 10] for i in sequence])  # within 32px
-    assert await provider.verify(challenge.challenge_id, jittered) is True
-
-
-async def test_flash_tap_rejects_far_off_taps() -> None:
-    store = MemoryCaptchaStore()
-    provider = FlashTapProvider(store, num_dots=6, sequence_length=3, hit_radius=32.0)
-    challenge = await provider.issue()
-    dots = challenge.params["dots"]
-    sequence = challenge.params["sequence"]
-
-    far = json.dumps([[dots[i][0] + 100, dots[i][1]] for i in sequence])
-    assert await provider.verify(challenge.challenge_id, far) is False
-
-
-async def test_flash_tap_rejects_the_wrong_number_of_taps() -> None:
-    store = MemoryCaptchaStore()
-    provider = FlashTapProvider(store, num_dots=6, sequence_length=3)
-    challenge = await provider.issue()
-    dots = challenge.params["dots"]
-    sequence = challenge.params["sequence"]
-
-    too_few = json.dumps([dots[sequence[0]]])
-    assert await provider.verify(challenge.challenge_id, too_few) is False
-
-
-async def test_flash_tap_is_one_time_use() -> None:
-    store = MemoryCaptchaStore()
-    provider = FlashTapProvider(store, num_dots=6, sequence_length=3)
-    challenge = await provider.issue()
-    dots = challenge.params["dots"]
-    sequence = challenge.params["sequence"]
-    taps = json.dumps([dots[i] for i in sequence])
-
-    assert await provider.verify(challenge.challenge_id, taps) is True
-    assert await provider.verify(challenge.challenge_id, taps) is False
-
-
-def test_flash_tap_rejects_a_sequence_longer_than_the_dots() -> None:
-    with pytest.raises(ValueError, match="sequence_length"):
-        FlashTapProvider(MemoryCaptchaStore(), num_dots=3, sequence_length=5)
+    huge = "[" + ",".join("[0,0]" for _ in range(60_000)) + "]"  # > 200k chars
+    assert await provider.verify(challenge.challenge_id, huge) is False

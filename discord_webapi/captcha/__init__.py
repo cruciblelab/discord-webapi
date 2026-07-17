@@ -33,13 +33,17 @@ from discord_webapi.captcha.events import EVENT_TYPE_CAPTCHA_VERIFIED, CaptchaVe
 from discord_webapi.captcha.gate import CaptchaGate, CheckResult
 from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
-from discord_webapi.captcha.providers.flash_tap import FlashTapProvider
 from discord_webapi.captcha.providers.hcaptcha import HCaptchaProvider
 from discord_webapi.captcha.providers.math_captcha import MathCaptchaProvider
 from discord_webapi.captcha.providers.path_trace import PathTraceProvider
 from discord_webapi.captcha.providers.proof_of_work import ProofOfWorkProvider
 from discord_webapi.captcha.providers.recaptcha import ReCaptchaProvider
 from discord_webapi.captcha.providers.text_captcha import TextCaptchaProvider
+from discord_webapi.captcha.scoring import (
+    ScoringHeuristic,
+    SignalScoreCheck,
+    default_behavior_heuristics,
+)
 from discord_webapi.captcha.signals import (
     reject_webdriver,
     require_min_interaction_ms,
@@ -60,7 +64,6 @@ __all__ = [
     "CaptchaVerified",
     "CheckOutcome",
     "CheckResult",
-    "FlashTapProvider",
     "HCaptchaProvider",
     "MathCaptchaProvider",
     "MemoryCaptchaStore",
@@ -72,12 +75,15 @@ __all__ = [
     "ReCaptchaProvider",
     "SQLCaptchaStore",
     "SQLVerificationStore",
+    "ScoringHeuristic",
+    "SignalScoreCheck",
     "TextCaptchaProvider",
     "VerificationCheck",
     "VerificationContext",
     "VerificationRequest",
     "VerificationStore",
     "build_captcha_router",
+    "default_behavior_heuristics",
     "reject_webdriver",
     "require_min_interaction_ms",
     "require_signal_flag",

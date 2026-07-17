@@ -30,9 +30,9 @@ class PendingCaptchaRow(Base):
 
     challenge_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     kind: Mapped[str] = mapped_column(String(32))
-    # Text, not a bounded String: interactive providers (path-trace,
-    # flash-tap) store a JSON-encoded expected answer here that's larger
-    # than a plain math result.
+    # Text, not a bounded String: the path-trace provider stores a
+    # JSON-encoded expected answer here that's larger than a plain math
+    # result.
     answer: Mapped[str] = mapped_column(Text)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
