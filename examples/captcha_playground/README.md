@@ -7,6 +7,13 @@ değil); sonuç ekrandaki log paneline PASS/FAIL olarak yazılır.
 
 ## Ne test edilebiliyor
 
+0. **Doğrulama widget'ı** -- gerçek bir Cloudflare Turnstile / "ben robot
+   değilim" kutusu gibi. Sayfaya girdiğiniz andan itibaren her adım ayrı
+   ayrı loglanıyor: ilk hareket/dokunuş, mouse'un kutuya yaklaşması, tam
+   tıklanan piksel + merkezden sapma (tam ortaya tıklarsanız bunu açıkça
+   "şüpheli" diye işaretliyor), kontrol animasyonu, sunucunun verdiği
+   sonuç. Widget her tıklamadan ~2.5sn sonra kendini sıfırlayıp tekrar
+   denemenize izin veriyor -- fiziksel testin ana noktası burası.
 1. **Görünmez davranış katmanı** -- `reject_webdriver`,
    `require_min_interaction_ms`, `SignalScoreCheck` (mouse-kinematiği ve
    homing-correction dahil tüm varsayılan sezgiseller),

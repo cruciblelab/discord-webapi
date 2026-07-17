@@ -2,6 +2,37 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha_playground: gerçek doğrulama widget'ı + tam adım-adım log
+
+Kullanıcı iki şey istedi: (1) tam merkeze tıklamanın gerçekten
+`click-not-dead-center` sezgiseline dahil olup olmadığının teyidi, (2)
+fiziksel test için Cloudflare Turnstile tarzı gerçek bir dikdörtgen
+kutu/checkbox widget'ı + sayfaya girildiği andan itibaren her adımın
+(yaklaşma, tam tıklanan piksel, animasyonlar) log'a yazılması.
+
+### Değişenler
+
+- **`#captcha-widget`** eklendi (`examples/captcha_playground/playground.html`,
+  yeni "0)" bölümü): gerçek bir checkbox+etiket kutusu. Loglanan adımlar,
+  sırayla: sayfa yüklenmesi -> ilk hareket/dokunuş algılanması -> mouse'un
+  kutuya ilk yaklaşması (`pointerenter`, kutudan ayrılırsa da not
+  düşülüyor) -> tıklama (kutu-içi tam piksel konumu + merkezden piksel
+  cinsinden sapma -- 2px altındaysa "insan için fazla kusursuz, şüpheli"
+  notuyla) -> ~700ms'lik gerçek bir kontrol animasyonu -> sunucuya
+  gönderilen ham sinyaller -> her check'in PASS/FAIL'i -> genel sonuç
+  (yeşil ✓ / kırmızı ✕). ~2.5sn sonra kendini sıfırlayıp tekrar
+  denenebiliyor.
+- Playwright (headless gerçek Chromium) ile uçtan uca doğrulandı: tam
+  merkeze (0.2px sapma) yapılan bir tıklama gerçekten
+  `click-not-dead-center=0.00` üretti ve widget'ın kendi "şüpheli" uyarısını
+  tetikledi; ayrıca Playwright'ın kendi otomasyon izini
+  (`navigator.webdriver=true`) `no-webdriver` check'i doğru şekilde
+  yakalayıp reddetti -- yani check'lerin gerçekten çalıştığının canlı,
+  bağımsız bir kanıtı.
+
+Kod değişikliği kütüphaneyi (`discord_webapi/captcha/`) etkilemiyor,
+sadece örnek. Test suite'e etkisi yok; ruff/mypy temiz.
+
 ## [Unreleased] — captcha_playground: teşhis/şeffaflık iyileştirmeleri (kullanıcının gerçek telefon testinden sonra)
 
 Kullanıcı playground'u telefonundan gerçekten test etti ve üç şey

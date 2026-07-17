@@ -17,6 +17,26 @@
   #trace-canvas { touch-action: none; cursor: crosshair; }
   .kind-block { border: 1px solid #ddd; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
   code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
+
+  /* the Cloudflare-Turnstile-style verification widget */
+  #captcha-widget {
+    display: flex; align-items: center; gap: 12px;
+    width: 300px; min-height: 74px; padding: 0 16px;
+    border: 1px solid #d3d3d3; border-radius: 6px; background: #fafafa;
+    cursor: pointer; user-select: none; box-shadow: 0 1px 2px rgba(0,0,0,.05);
+  }
+  #captcha-widget.done { cursor: default; }
+  #widget-checkbox {
+    flex: 0 0 auto; width: 30px; height: 30px; border: 2px solid #999;
+    border-radius: 4px; background: #fff; display: flex; align-items: center;
+    justify-content: center; font-size: 18px; font-weight: bold; color: #999;
+  }
+  #widget-spinner {
+    width: 20px; height: 20px; border: 3px solid #ccc; border-top-color: #2b6fff;
+    border-radius: 50%; animation: dwa-spin 0.8s linear infinite; display: none;
+  }
+  @keyframes dwa-spin { to { transform: rotate(360deg); } }
+  #widget-label { font-size: 0.95rem; color: #333; }
 </style>
 
 <h1>discord-webapi -- captcha playground</h1>
@@ -28,15 +48,28 @@
 </p>
 
 <section>
-  <h2>1) Görünmez davranış katmanı (invisible layer)</h2>
+  <h2>0) Doğrulama widget'ı (fiziksel test için)</h2>
   <p class="muted">
-    Sayfa yüklendiği andan itibaren mouse hareketiniz arka planda
-    toplanıyor (<code>mouse_trajectory</code>). Aşağıdaki butona tıklayınca
-    o ana kadarki tüm sinyaller (webdriver, dil, saat dilimi, tıklama
-    konumu, etkileşim süresi, mouse kinematiği) sunucuya gönderilip
-    <code>reject_webdriver</code> / <code>require_min_interaction_ms</code> /
-    <code>SignalScoreCheck</code> / <code>RepeatedMovementCheck</code>
-    sırayla çalıştırılıyor.
+    Gerçek bir Cloudflare Turnstile / "ben robot değilim" kutusu gibi --
+    sayfaya girdiğiniz andan itibaren her adım (mouse'un kutuya yaklaşması,
+    tam tıklanan piksel ve merkezden sapması, kontrol animasyonu, sunucu
+    sonucu) aşağıdaki log'a yazılıyor. Telefonda parmakla, bilgisayarda
+    fareyle -- tam ortadan tıklarsanız bunu da açıkça not ediyor.
+  </p>
+  <div id="captcha-widget">
+    <div id="widget-checkbox"></div>
+    <div id="widget-spinner"></div>
+    <span id="widget-label">İnsan olduğumu doğrula</span>
+  </div>
+</section>
+
+<section>
+  <h2>1) Görünmez davranış katmanı -- elle tetikleme</h2>
+  <p class="muted">
+    Yukarıdaki widget'ın yaptığı akışın (animasyonsuz) manuel/tekrarlanabilir
+    versiyonu -- aynı <code>reject_webdriver</code> /
+    <code>require_min_interaction_ms</code> / <code>SignalScoreCheck</code> /
+    <code>RepeatedMovementCheck</code> sırasını çalıştırır.
   </p>
   <button id="btn-behavior" type="button">Davranış katmanını test et</button>
   <button id="btn-behavior-replay" type="button">Aynı hareketi tekrar gönder (replay testi)</button>
@@ -118,10 +151,15 @@ let lastPointerType = 'mouse';
 const trajectory = []; // [x, y, t_ms]
 const MAX_TRAJECTORY = 500;
 
+let firstMovementLogged = false;
 function pushSample(x, y, t, pointerType) {
   lastPointerType = pointerType;
   trajectory.push([x, y, t]);
   if (trajectory.length > MAX_TRAJECTORY) trajectory.shift();
+  if (!firstMovementLogged) {
+    firstMovementLogged = true;
+    log('ilk hareket/dokunuş algılandı', null, `${(t - pageLoadedAt).toFixed(0)}ms sayfa yüklendiğinden sonra, pointer_type=${pointerType}`);
+  }
 }
 
 window.addEventListener('pointermove', (e) => {
@@ -205,6 +243,95 @@ document.getElementById('btn-behavior-replay').addEventListener('click', async (
   logRawSignals(signals);
   await runBehaviorCheck(signals, 'replay testi (aynı hareket ikinci kez)');
 });
+
+// ---- 0) the Cloudflare-Turnstile-style verification widget ----
+// Every step gets its own log line, from the first time the pointer
+// enters the box through the exact click pixel to the server's verdict --
+// this is the "physical test" element: click it for real, on a real
+// phone or a real mouse, and read the timeline below.
+(() => {
+  const widgetEl = document.getElementById('captcha-widget');
+  const checkboxEl = document.getElementById('widget-checkbox');
+  const spinnerEl = document.getElementById('widget-spinner');
+  const labelEl = document.getElementById('widget-label');
+  let approached = false;
+  let busy = false;
+
+  function since(t) { return `${(t - pageLoadedAt).toFixed(0)}ms sayfa yüklendiğinden sonra`; }
+
+  widgetEl.addEventListener('pointerenter', (e) => {
+    if (approached) return;
+    approached = true;
+    log('widget: mouse/parmak kutuya yaklaştı', null, `${since(performance.now())}, pointer_type=${e.pointerType}`);
+  });
+  widgetEl.addEventListener('pointerleave', () => {
+    if (approached && !busy) log('widget: kutudan uzaklaşıldı (henüz tıklanmadı)', null, since(performance.now()));
+  });
+
+  widgetEl.addEventListener('click', async (e) => {
+    if (busy) return;
+    busy = true;
+
+    const rect = widgetEl.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const offset = Math.hypot(e.clientX - cx, e.clientY - cy);
+    const localX = Math.round(e.clientX - rect.left);
+    const localY = Math.round(e.clientY - rect.top);
+    const centerNote = offset < 2
+      ? ' -- DİKKAT: neredeyse tam matematiksel merkez, bir insan için fazla kusursuz, şüpheli sayılır'
+      : '';
+    log(
+      'widget: tıklandı', null,
+      `kutu-içi konum=(${localX},${localY}), merkezden sapma=${offset.toFixed(1)}px, ` +
+      `${since(performance.now())}, o ana kadar toplanan mouse örneği=${trajectory.length}${centerNote}`
+    );
+
+    // Freeze the trajectory/click data at the moment of the click -- the
+    // check should score *this* interaction, not whatever the pointer
+    // does during the animation delay below.
+    const frozenTrajectory = trajectory.slice();
+    const signals = currentSignals();
+    signals.mouse_trajectory = frozenTrajectory;
+    signals.click_offset = offset;
+    lastSubmittedTrajectory = frozenTrajectory;
+    lastClickOffset = offset;
+
+    checkboxEl.textContent = '';
+    spinnerEl.style.display = 'inline-block';
+    labelEl.textContent = 'Kontrol ediliyor...';
+    log('widget: kontrol animasyonu başladı', null);
+    await new Promise((r) => setTimeout(r, 700)); // a short Turnstile-like "thinking" delay
+    log('widget: kontrol animasyonu bitti, sunucuya gönderiliyor', null);
+
+    logRawSignals(signals);
+    const result = await runBehaviorCheck(signals, 'widget doğrulaması');
+
+    spinnerEl.style.display = 'none';
+    widgetEl.classList.add('done');
+    if (result.overall_passed) {
+      checkboxEl.textContent = '✓';
+      checkboxEl.style.borderColor = '#2fae4e';
+      checkboxEl.style.color = '#2fae4e';
+      labelEl.textContent = 'Doğrulandı';
+    } else {
+      checkboxEl.textContent = '✕';
+      checkboxEl.style.borderColor = '#d13b3b';
+      checkboxEl.style.color = '#d13b3b';
+      labelEl.textContent = 'Doğrulanamadı';
+    }
+
+    setTimeout(() => {
+      busy = false;
+      widgetEl.classList.remove('done');
+      checkboxEl.textContent = '';
+      checkboxEl.style.borderColor = '#999';
+      checkboxEl.style.color = '#999';
+      labelEl.textContent = 'İnsan olduğumu doğrula';
+      log('widget: sıfırlandı, tekrar tıklanabilir', null);
+    }, 2500);
+  });
+})();
 
 // ---- 2) Math / Text image captchas ----
 let currentImageChallenge = null;
@@ -443,5 +570,5 @@ document.getElementById('btn-trace-submit').addEventListener('click', async () =
   }
 })();
 
-log('sayfa yüklendi, mouse hareketiniz toplanmaya başladı', null);
+log('sayfa yüklendi (T=0), mouse/dokunma izleme başladı', null);
 </script>
