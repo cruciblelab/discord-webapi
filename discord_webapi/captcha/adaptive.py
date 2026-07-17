@@ -204,17 +204,28 @@ class AdaptiveCaptchaGate:
 
     async def get_info(self, token: str, *, client_ip: str | None = None) -> dict[str, Any] | None:
         """Same shape as `CaptchaGate.get_info()` -- what the frontend
-        needs to render the right thing. Making/persisting the
-        escalation decision (if not already made) happens here, since
-        this is the first point at which the connecting IP is known."""
+        needs to render the right thing, including the same "already
+        verified" vs. "gone" distinction (see that docstring for why: a
+        page reload after success must not look like an expired link).
+        Making/persisting the escalation decision (if not already made)
+        happens here, since this is the first point at which the
+        connecting IP is known."""
         request = await self._get_live(token)
-        if request is None or request.verified:
+        if request is None:
             return None
+        if request.verified:
+            return {
+                "challenge": None,
+                "requires_captcha": False,
+                "requires_account": self.require_account,
+                "verified": True,
+            }
         decision = await self._resolve_decision(token, request, client_ip)
         return {
             "challenge": decision.challenge,
             "requires_captcha": decision.requires_captcha,
             "requires_account": self.require_account,
+            "verified": False,
         }
 
     async def verify(

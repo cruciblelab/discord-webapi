@@ -247,9 +247,15 @@ def test_gate_verify_solves_the_giveaway_scenario() -> None:
         assert verify_resp.status_code == 200
         assert verify_resp.json()["verified"] is True
 
-        # the link is now spent -- re-fetching its info has nothing to show
+        # the link is now spent, but re-fetching its info is NOT a 404 --
+        # a page reload after success has to be able to tell "already
+        # verified" apart from "gone/expired" (a real bug reported from
+        # physical testing: this used to also be a 404, so a reload after
+        # a successful verification showed a confusing "invalid or
+        # expired" message for a link that had actually succeeded).
         followup = client.get(f"/api/captcha/gate/{request.token}")
-        assert followup.status_code == 404
+        assert followup.status_code == 200
+        assert followup.json()["verified"] is True
 
 
 def test_gate_verify_of_unknown_token_returns_not_verified() -> None:

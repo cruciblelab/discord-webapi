@@ -188,6 +188,34 @@ async def test_get_challenge_after_verification_is_none() -> None:
     assert await gate.get_challenge(request.token) is None
 
 
+async def test_get_info_distinguishes_already_verified_from_gone() -> None:
+    """Regression test for a real bug reported from physical testing: a
+    page reload after a successful verification used to return `None`
+    from `get_info()` -- exactly the same as a truly expired/unknown
+    token -- so the frontend showed "this link is invalid or expired" for
+    a link that had actually already succeeded. `verified=True` must be
+    distinguishable from "gone" (`None`)."""
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="giveaway_entry")
+    store: MemoryCaptchaStore = gate.provider.store  # type: ignore[attr-defined]
+    pending = await store.get(request.challenge.challenge_id)
+    assert pending is not None
+
+    before = await gate.get_info(request.token)
+    assert before is not None
+    assert before["verified"] is False
+
+    await gate.verify(request.token, pending.answer)
+
+    after = await gate.get_info(request.token)
+    assert after is not None, "an already-verified token must not look 'gone'"
+    assert after["verified"] is True
+    assert after["challenge"] is None
+
+    gone = await gate.get_info("never-issued-token")
+    assert gone is None
+
+
 async def test_expired_verification_is_treated_as_gone() -> None:
     gate = _make_gate(ttl=timedelta(seconds=-1))
     request = await gate.create_verification(user_id=100, purpose="giveaway_entry")

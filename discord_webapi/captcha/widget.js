@@ -197,9 +197,32 @@
       this.showFatalError('Sunucuya ulaşılamadı.');
       return;
     }
+    if (this.info.verified) {
+      // A page reload (or any re-fetch of /api/captcha/gate/{token}) after
+      // a successful verification hits this same endpoint again -- without
+      // this branch it fell into the `!resp.ok` case above (the server
+      // used to return 404 for an already-verified token, indistinguishable
+      // from a truly expired one) and showed the wrong, confusing "invalid
+      // or expired" message for a link that actually already succeeded.
+      // Show the real state instead: already done, nothing left to click.
+      this.showAlreadyVerified();
+      return;
+    }
     if (this.info.requires_captcha && this.info.challenge) {
       this.renderChallenge(this.info.challenge);
     }
+  };
+
+  CaptchaWidget.prototype.showAlreadyVerified = function () {
+    this.verified = true;
+    this.busy = true;
+    this.checkboxEl.classList.add('dwa-cw-ok');
+    this.checkboxEl.innerHTML = CHECK_SVG;
+    this.labelEl.textContent = 'Zaten doğrulandı';
+    this.boxEl.style.cursor = 'default';
+    this.boxEl.classList.add('dwa-cw-done');
+    emit(this.token, 'widget: zaten doğrulanmış', true, 'sayfa yeniden yüklendi, bu link zaten kullanılmıştı');
+    fireCallback(this.token, { verified: true, failed_check: null, detail: null });
   };
 
   CaptchaWidget.prototype.showFatalError = function (msg) {

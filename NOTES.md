@@ -1,5 +1,71 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## get_info: doğrulanmış link sayfa yenilemede "geçersiz/süresi dolmuş" görünüyor (bu oturum, devam)
+
+Kullanıcı "sıralı test edelim" dedi, 1. adımı (widget donma düzeltmesi)
+denerken YENİ bir bug bildirdi: "captcha çözdüm doğrulama linki
+geçersiz veya süresi dolmuş diyor, yine tıklıyorum yine de doğruluyor,
+tekrar tekrar sayfayı yenileyince yazıyor ama yine de kutucuğa
+tıklanıyor." Bunu inceleyip gerçek kök nedeni buldum.
+
+**Kök neden**: `CaptchaGate.get_info()` "token yok/süresi dolmuş" ile
+"token zaten doğrulandı" durumlarını tek bir `None` dönüş değeriyle
+birleştiriyordu:
+```python
+request = await self._get_live(token)
+if request is None or request.verified:
+    return None
+```
+API katmanında bu `None` -> 404'e dönüşüyor, widget'ın `loadInfo()`'su
+da `!resp.ok` görünce `showFatalError('Doğrulama linki geçersiz veya
+süresi dolmuş.')` çağırıyordu. Yani bir önceki turda widget'ı
+"başarıda donacak" şekilde düzelttim ama SAYFA YENİLEME senaryosunu
+(widget'ın constructor'da her zaman çalıştırdığı `loadInfo()`'nun
+sunucudan TEKRAR bilgi çekmesi) hiç düşünmemiştim -- sunucu "zaten
+doğrulandı"yı "hiç var olmadı" ile aynı kefeye koyduğu için widget'ın
+kendi başarı state'i sıfırlanıp yanlış hata mesajına düşüyordu.
+
+`AdaptiveCaptchaGate.get_info()`'da da birebir aynı desen vardı --
+ikisi de düzeltildi.
+
+**Düzeltme**: `GateInfo` modeline `verified: bool = False` eklendi;
+her iki gate'in `get_info()`'u artık `request is None` (gerçek
+gone/expired) ile `request.verified` (zaten doğrulandı) durumlarını
+AYRI dönüyor -- ikincisi artık `None` değil, `{"verified": True,
+"challenge": None, ...}` gibi gerçek bir bilgi nesnesi. `widget.js`'e
+`showAlreadyVerified()` eklendi: `loadInfo()` artık `info.verified`
+görünce kutuyu "Zaten doğrulandı" + yeşil tik ile kalıcı olarak
+dondurur (bir önceki turdaki "başarıda donma" mantığıyla tutarlı),
+`showFatalError`'a hiç düşmez.
+
+**Regresyon yakalandı ve düzeltildi**: mevcut
+`test_gate_verify_solves_the_giveaway_scenario` testi TAM OLARAK eski,
+hatalı davranışı (`followup.status_code == 404`) doğruluyordu -- yani
+bu bug'ın kendisi zımnen bir test tarafından "doğru" sayılıyordu. Bunu
+`200` + `verified: true` bekleyecek şekilde güncelledim, ve hem
+`CaptchaGate` hem `AdaptiveCaptchaGate` için ayrı regresyon testleri
+ekledim (`test_get_info_distinguishes_already_verified_from_gone`).
+
+**Doğrulama -- gerçek tarayıcı, tam senaryo**: Playwright ile Math
+captcha çözüldü, 4 saniye beklendi (hâlâ "Doğrulandı"), **sonra
+`page.reload()` ile sayfa gerçekten yenilendi** -- widget "Zaten
+doğrulandı" gösterdi, "geçersiz"/"süresi dolmuş" YAZMADI. (İlk
+denemede test scriptimin kendi string kontrolü büyük/küçük harf
+duyarlılığı yüzünden yanlış FAIL verdi -- gerçek davranış baştan beri
+doğruydu, sadece benim doğrulama scriptim hataliydi; düzeltip tekrar
+teyit ettim.)
+
+**Kullanıcının aynı mesajdaki diğer notları -- henüz ele alınmadı,
+sıradaki adımlar**: "/test-widgets sayfasında hâlâ 2 tane captcha var,
+3. yok" (kullanıcı ısrarla bunu bildiriyor, ben kod incelemesinde 3 div
+buluyorum -- bir sonraki adım gerçek ekran görüntüsü istemek veya
+sayfayı doğrudan ben açıp gözlemlemek), ve "/giveaway-test hâlâ aynı
+çalışmıyor" (muhtemelen yukarıdaki get_info bug'ının bir başka
+tezahürü olabilir -- giveaway-test/verify sayfası da aynı `get_info`
+endpoint'ini kullandığından, bu düzeltme onu da düzeltmiş olabilir;
+kullanıcıdan tekrar denemesi istenecek, sıralı test planının 1.
+adımından devam).
+
 ## widget: başarıdan sonra sıfırlanıp tekrar captcha sorma bug'ı (bu oturum)
 
 Kullanıcının fiziksel test bildirimi (birebir özet): "test-join

@@ -138,19 +138,34 @@ class CaptchaGate:
 
     async def get_info(self, token: str, *, client_ip: str | None = None) -> dict[str, Any] | None:
         """Everything the frontend needs to render the right thing: the
-        captcha image (if any), plus whether the user must be signed in.
-        `None` if the token is gone/expired/already used. `client_ip` is
-        accepted (and ignored) purely so `build_captcha_router()` can call
-        `get_info()` the same way for `CaptchaGate` and
-        `AdaptiveCaptchaGate` alike -- this gate's requirement is static,
-        set at construction, so it has no use for the connecting IP."""
+        captcha image (if any), whether the user must be signed in, and
+        whether this token is already verified. `None` only when the token
+        is truly gone (never existed, or expired) -- an *already verified*
+        token is a real, distinct outcome from "gone" (a page reload after
+        a successful verification should say "you're already verified", not
+        "this link is invalid/expired", which is confusing and was a real
+        bug reported from physical testing: the earlier version returned
+        `None` for both cases, so the two were indistinguishable to the
+        frontend). `client_ip` is accepted (and ignored) purely so
+        `build_captcha_router()` can call `get_info()` the same way for
+        `CaptchaGate` and `AdaptiveCaptchaGate` alike -- this gate's
+        requirement is static, set at construction, so it has no use for
+        the connecting IP."""
         request = await self._get_live(token)
-        if request is None or request.verified:
+        if request is None:
             return None
+        if request.verified:
+            return {
+                "challenge": None,
+                "requires_captcha": self.require_captcha,
+                "requires_account": self.require_account,
+                "verified": True,
+            }
         return {
             "challenge": request.challenge,
             "requires_captcha": self.require_captcha,
             "requires_account": self.require_account,
+            "verified": False,
         }
 
     async def verify(

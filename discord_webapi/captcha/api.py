@@ -109,12 +109,18 @@ class GateVerifyResult(BaseModel):
 
 class GateInfo(BaseModel):
     """What the frontend needs to render the right thing for a gate link:
-    the captcha image if there is one, plus whether the visitor has to be
-    signed in with Discord."""
+    the captcha image if there is one, whether the visitor has to be
+    signed in with Discord, and whether this token is already verified
+    (a page reload after a successful verification hits this same
+    endpoint again -- `verified=True` lets the frontend say "you're
+    already verified" instead of treating it as an expired/invalid link,
+    which is what the previous version -- with no `verified` field --
+    conflated it with)."""
 
     challenge: CaptchaChallenge | None
     requires_captcha: bool
     requires_account: bool
+    verified: bool = False
 
 
 def _get_providers(request: Request) -> dict[str, CaptchaProvider]:

@@ -85,6 +85,21 @@ async def test_clean_ip_verification_passes_without_any_captcha_response() -> No
     assert result.passed == []
 
 
+async def test_get_info_distinguishes_already_verified_from_gone() -> None:
+    """Same regression as CaptchaGate's: a reload after success must not
+    look identical to a gone/expired token."""
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="signup")
+    await gate.get_info(request.token, client_ip="9.9.9.9")
+    await gate.verify(request.token, client_ip="9.9.9.9")
+
+    info = await gate.get_info(request.token, client_ip="9.9.9.9")
+    assert info is not None, "an already-verified token must not look 'gone'"
+    assert info["verified"] is True
+
+    assert await gate.get_info("never-issued-token", client_ip="9.9.9.9") is None
+
+
 async def test_suspicious_ip_verification_requires_solving_the_captcha() -> None:
     gate = _make_gate()
     request = await gate.create_verification(user_id=100, purpose="signup")

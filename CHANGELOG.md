@@ -2,6 +2,52 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — sayfa yenilemede doğrulanmış link artık "geçersiz/süresi dolmuş" görünmüyor (gerçek bug)
+
+Kullanıcının bir önceki turdaki widget düzeltmesini test ederken bildirdiği
+yeni bir sorun: bir captcha çözüp doğrulandıktan sonra sayfayı
+yenileyince (F5) widget "Doğrulama linki geçersiz veya süresi dolmuş"
+diye hata gösteriyordu -- oysa link aslında BAŞARIYLA doğrulanmıştı.
+
+### Kök neden
+
+`CaptchaGate.get_info()` (ve `AdaptiveCaptchaGate.get_info()`) "token
+bulunamadı/süresi dolmuş" ile "token zaten doğrulandı" durumlarını AYNI
+şekilde ele alıyordu -- ikisi de `None` dönüyordu, bu da API katmanında
+404'e, widget'ta da "geçersiz veya süresi dolmuş" hatasına dönüşüyordu.
+Yani widget'ın kendisi (bir önceki turda düzeltilen "tekrar sorma"
+sorunu) artık doğru davransa bile, SAYFA YENİLEME senaryosunda
+`loadInfo()` her seferinde sunucudan bilgi çekiyor ve sunucu "zaten
+doğrulandı" ile "hiç var olmadı"yı ayırt edemediği için yanlış mesaj
+gösteriyordu.
+
+### Düzeltme
+
+- `GateInfo` modeline (`captcha/api.py`) yeni bir `verified: bool = False`
+  alanı eklendi.
+- `CaptchaGate.get_info()` ve `AdaptiveCaptchaGate.get_info()` artık
+  `request is None` (gerçekten yok/süresi dolmuş) ile `request.verified`
+  (zaten doğrulanmış) durumlarını AYRI ele alıyor -- sadece ilki `None`
+  dönüyor, ikincisi `{"verified": True, "challenge": None, ...}` gibi bir
+  bilgi nesnesi dönüyor.
+- `widget.js`'e yeni bir `showAlreadyVerified()` metodu eklendi:
+  `loadInfo()` artık `info.verified === true` durumunda kutuyu kalıcı
+  olarak "Zaten doğrulandı" + yeşil tik göstererek dondurur (bir önceki
+  turdaki "başarıda donma" davranışıyla tutarlı), "geçersiz/süresi
+  dolmuş" hatasına düşmez.
+
+### Doğrulama
+
+Gerçek headless Chromium (Playwright) ile: bir Math captcha çözüldü,
+4 saniye beklendi (hâlâ "Doğrulandı"), **sonra sayfa gerçekten
+yenilendi** (`page.reload()`) -- widget "Zaten doğrulandı" gösterdi,
+"geçersiz" veya "süresi dolmuş" YAZMADI. Ayrıca `tests/unit/
+test_captcha_gate.py::test_get_info_distinguishes_already_verified_
+from_gone` ve `test_captcha_adaptive.py`'deki eşdeğeri eklendi.
+Mevcut bir entegrasyon testi (`test_gate_verify_solves_the_giveaway_
+scenario`) eski, yanlış davranışı (`404` bekliyordu) doğruluyordu --
+yeni, doğru beklentiye (`200` + `verified: true`) güncellendi.
+
 ## [Unreleased] — widget: başarıdan sonra kendini sıfırlayıp tekrar captcha sormuyor artık (gerçek bug)
 
 Kullanıcı fiziksel testte net bir bug bildirdi: bir captcha'yı çözüp
