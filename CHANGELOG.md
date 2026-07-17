@@ -2,6 +2,137 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Tüm kütüphanenin paralel-ajan denetimi: 10 gerçek bug bulundu ve düzeltildi
+
+Kullanıcının isteği (birebir): "Tüm kütüphaneyi parçalara ayır ve her
+parçayı ayrı ayrı kontrol et deneyle incele buglar hatalar kırılma
+açıklar veya eksik kalmış yerler hepsini tespit et ve düzelt."
+
+**Yöntem**: ~13.000 satırlık kütüphane 6 örtüşmeyen parçaya bölündü
+(auth/transport/storage, commands/authz/captcha, escalation/ratelimits/
+audit/consent, extras/automod, extensions/tools, ve genel), her biri için
+ayrı bir arka-plan `general-purpose` ajanı TEK bir mesajda paralel olarak
+başlatıldı -- yalnızca inceleme yapıp (gerçek deneyle, sadece kod okuyarak
+değil) onaylanmış bulguları file:line + repro + önerilen düzeltme ile
+raporlamaları istendi, kendileri hiçbir düzeltme yapmadı. Ajanların
+raporladığı ~24 bulgudan gerçek, somut repro ile doğrulananlar (aşağıda)
+tek tek düzeltildi -- oturumun tamamında izlenen sıkı disiplin: her
+düzeltme, ÖNCE eski koda karşı yeni testin gerçekten kırmızı olduğu
+(`git stash` ile fix'i geri alıp testin başarısız olduğu), SONRA fix
+geri gelince yeşile döndüğü doğrulanarak kabul edildi -- varsayım değil,
+her biri için gerçek çalıştırma kanıtı var.
+
+### Facade -- iki `DiscordWebAPI` örneği arasında sızan rate-limit bütçesi
+
+`commands`/`app_roles`/`consent`/`jobs`/`ratelimits`/`escalation` için 6
+router-builder modülünün her biri, `DiscordWebAPI.install()` açıkça bir
+limiter geçmediğinde modül-seviyesi bir varsayılan `TokenBucketLimiter`'a
+düşüyordu -- ki hiçbir zaman geçmiyordu. Sonuç: aynı process'teki HER
+`DiscordWebAPI` örneği bu 6 singleton'ı PAYLAŞIYORDU; bir bot/kiracının
+dashboard trafiği, tamamen ayrı bir örneğin bütçesini tüketebiliyordu.
+İki gerçek app ile HTTP üzerinden doğrulandı: app A'nın 20 PATCH çağrısı
+bütçeyi tüketince, app B'nin İLK PATCH'i bile 429 alıyordu. Düzeltme:
+`DiscordWebAPI.__init__` artık 6 örnek-seviyesi limiter kuruyor,
+`install()` bunları ilgili her router'a açıkça geçiyor.
+
+### Commands -- autocomplete tuşlamaları cooldown/invocation_count'u yakıyordu
+
+discord.py'nin `CommandTree._call()`'ı, `interaction.type`'a göre dallanmadan
+ÖNCE `interaction_check(interaction)`'ı çağırıyor -- yani bir slash
+komutun autocomplete-etkin bir parametresine her tuşlamada (kullanıcı
+henüz komutu ÇALIŞTIRMADAN), bizim sarmalanmış `_interaction_check`'imiz
+gerçek bir çağrıyla AYNI cooldown-tüketen, invocation-sayan yoldan
+geçiyordu. 1 kullanımlık bir cooldown, kullanıcı sadece bir seçeneğe
+yazı yazınca komutu kalıcı olarak "cooldown'da" gösterebiliyordu.
+Düzeltme: `interaction.type is discord.InteractionType.autocomplete` ise
+cooldown kontrolü/sayacı atlanıyor (global_check'teki mevcut
+hybrid-çift-kontrol koruma desenine paralel).
+
+### Escalation -- eşzamanlı ihlaller aynı eşiği iki kere tetikleyebiliyordu
+
+`EscalationEngine.record_violation()`, `violation_store.add()` sonra
+`count()` -- iki ayrı, senkronize edilmemiş çağrı yapıyordu. Aynı
+(guild, user, key) için eşzamanlı iki ihlal (iki otomod hiti art arda)
+her ikisinin de `add()`'i diğerinin `count()`'undan ÖNCE tamamlanabiliyor
+-- ikisi de AYNI sayıyı okuyup threshold=2'yi ikisi de eşleştirip
+üyeyi İKİ KERE atabiliyordu. Düzeltme: `AdaptiveCaptchaGate`/`CaptchaGate`
+için zaten kullanılan per-key `asyncio.Lock` deseni burada da
+(guild_id, user_id, key) başına uygulandı.
+
+### Ratelimits -- kendi yayınladığı event'i kendi bucket'ını sıfırlamak için kullanıyordu
+
+`GuildRateLimiter.set_rule()` cache'i ve bucket'ları SENKRON olarak
+sıfırlıyor, SONRA `ratelimit_config_changed` event'ini yayınlıyordu.
+`InProcessTransport.publish()` ise `asyncio.create_task` ile
+fire-and-forget çalışıyor -- yani aynı örneğin kendi
+`_on_config_changed` abonesi bu event'i DAHA SONRA, ayrı bir task olarak
+tekrar işliyordu. Bu ikinci, gereksiz sıfırlama arada geçen gerçek token
+tüketimini SİLİYORDU -- yani bir istemci tam sırasında bedava, hak
+etmediği bir token kazanabiliyordu. Düzeltme: her `GuildRateLimiter`'a
+benzersiz bir `origin_instance_id` verildi, event payload'ına eklendi;
+`_on_config_changed` kendi origin_id'siyle gelen event'i (kendi yankısı)
+görünce sıfırlamayı atlıyor -- başka bir process/örnekten gelen gerçek
+değişiklikler hâlâ normal şekilde işleniyor.
+
+### Automod -- link_filter port/scheme bypass, emoji_spam 2x fazla sayma, exemptions kanal-izni boşluğu
+
+- **`link_filter.py`**: host regex'i `[^\s/]+` bir `:port` sonekini de
+  yakalıyordu -- `evil.com:8080` ne `== "evil.com"`e ne
+  `.endswith(".evil.com")`e uyduğu için engellenen bir domain'e port
+  eklemek engeli AŞIYORDU (ve allowlist tarafında izinli bir domain'i
+  portla paylaşmak yanlışlıkla ENGELLİYORDU). Ayrıca regex sadece
+  `https?://` şemasını eşliyordu -- şemayı atlamak (Discord'un kendi
+  istemcisi `www.`/çıplak domain'leri de otomatik linkliyor) TÜM filtreyi
+  baştan bypass ediyordu. Düzeltme: port ayıklandı; `www.` öneki VEYA
+  ardından `/` gelen çıplak bir domain de artık eşleşiyor (sıradan
+  "node.js"/"vue.js" gibi metinleri false-positive yapmamak için trailing
+  `/` şartı korundu).
+- **`emoji_spam.py`**: bayrak emojisi (2 REGIONAL INDICATOR codepoint) ve
+  ten-tonlu emoji (taban + 1 FITZPATRICK MODIFIER codepoint) her
+  codepoint'i ayrı ayrı sayıyordu -- 3 bayrak mesajı `max_emoji` için 6
+  sayılıyordu. Düzeltme: bayrak çiftleri ve taban+modifier ikilileri artık
+  TEK eşleşme olarak sayılıyor.
+- **`exemptions.py`**: `bypass_if_manage_messages`, kendi docstring'inin
+  vaat ettiği "bu kanalda manuel mesaj silebilen" yerine
+  `author.guild_permissions.manage_messages` (sunucu-geneli izin)
+  kontrol ediyordu -- kanal-özel izin override'larını görmezden geliyordu.
+  Düzeltme: `message.channel.permissions_for(author).manage_messages`.
+
+### Extras -- warn.py'de eşzamanlı uyarılar auto-timeout'u iki kere ateşleyebiliyordu
+
+`extras.warn`'ın `auto_timeout_after` mantığı, escalation engine ile
+BİREBİR aynı add-then-count yarışına sahipti: aynı üye için eşzamanlı iki
+`/warn` çağrısı, ikisi de aynı post-add sayıyı okuyup threshold'u
+ikisi de eşleştirip üyeyi iki kere timeout'a alabiliyordu. Aynı
+per-(guild_id, user_id) `asyncio.Lock` deseniyle düzeltildi.
+
+### Extensions -- scaffold.py'de path traversal + manifest adı uyuşmazlığı
+
+- `create_extension()`'daki `dist` (gerçek `target_dir / dist` yazma yolu),
+  ham girdiden sadece `_`/boşluk değiştirilerek üretiliyordu -- `..` ve
+  `/` hiç sanitize edilmiyordu. `"../../../etc/whatever"` gibi bir isim
+  `target_dir`'ı tamamen aşarak dosya yazdırıyordu (gerçekten çalıştırılıp
+  doğrulandı: dosyalar `target_dir` dışına yazıldı); mutlak bir yol
+  (`"/etc/whatever"`) ise `Path("a") / "/etc/x"`'in "a"yı tamamen atıp
+  mutlak yola dönüşmesi yüzünden `target_dir`'ı komple yok sayıyordu.
+  Düzeltme: yeni `_sanitize_dist()` -- `/`, `..`, alfasayısal olmayan her
+  şeyi tire ile değiştiriyor; ayrıca sonuç yolun gerçekten `target_dir`
+  içinde kaldığını doğrulayan bir savunma-derinliği kontrolü eklendi.
+- Üretilen `__init__.py`'deki `ExtensionManifest(name=...)`, dokümante
+  edilen "importable-style, ExtensionRegistry.get(name)'in anahtarı"
+  sözleşmesine rağmen ham, sanitize edilmemiş girdiyi kullanıyordu (paket
+  kendi import edilebilir adıyla uyuşmuyordu). Düzeltme: artık `pkg`
+  (sanitize edilmiş slug) kullanılıyor.
+
+### Doğrulama
+
+`ruff check discord_webapi tests examples`, `mypy discord_webapi` (122
+dosya), `python -m pytest` (yerel Redis ile) -- hepsi temiz: 752 test
+geçti, 7 skip (opsiyonel bağımlılıklar), yalnızca gerçek bir Postgres
+sunucusu gerektiren 1 test bu ortamda deselect edildi (ana koddaki
+değişiklikle ilgisiz, temiz checkout'ta da aynı şekilde başarısız
+oluyor -- doğrulandı).
+
 ## [Unreleased] — `PageGuard`: Cloudflare deseni artık TEK bir link için değil, HERHANGİ bir sayfa için de kullanılabiliyor
 
 Kullanıcının isteği (özet): "cloudflare gibi tam kapasite geniş bir

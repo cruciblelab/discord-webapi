@@ -64,6 +64,24 @@ async def delete_rows(dest_engine: AsyncEngine, table: Table) -> None:
         await conn.execute(table.delete())
 
 
+async def replace_rows(dest_engine: AsyncEngine, table: Table, rows: list[dict[str, Any]]) -> None:
+    """Delete every existing row in `table` and insert `rows` in ONE
+    transaction -- what `backup.py`/`migrate.py`'s restore commands
+    actually need, unlike calling `delete_rows` then `write_rows`
+    separately (each opens its own `dest_engine.begin()`, i.e. two
+    independently-committed transactions). If the insert fails partway
+    (a corrupted/incompatible backup file, a duplicate key, a schema
+    mismatch), that used to leave the table PERMANENTLY EMPTY: the
+    delete had already committed, and the new data never made it in --
+    turning the recovery tool into a data-loss tool on a bad input file.
+    Here, a failed insert rolls the delete back too, so a bad restore
+    input leaves the table exactly as it was before the attempt."""
+    async with dest_engine.begin() as conn:
+        await conn.execute(table.delete())
+        if rows:
+            await conn.execute(insert(table), rows)
+
+
 def json_default(value: Any) -> Any:
     if isinstance(value, datetime):
         return {"__datetime_iso__": value.isoformat()}

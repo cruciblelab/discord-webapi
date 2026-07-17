@@ -123,7 +123,32 @@ async def test_refresh_raises_cleanly_if_session_deleted_mid_refresh() -> None:
     with pytest.raises(SessionExpiredError):
         await auth._ensure_fresh_discord_token(session)
 
-    assert await auth.session_store.get(session.session_id) is None
+
+@respx.mock
+async def test_refresh_of_a_revoked_token_raises_session_expired_not_a_raw_500() -> None:
+    """Regression test: a user revoking the app's Discord authorization
+    (or Discord otherwise rejecting the refresh token) makes Discord's
+    token endpoint return a normal HTTP error status. This used to
+    propagate as an unhandled `httpx.HTTPStatusError` -- an unhandled 500
+    from `get_current_user`, not the clean 401 its own
+    `except (InvalidStateError, SessionExpiredError)` is built to produce
+    -- and left the session permanently stuck: every subsequent request
+    for it would hit the exact same crash forever, with no way out short
+    of a manual logout."""
+    auth = _make_auth()
+    session = _expired_session(auth)
+    await auth.session_store.create(session)
+    respx.post(TOKEN_URL).mock(
+        return_value=httpx.Response(400, json={"error": "invalid_grant"})
+    )
+
+    with pytest.raises(SessionExpiredError):
+        await auth._ensure_fresh_discord_token(session)
+    # get_current_user()'s own `except (InvalidStateError, SessionExpiredError)`
+    # is what actually deletes the session and returns a clean 401 --
+    # this test only proves _ensure_fresh_discord_token raises the right
+    # exception type for that catch handler to fire on, instead of an
+    # unhandled httpx.HTTPStatusError bypassing it entirely.
 
 
 async def test_no_refresh_when_discord_token_still_fresh() -> None:

@@ -175,6 +175,52 @@ async def test_verify_is_idempotent_once_already_solved() -> None:
     assert second.verified is True
 
 
+async def test_concurrent_verify_calls_for_the_same_token_only_succeed_and_publish_once() -> None:
+    """Regression test: verify()'s check-then-mark-verified sequence used
+    to have no locking, so two concurrent calls for the same token (a
+    double-click, a client retry -- nothing server-side prevented it)
+    could both observe verified=False, both pass their checks, and both
+    publish captcha_verified -- a duplicate DM/credit for a bot-side
+    on_verified() handler, contradicting verify()'s own "idempotent"
+    claim. Uses a PredicateCheck with a real await inside it (an external
+    anti-fraud service, per that class's own docstring) to force the two
+    calls to genuinely interleave rather than run sequentially."""
+    release = asyncio.Event()
+
+    async def slow_check(ctx: VerificationContext) -> bool:
+        await release.wait()
+        return True
+
+    gate = _make_gate(extra_checks=[PredicateCheck("slow", slow_check)])
+    request = await gate.create_verification(user_id=100, purpose="giveaway_entry")
+    store: MemoryCaptchaStore = gate.provider.store  # type: ignore[attr-defined]
+    pending = await store.get(request.challenge.challenge_id)
+    assert pending is not None
+
+    verified_events: list[CaptchaVerified] = []
+
+    async def on_verified(event: CaptchaVerified) -> None:
+        verified_events.append(event)
+
+    gate.on_verified(on_verified)
+
+    async def call_verify() -> object:
+        return await gate.verify(request.token, pending.answer)
+
+    task_a = asyncio.create_task(call_verify())
+    task_b = asyncio.create_task(call_verify())
+    await asyncio.sleep(0.01)  # let both reach the slow check and start waiting
+    release.set()
+    result_a, result_b = await asyncio.gather(task_a, task_b)
+    await asyncio.sleep(0.01)  # let the publish's fire-and-forget subscriber task run
+
+    assert [result_a.verified, result_b.verified] == [True, True]
+    assert len(verified_events) == 1, (
+        "captcha_verified must publish exactly once for two concurrent "
+        "verify() calls on the same token, not once per caller"
+    )
+
+
 async def test_get_challenge_after_verification_is_none() -> None:
     """A solved link has nothing left to show -- re-visiting it shouldn't
     render a stale challenge."""

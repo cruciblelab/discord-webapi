@@ -236,3 +236,56 @@ async def test_reader_loop_reconnects_after_a_dropped_connection() -> None:
     # The reconnect resubscribed to the events channel (at least once,
     # beyond whatever initial subscribe start() would have done).
     assert any("discord_webapi:events" in calls for calls in fake_pubsub.subscribe_calls)
+
+
+async def test_reader_loop_survives_a_malformed_event_envelope() -> None:
+    """Regression test: `_dispatch_event` indexes `envelope["type"]`/
+    `["payload"]` directly with no validation. A shape mismatch (version
+    skew between deployed processes, a bug elsewhere on the wire) used to
+    raise an uncaught KeyError straight out of the read loop, permanently
+    ending event delivery -- unlike the RPC-request branch, which was
+    already guarded via `_create_tracked_task`. One bad envelope must be
+    dropped and logged, not fatal to every event after it."""
+    transport = RedisTransport("redis://unused")
+
+    class _FakePubSub:
+        async def subscribe(self, *channels: str) -> None:
+            pass
+
+        async def listen(self):
+            yield {
+                "type": "message",
+                "channel": "discord_webapi:events",
+                "data": '{"type": "ping"}',  # missing "payload" -- malformed
+            }
+            yield {
+                "type": "message",
+                "channel": "discord_webapi:events",
+                "data": '{"type": "ping", "payload": {}, "source": null}',
+            }
+            await asyncio.sleep(3600)
+
+        async def aclose(self) -> None:
+            pass
+
+    transport._pubsub = _FakePubSub()  # type: ignore[assignment]
+
+    received: list[str] = []
+
+    async def on_ping(event: Event) -> None:
+        received.append(event.type)
+
+    transport.subscribe("ping", on_ping)
+
+    reader_task = asyncio.create_task(transport._read_loop())
+    try:
+        for _ in range(80):
+            await asyncio.sleep(0.05)
+            if received:
+                break
+    finally:
+        reader_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reader_task
+
+    assert received == ["ping"]  # the good envelope after the bad one was still delivered

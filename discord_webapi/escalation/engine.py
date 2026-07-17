@@ -12,6 +12,7 @@ counted, but nothing is ever done about them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -62,6 +63,8 @@ class EscalationEngine:
         self.audit_logger = audit_logger
         self._rules: dict[tuple[int, str], list[EscalationRule]] = {}
         self._loaded: set[tuple[int, str]] = set()
+        # Per (guild_id, user_id, key) lock -- see record_violation.
+        self._violation_locks: dict[tuple[int, int, str], asyncio.Lock] = {}
 
         transport.subscribe(EVENT_TYPE_ESCALATION_RULES_CHANGED, self._on_rules_changed)
 
@@ -82,28 +85,46 @@ class EscalationEngine:
         case: a warn command, an automod hit); if you bulk-adjust a
         member's count some other way, a rung whose threshold gets
         skipped over won't fire retroactively.
+
+        The add-then-count sequence runs under a per-(guild, user, key)
+        lock: `ViolationStore.add`/`count` are two separate store calls,
+        so two concurrent violations for the same member/key (e.g. two
+        automod hits landing back-to-back) could both read the *same*
+        post-increment count -- either double-firing the same rung (two
+        kicks/bans for what should have been one threshold crossing) or,
+        depending on timing, having one of the two counts skip over a
+        threshold entirely. This mirrors the same class of fix already
+        applied to `SQLCaptchaStore.increment_attempts` (an atomic
+        counter there) and to `AdaptiveCaptchaGate`/`CaptchaGate`'s
+        per-token locks (a check-then-act race here in-process).
         """
         guild_id = member.guild.id
-        await self.violation_store.add(
-            ViolationRecord(
-                guild_id=guild_id,
-                user_id=member.id,
-                key=key,
-                source=source,
-                reason=reason,
-                created_at=datetime.now(UTC),
-            )
-        )
-        count = await self.violation_store.count(guild_id, member.id, key)
+        lock_key = (guild_id, member.id, key)
+        lock = self._violation_locks.setdefault(lock_key, asyncio.Lock())
+        try:
+            async with lock:
+                await self.violation_store.add(
+                    ViolationRecord(
+                        guild_id=guild_id,
+                        user_id=member.id,
+                        key=key,
+                        source=source,
+                        reason=reason,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+                count = await self.violation_store.count(guild_id, member.id, key)
 
-        rules = await self._get_rules(guild_id, key)
-        triggered = next((r for r in rules if r.threshold == count), None)
-        if triggered is None:
-            return EscalationOutcome(count=count, triggered_rule=None)
+                rules = await self._get_rules(guild_id, key)
+                triggered = next((r for r in rules if r.threshold == count), None)
+                if triggered is None:
+                    return EscalationOutcome(count=count, triggered_rule=None)
 
-        applied = await self._apply_action(member, triggered)
-        await self._audit_trigger(member, key, count, triggered, applied=applied)
-        return EscalationOutcome(count=count, triggered_rule=triggered)
+                applied = await self._apply_action(member, triggered)
+                await self._audit_trigger(member, key, count, triggered, applied=applied)
+                return EscalationOutcome(count=count, triggered_rule=triggered)
+        finally:
+            self._violation_locks.pop(lock_key, None)
 
     async def _audit_trigger(
         self, member: discord.Member, key: str, count: int, rule: EscalationRule, *, applied: bool

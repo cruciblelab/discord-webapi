@@ -130,6 +130,15 @@ class CommandRegistry:
             role_ids = [role.id for role in getattr(interaction.user, "roles", [])]
             if not await self._check_app_role(guild_id, name, interaction.user.id, role_ids):
                 return False
+            if interaction.type is discord.InteractionType.autocomplete:
+                # discord.py's CommandTree._call() runs interaction_check()
+                # before it branches on interaction.type, so this fires once
+                # per keystroke while the user is still typing an option
+                # value -- not a real invocation. Without this guard every
+                # autocomplete request consumed a cooldown token and
+                # inflated invocation_count for a command the user hadn't
+                # actually run yet.
+                return True
             # Slash-only path: no CommandOnCooldown exception here (that's an
             # ext.commands error type, not reliably handled by the tree's own
             # error pipeline) -- just reject, matching the disabled-check above.

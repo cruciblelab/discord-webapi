@@ -39,12 +39,11 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from discord_webapi.tools._sql_dump import (
     DumpFileError,
     confirm,
-    delete_rows,
     load_dump_file,
     read_rows,
     redact,
     reflect,
-    write_rows,
+    replace_rows,
 )
 from discord_webapi.tools._sql_dump import dumps as dump_json
 
@@ -165,8 +164,7 @@ async def restore_backup(*, backup_path: Path, dest_url: str, assume_yes: bool) 
                 "(önce tabloyu oluşturman gerekiyor)"
             )
             continue
-        await delete_rows(dest_engine, table)
-        await write_rows(dest_engine, table, rows)
+        await replace_rows(dest_engine, table, rows)
         print(f"  - {name}: {len(rows)} satır geri yüklendi")
 
     print("\nGeri yükleme tamamlandı.")

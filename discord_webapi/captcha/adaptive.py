@@ -25,6 +25,7 @@ logic, or nothing at all instead.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -190,6 +191,25 @@ class AdaptiveCaptchaGate:
         self.trust_ttl = trust_ttl
         self.bind_trust_to_ip = bind_trust_to_ip
         self.ttl = ttl
+        # Per-token locks -- two concurrent calls for the SAME token (a
+        # double page load, a client retry, two open tabs) used to race
+        # on both `_resolve_decision` (each could see no decision stored
+        # yet and independently `escalation_provider.issue()` a
+        # DIFFERENT challenge, so whichever `decision_store.set()` landed
+        # last silently discarded the other -- the user who solved the
+        # one still shown on their screen would then fail) and on
+        # `verify()`'s check-then-mark-verified sequence (both could see
+        # `verified=False`, both pass their checks, and both publish
+        # `captcha_verified` -- a duplicate DM/credit for a bot-side
+        # handler, contradicting this method's own "idempotent" claim).
+        # Same setdefault-then-pop pattern as `DiscordAuth._refresh_locks`
+        # in auth/oauth.py, already verified safe there under real
+        # concurrency: any task still waiting on a lock already holds its
+        # own reference to that exact Lock object (grabbed via
+        # `setdefault` before it could be popped), so popping here only
+        # affects the *next* caller for this token, which gets a fresh
+        # lock and re-reads current state regardless.
+        self._token_locks: dict[str, asyncio.Lock] = {}
 
     async def is_currently_trusted(self, user_id: int, *, client_ip: str | None = None) -> bool:
         """Whether `user_id` is trusted *right now*, without minting or
@@ -268,63 +288,88 @@ class AdaptiveCaptchaGate:
         escalation decision `get_info()` already made for this token
         (or makes one now, if the widget's info call was somehow
         skipped) -- the decision, once made, never changes for a given
-        token."""
+        token.
+
+        The whole check-then-mark-verified sequence runs under this
+        token's lock (see `__init__`'s `_token_locks` comment) -- two
+        concurrent `verify()` calls for the same token used to both
+        observe `verified=False`, both pass their checks, and both
+        publish `captcha_verified`, contradicting the "idempotent" claim
+        above."""
         request = await self._get_live(token)
         if request is None:
             return CheckResult(verified=False, failed_check=None, detail="link expired or unknown")
         if request.verified:
             return CheckResult(verified=True, passed=[])
 
-        decision = await self._resolve_decision(token, request, client_ip)
-        # The check that reads ctx.request.challenge (CaptchaCheck) needs
-        # it there -- AdaptiveDecision is kept in its own store rather
-        # than mutated onto the shared VerificationRequest, so it's
-        # attached to this in-memory copy just for this call.
-        request.challenge = decision.challenge
+        lock = self._token_locks.setdefault(token, asyncio.Lock())
+        try:
+            async with lock:
+                # Re-read: a concurrent verify() may have already
+                # completed while we waited for the lock.
+                request = await self._get_live(token)
+                if request is None:
+                    return CheckResult(
+                        verified=False, failed_check=None, detail="link expired or unknown"
+                    )
+                if request.verified:
+                    return CheckResult(verified=True, passed=[])
 
-        checks: list[VerificationCheck] = []
-        if self.require_account:
-            checks.append(AccountMatchCheck())
-        checks.extend(self.extra_checks)
-        if decision.requires_captcha:
-            checks.append(CaptchaCheck(self.escalation_provider))
+                decision = await self._resolve_decision_locked(token, request, client_ip)
+                # The check that reads ctx.request.challenge (CaptchaCheck)
+                # needs it there -- AdaptiveDecision is kept in its own
+                # store rather than mutated onto the shared
+                # VerificationRequest, so it's attached to this in-memory
+                # copy just for this call.
+                request.challenge = decision.challenge
 
-        ctx = VerificationContext(
-            request=request,
-            authenticated_user_id=authenticated_user_id,
-            captcha_response=response,
-            signals=signals or {},
-            client_ip=client_ip,
-        )
-        passed: list[str] = []
-        for check in checks:
-            outcome = await check.run(ctx)
-            if not outcome.passed:
-                return CheckResult(verified=False, failed_check=check.name, detail=outcome.detail)
-            passed.append(check.name)
+                checks: list[VerificationCheck] = []
+                if self.require_account:
+                    checks.append(AccountMatchCheck())
+                checks.extend(self.extra_checks)
+                if decision.requires_captcha:
+                    checks.append(CaptchaCheck(self.escalation_provider))
 
-        await self.store.mark_verified(token)
-        await self.decision_store.delete(token)
-        if self.trust_store is not None:
-            await self.trust_store.trust(
-                request.user_id,
-                ttl=self.trust_ttl,
-                ip=client_ip if self.bind_trust_to_ip else None,
-            )
-        await self.transport.publish(
-            Event(
-                type=EVENT_TYPE_CAPTCHA_VERIFIED,
-                payload=CaptchaVerified(
-                    token=token,
-                    user_id=request.user_id,
-                    guild_id=request.guild_id,
-                    purpose=request.purpose,
-                    metadata=request.metadata,
-                    checks_passed=passed,
-                ).model_dump(),
-            )
-        )
-        return CheckResult(verified=True, passed=passed)
+                ctx = VerificationContext(
+                    request=request,
+                    authenticated_user_id=authenticated_user_id,
+                    captcha_response=response,
+                    signals=signals or {},
+                    client_ip=client_ip,
+                )
+                passed: list[str] = []
+                for check in checks:
+                    outcome = await check.run(ctx)
+                    if not outcome.passed:
+                        return CheckResult(
+                            verified=False, failed_check=check.name, detail=outcome.detail
+                        )
+                    passed.append(check.name)
+
+                await self.store.mark_verified(token)
+                await self.decision_store.delete(token)
+                if self.trust_store is not None:
+                    await self.trust_store.trust(
+                        request.user_id,
+                        ttl=self.trust_ttl,
+                        ip=client_ip if self.bind_trust_to_ip else None,
+                    )
+                await self.transport.publish(
+                    Event(
+                        type=EVENT_TYPE_CAPTCHA_VERIFIED,
+                        payload=CaptchaVerified(
+                            token=token,
+                            user_id=request.user_id,
+                            guild_id=request.guild_id,
+                            purpose=request.purpose,
+                            metadata=request.metadata,
+                            checks_passed=passed,
+                        ).model_dump(),
+                    )
+                )
+                return CheckResult(verified=True, passed=passed)
+        finally:
+            self._token_locks.pop(token, None)
 
     def on_verified(
         self,
@@ -348,6 +393,22 @@ class AdaptiveCaptchaGate:
     async def _resolve_decision(
         self, token: str, request: VerificationRequest, client_ip: str | None
     ) -> AdaptiveDecision:
+        """Acquires this token's lock itself -- for callers (`get_info`)
+        that don't already hold it. `verify()` holds the lock for its
+        whole critical section already, so it calls
+        `_resolve_decision_locked` directly instead (acquiring the same
+        lock twice from the same task would deadlock -- `asyncio.Lock`
+        isn't reentrant)."""
+        lock = self._token_locks.setdefault(token, asyncio.Lock())
+        try:
+            async with lock:
+                return await self._resolve_decision_locked(token, request, client_ip)
+        finally:
+            self._token_locks.pop(token, None)
+
+    async def _resolve_decision_locked(
+        self, token: str, request: VerificationRequest, client_ip: str | None
+    ) -> AdaptiveDecision:
         existing = await self.decision_store.get(token)
         if existing is not None:
             return existing
@@ -363,7 +424,15 @@ class AdaptiveCaptchaGate:
 
         decision = AdaptiveDecision(requires_captcha=requires_captcha, challenge=challenge)
         await self.decision_store.set(token, decision)
-        return decision
+        # Re-read rather than trust our own locally-computed `decision`:
+        # across web replicas (separate processes, so this class's own
+        # in-process lock above can't help), a concurrent caller may have
+        # persisted a DIFFERENT decision (a different escalation
+        # challenge) microseconds before us -- `SQLAdaptiveDecisionStore.
+        # set()` deliberately discards our write rather than overwriting
+        # theirs in that case (see its own docstring), so the store is
+        # the source of truth here, not this local variable.
+        return await self.decision_store.get(token) or decision
 
     async def _get_live(self, token: str) -> VerificationRequest | None:
         request = await self.store.get(token)

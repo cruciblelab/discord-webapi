@@ -138,6 +138,33 @@ async def test_idle_buckets_are_swept_to_bound_memory() -> None:
     assert (GUILD_ID, KEY, "user-2") in limiter._buckets
 
 
+async def test_self_published_config_change_does_not_reset_state_it_already_applied() -> None:
+    """Regression test: `set_rule` invalidates the cache and resets this
+    instance's own buckets synchronously *before* publishing --
+    `InProcessTransport.publish()` fans out via `asyncio.create_task`
+    (fire-and-forget), so `_on_config_changed` runs again later for the
+    very event this same instance just published. If it isn't
+    recognized as an echo, that second, redundant reset wipes out any
+    real token consumption that happened between the synchronous reset
+    and the delayed event handler finally running -- handing whoever's
+    mid-flight extra, unearned tokens for free."""
+    limiter = _make_limiter(default_max_calls=1, default_per_seconds=60.0)
+
+    await limiter.set_rule(GUILD_ID, KEY, max_calls=5, per_seconds=60.0)
+    # Spend all 5 tokens under the just-applied rule before this
+    # instance's own fire-and-forget self-notification (scheduled by
+    # set_rule's publish() call above) has had a chance to run.
+    for _ in range(5):
+        assert await limiter.check(GUILD_ID, KEY) is True
+    assert await limiter.check(GUILD_ID, KEY) is False
+
+    await asyncio.sleep(0.05)  # let the self-published event's task run
+
+    # A wrongly-applied self-reset would refill the bucket to 5/5 here,
+    # letting this next call through instead of staying blocked.
+    assert await limiter.check(GUILD_ID, KEY) is False
+
+
 async def test_a_second_limiter_sharing_the_same_transport_sees_live_updates() -> None:
     """Simulates two processes (e.g. a bot process's automod check and a
     web process's dashboard) sharing one Transport + Store -- a rule

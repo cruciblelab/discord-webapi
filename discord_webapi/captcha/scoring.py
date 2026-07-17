@@ -175,9 +175,22 @@ def _parse_trajectory(signals: dict[str, Any]) -> list[tuple[float, float, float
         if not isinstance(sample, list | tuple) or len(sample) != 3:
             return None
         try:
-            points.append((float(sample[0]), float(sample[1]), float(sample[2])))
+            x, y, t = float(sample[0]), float(sample[1]), float(sample[2])
         except (TypeError, ValueError):
             return None
+        if not (math.isfinite(x) and math.isfinite(y) and math.isfinite(t)):
+            # `float()` (and `json.loads`, by default) happily accepts
+            # NaN/Infinity -- without this check, a single smuggled NaN
+            # coordinate silently corrupted every downstream heuristic
+            # instead of triggering the malformed-data abstain path
+            # above: Python's own `min`/`max` treat a NaN comparison as
+            # always False, so `max(0.0, min(1.0, nan))` evaluates to
+            # `1.0` (the first argument wins when `<` is False) -- a
+            # degenerate trajectory scored as confidently human by the
+            # two heaviest-weighted heuristics in
+            # `default_behavior_heuristics()` instead of being rejected.
+            return None
+        points.append((x, y, t))
     return points
 
 
@@ -197,7 +210,13 @@ def _coefficient_of_variation(values: list[float]) -> float | None:
     if mean == 0:
         return None
     variance = sum((v - mean) ** 2 for v in values) / len(values)
-    return math.sqrt(variance) / mean
+    cv = math.sqrt(variance) / mean
+    # Defense in depth alongside `_parse_trajectory`'s isfinite check --
+    # a non-finite result here must abstain, never silently score as
+    # "maximally human" the way an un-guarded `min(1.0, nan)` would (see
+    # `_parse_trajectory`'s comment for why that specific expression is
+    # the actual bug mechanism).
+    return cv if math.isfinite(cv) else None
 
 
 def _mouse_path_curvature(signals: dict[str, Any]) -> float | None:

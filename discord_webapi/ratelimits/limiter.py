@@ -16,6 +16,7 @@ guild-configurable threshold.
 from __future__ import annotations
 
 import time
+import uuid
 from datetime import UTC, datetime
 
 from discord_webapi.ratelimits.events import (
@@ -55,6 +56,13 @@ class GuildRateLimiter:
     ) -> None:
         self.transport = transport
         self.store = store
+        # Identifies events this exact instance published, so its own
+        # `_on_config_changed` subscription (see below) can tell "another
+        # process/instance changed this rule" apart from "I just changed
+        # this rule myself, synchronously, a moment ago" -- see the
+        # docstring on `_on_config_changed` for why that distinction
+        # matters.
+        self._instance_id = uuid.uuid4().hex
         self._default_max_calls = default_max_calls
         self._default_per_seconds = default_per_seconds
         self._rules: dict[tuple[int, str], RateLimitRule] = {}
@@ -142,7 +150,9 @@ class GuildRateLimiter:
         await self.transport.publish(
             Event(
                 type=EVENT_TYPE_RATELIMIT_CONFIG_CHANGED,
-                payload=RateLimitConfigChanged(guild_id=guild_id, key=key).model_dump(),
+                payload=RateLimitConfigChanged(
+                    guild_id=guild_id, key=key, origin_instance_id=self._instance_id
+                ).model_dump(),
             )
         )
         return rule
@@ -154,7 +164,9 @@ class GuildRateLimiter:
         await self.transport.publish(
             Event(
                 type=EVENT_TYPE_RATELIMIT_CONFIG_CHANGED,
-                payload=RateLimitConfigChanged(guild_id=guild_id, key=key).model_dump(),
+                payload=RateLimitConfigChanged(
+                    guild_id=guild_id, key=key, origin_instance_id=self._instance_id
+                ).model_dump(),
             )
         )
 
@@ -191,6 +203,22 @@ class GuildRateLimiter:
             del self._buckets[bucket_key]
 
     async def _on_config_changed(self, event: Event) -> None:
+        """`set_rule`/`delete_rule` already invalidate the cache and reset
+        this instance's own buckets synchronously, *before* publishing --
+        but `InProcessTransport.publish()` fans out via
+        `asyncio.create_task` (fire-and-forget), so this handler runs
+        again later, asynchronously, for the very event this same
+        instance just published. Between that synchronous reset and this
+        handler finally running, a concurrent `check()` call may have
+        already built fresh, legitimate bucket state under the new rule
+        (e.g. its first token spend) -- redoing the reset here would wipe
+        that out for free, handing whoever's mid-flight an extra unearned
+        token. Skip it when this is our own echo; only a genuinely
+        different process/instance's rule change needs to invalidate and
+        reset *this* instance's state.
+        """
         change = RateLimitConfigChanged.model_validate(event.payload)
+        if change.origin_instance_id == self._instance_id:
+            return
         self._invalidate(change.guild_id, change.key)
         self._reset_buckets(change.guild_id, change.key)

@@ -82,6 +82,33 @@ def test_extracts_prefix_command_params() -> None:
     assert params_by_name["reason"].required is False
 
 
+def test_a_greedy_typed_prefix_command_does_not_abort_introspection_of_the_whole_bot() -> None:
+    """Regression test: `commands.Greedy[int]` subclasses `List[T]` and
+    inherits its unhashability -- `_prefix_param_type_name` used to do
+    `annotation in _PYTHON_TYPE_NAMES` (a dict membership test, which
+    hashes the key), raising an uncaught `TypeError: unhashable type:
+    'Greedy'`. Since `extract_command_specs` iterates every command
+    inline with no per-command try/except, ONE Greedy-typed parameter
+    anywhere in the bot used to abort introspection of every other
+    command too -- `CommandRegistry.register_all()` never completed, so
+    the dashboard enable/disable check never got installed at all."""
+    bot = dpy_commands.Bot(command_prefix="!", intents=discord.Intents.default(), help_command=None)
+
+    @bot.command(name="greedy-cmd")
+    async def greedy_cmd(ctx: dpy_commands.Context, numbers: dpy_commands.Greedy[int]) -> None:
+        ...
+
+    @bot.command(name="other-cmd")
+    async def other_cmd(ctx: dpy_commands.Context, member: discord.Member) -> None:
+        ...
+
+    specs = extract_command_specs(bot)
+
+    assert {s.name for s in specs} == {"greedy-cmd", "other-cmd"}
+    greedy_spec = next(s for s in specs if s.name == "greedy-cmd")
+    assert greedy_spec.params[0].type == "integer"  # the Greedy's element type
+
+
 def test_hybrid_command_merges_into_single_spec() -> None:
     bot = dpy_commands.Bot(command_prefix="!", intents=discord.Intents.default(), help_command=None)
 

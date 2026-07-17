@@ -84,6 +84,31 @@ def test_mobile_callback_redirects_with_session_id_and_sets_no_cookie() -> None:
 
 
 @respx.mock
+def test_mobile_callback_preserves_the_deep_links_own_query_params() -> None:
+    """Regression test: `httpx.URL(url, params=...)` REPLACES the URL's
+    query string rather than merging with it -- a consumer using a deep
+    link with its own query params (distinguishing app flows, a
+    client-side nonce, ...) silently lost them on every successful
+    mobile login."""
+    app, _auth = _make_app(mobile_redirect_uri="myapp://auth-callback?source=login&debug=1")
+    client = TestClient(app)
+    state = _login_mobile_and_get_state(client)
+    _mock_discord_endpoints(respx.mock)
+
+    callback_resp = client.get(
+        f"/auth/discord/callback?code=some-code&state={state}", follow_redirects=False
+    )
+
+    assert callback_resp.status_code == 302
+    location = callback_resp.headers["location"]
+    query = parse_qs(urlparse(location).query)
+    assert query["source"] == ["login"]
+    assert query["debug"] == ["1"]
+    assert query["session_id"][0]
+    assert query["expires_at"][0]
+
+
+@respx.mock
 def test_bearer_token_from_mobile_flow_authenticates_requests() -> None:
     app, _auth = _make_app()
     client = TestClient(app)

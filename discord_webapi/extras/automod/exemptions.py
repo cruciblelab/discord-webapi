@@ -29,7 +29,17 @@ def is_exempt(
 
     author = message.author
     if bypass_if_manage_messages and isinstance(author, discord.Member):
-        if author.guild_permissions.manage_messages:
+        # `channel.permissions_for()`, not `author.guild_permissions` --
+        # the latter is the guild-wide permission only, ignoring this
+        # channel's own permission overwrites. A member with
+        # manage_messages guild-wide but explicitly denied it in *this*
+        # channel would otherwise still be wrongly exempted here (they
+        # can't actually manually delete messages here, contradicting
+        # this function's own stated intent above); a member granted
+        # manage_messages only via a channel-specific overwrite (e.g. a
+        # helper role scoped to one channel) would otherwise be wrongly
+        # *not* exempted.
+        if message.channel.permissions_for(author).manage_messages:
             return True
 
     if exempt_role_ids and isinstance(author, discord.Member):

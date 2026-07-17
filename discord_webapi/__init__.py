@@ -42,6 +42,7 @@ from discord_webapi.commands import (
     install_command_registry_bridge,
 )
 from discord_webapi.consent import ConsentRecord, build_consent_router
+from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 from discord_webapi.escalation import (
     EscalationEngine,
     EscalationRule,
@@ -314,6 +315,24 @@ class DiscordWebAPI:
             transport, self.escalation_rule_store, self.violation_store
         )
 
+        # One TokenBucketLimiter per dashboard write-endpoint group,
+        # owned by THIS instance. Every `build_*_router()` below defaults
+        # to its own module-level limiter when none is passed -- fine for
+        # a single `DiscordWebAPI` per process, but that default is one
+        # singleton shared by *every* instance in the same process: two
+        # independent `DiscordWebAPI` apps (e.g. two tenants hosted
+        # together) would silently share one rate-limit budget, so one
+        # app's traffic could exhaust the other's. Passing an explicit,
+        # instance-scoped limiter to each router in `install()` below
+        # keeps every instance's budget independent, the same way
+        # `self.rate_limiter`/`self.escalation_engine` above already are.
+        self._commands_patch_limiter = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+        self._app_roles_write_limiter = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+        self._consent_write_limiter = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+        self._jobs_enqueue_limiter = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+        self._ratelimits_write_limiter = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+        self._escalation_write_limiter = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+
         self.registry: CommandRegistry | None = None
         if bot is not None:
             # All bot-process-only wiring: a web-only process (see
@@ -465,9 +484,11 @@ class DiscordWebAPI:
         # Same reasoning as the rate limiter above -- always reachable
         # from your own code, dashboard CRUD is the opt-in part.
         app.state.discord_webapi_escalation_engine = self.escalation_engine
-        app.include_router(build_commands_router())
+        app.include_router(build_commands_router(patch_rate_limiter=self._commands_patch_limiter))
         app.include_router(build_members_router())
-        app.include_router(build_app_roles_router())
+        app.include_router(
+            build_app_roles_router(write_rate_limiter=self._app_roles_write_limiter)
+        )
         app.include_router(build_guilds_router())
         if serve_dashboard:
             app.include_router(
@@ -493,7 +514,7 @@ class DiscordWebAPI:
             app.include_router(build_audit_log_router())
         if enable_cookie_consent:
             app.state.discord_webapi_consent_store = self.consent_store
-            app.include_router(build_consent_router())
+            app.include_router(build_consent_router(write_rate_limiter=self._consent_write_limiter))
         if enable_jobs:
             if self.job_queue is None:
                 raise RuntimeError(
@@ -502,11 +523,15 @@ class DiscordWebAPI:
                     "handlers on it with register_worker(), then pass it in"
                 )
             app.state.discord_webapi_job_queue = self.job_queue
-            app.include_router(build_jobs_router())
+            app.include_router(build_jobs_router(enqueue_rate_limiter=self._jobs_enqueue_limiter))
         if enable_ratelimits_api:
-            app.include_router(build_ratelimits_router())
+            app.include_router(
+                build_ratelimits_router(write_rate_limiter=self._ratelimits_write_limiter)
+            )
         if enable_escalation_api:
-            app.include_router(build_escalation_router())
+            app.include_router(
+                build_escalation_router(write_rate_limiter=self._escalation_write_limiter)
+            )
 
     def lifespan(self, token: str) -> AbstractAsyncContextManager[None]:
         if self.bot is None:

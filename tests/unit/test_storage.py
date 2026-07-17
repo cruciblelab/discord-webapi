@@ -37,6 +37,36 @@ async def test_get_missing_session_returns_none() -> None:
     assert await store.get("does-not-exist") is None
 
 
+async def test_mutating_the_object_passed_to_create_does_not_corrupt_the_store() -> None:
+    """Regression test: `create`/`get` used to alias the exact `Session`
+    object handed in/out, unlike every other Memory*Store in storage/
+    memory.py (all of which deepcopy on write and read) -- a caller
+    mutating a `Session` it still held a reference to silently corrupted
+    "persisted" state with no `update()` call ever made."""
+    store = MemorySessionStore()
+    session = _make_session()
+    await store.create(session)
+
+    session.username = "mutated-without-update"  # no store.update() call
+
+    fetched = await store.get(session.session_id)
+    assert fetched is not None
+    assert fetched.username != "mutated-without-update"
+
+
+async def test_mutating_a_fetched_session_does_not_corrupt_the_store() -> None:
+    store = MemorySessionStore()
+    await store.create(_make_session())
+
+    fetched = await store.get(_make_session().session_id)
+    assert fetched is not None
+    fetched.username = "mutated-via-get-return-value"
+
+    refetched = await store.get(fetched.session_id)
+    assert refetched is not None
+    assert refetched.username != "mutated-via-get-return-value"
+
+
 async def test_update_overwrites_existing_session() -> None:
     store = MemorySessionStore()
     session = _make_session()

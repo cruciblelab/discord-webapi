@@ -28,8 +28,24 @@ _PYTHON_TYPE_NAMES: dict[Any, str] = {
 def _prefix_param_type_name(annotation: Any) -> str:
     if annotation is inspect.Parameter.empty:
         return "string"
-    if annotation in _PYTHON_TYPE_NAMES:
-        return _PYTHON_TYPE_NAMES[annotation]
+    if isinstance(annotation, commands.Greedy):
+        # `commands.Greedy[int]` (etc.) subclasses `List[T]` and inherits
+        # its unhashability -- `annotation in _PYTHON_TYPE_NAMES` below
+        # is a dict membership test, which hashes the key, so this would
+        # otherwise raise `TypeError: unhashable type: 'Greedy'` and
+        # abort introspection of EVERY command in the bot (this function
+        # is called inline, uncaught, for each command in
+        # `extract_command_specs`'s walk -- one Greedy-typed parameter
+        # anywhere silently prevented `CommandRegistry.register_all()`
+        # from ever completing, so the dashboard enable/disable check
+        # never got installed at all). Fall through to the actual
+        # element type instead.
+        annotation = annotation.converter
+    try:
+        if annotation in _PYTHON_TYPE_NAMES:
+            return _PYTHON_TYPE_NAMES[annotation]
+    except TypeError:
+        pass  # some other unhashable annotation -- fall back below
     name = getattr(annotation, "__name__", None)
     return name.lower() if name else "unknown"
 

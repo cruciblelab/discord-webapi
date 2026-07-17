@@ -38,6 +38,7 @@ two separate ones (`for_bot_process`/`for_web_process`).
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
@@ -92,6 +93,15 @@ class CaptchaGate:
             assert provider is not None  # guarded above
             checks.append(CaptchaCheck(provider))
         self.checks = checks
+        # Per-token locks around verify()'s check-then-mark-verified
+        # sequence -- see that method's docstring for why. Same
+        # setdefault-then-pop pattern as `DiscordAuth._refresh_locks`
+        # (auth/oauth.py) and `AdaptiveCaptchaGate._token_locks`, already
+        # verified safe under real concurrency: any task still waiting on
+        # a lock already holds its own reference to that Lock object
+        # (grabbed via `setdefault` before it could be popped), so
+        # popping here only affects the *next* caller for this token.
+        self._token_locks: dict[str, asyncio.Lock] = {}
 
     async def create_verification(
         self,
@@ -191,6 +201,14 @@ class CaptchaGate:
         without re-running the checks (a page refresh re-posting the same
         form doesn't re-consume a one-time captcha answer). On success,
         marks it verified and publishes `captcha_verified`.
+
+        The check-then-mark-verified sequence runs under this token's
+        lock: two concurrent `verify()` calls for the same token (a
+        double-click, a client retry, nothing server-side prevented it)
+        used to both observe `verified=False`, both pass their checks,
+        and both publish `captcha_verified` -- contradicting the
+        "idempotent" claim above (a duplicate DM/credit for a bot-side
+        `on_verified()` handler).
         """
         request = await self._get_live(token)
         if request is None:
@@ -198,35 +216,52 @@ class CaptchaGate:
         if request.verified:
             return CheckResult(verified=True, passed=[c.name for c in self.checks])
 
-        ctx = VerificationContext(
-            request=request,
-            authenticated_user_id=authenticated_user_id,
-            captcha_response=response,
-            signals=signals or {},
-            client_ip=client_ip,
-        )
-        passed: list[str] = []
-        for check in self.checks:
-            outcome = await check.run(ctx)
-            if not outcome.passed:
-                return CheckResult(verified=False, failed_check=check.name, detail=outcome.detail)
-            passed.append(check.name)
+        lock = self._token_locks.setdefault(token, asyncio.Lock())
+        try:
+            async with lock:
+                # Re-read: a concurrent verify() may have already
+                # completed while we waited for the lock.
+                request = await self._get_live(token)
+                if request is None:
+                    return CheckResult(
+                        verified=False, failed_check=None, detail="link expired or unknown"
+                    )
+                if request.verified:
+                    return CheckResult(verified=True, passed=[c.name for c in self.checks])
 
-        await self.store.mark_verified(token)
-        await self.transport.publish(
-            Event(
-                type=EVENT_TYPE_CAPTCHA_VERIFIED,
-                payload=CaptchaVerified(
-                    token=token,
-                    user_id=request.user_id,
-                    guild_id=request.guild_id,
-                    purpose=request.purpose,
-                    metadata=request.metadata,
-                    checks_passed=passed,
-                ).model_dump(),
-            )
-        )
-        return CheckResult(verified=True, passed=passed)
+                ctx = VerificationContext(
+                    request=request,
+                    authenticated_user_id=authenticated_user_id,
+                    captcha_response=response,
+                    signals=signals or {},
+                    client_ip=client_ip,
+                )
+                passed: list[str] = []
+                for check in self.checks:
+                    outcome = await check.run(ctx)
+                    if not outcome.passed:
+                        return CheckResult(
+                            verified=False, failed_check=check.name, detail=outcome.detail
+                        )
+                    passed.append(check.name)
+
+                await self.store.mark_verified(token)
+                await self.transport.publish(
+                    Event(
+                        type=EVENT_TYPE_CAPTCHA_VERIFIED,
+                        payload=CaptchaVerified(
+                            token=token,
+                            user_id=request.user_id,
+                            guild_id=request.guild_id,
+                            purpose=request.purpose,
+                            metadata=request.metadata,
+                            checks_passed=passed,
+                        ).model_dump(),
+                    )
+                )
+                return CheckResult(verified=True, passed=passed)
+        finally:
+            self._token_locks.pop(token, None)
 
     def on_verified(
         self,

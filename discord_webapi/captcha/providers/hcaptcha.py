@@ -51,8 +51,14 @@ class HCaptchaProvider:
                 _VERIFY_URL, data={"secret": self._secret_key, "response": response}
             )
             resp.raise_for_status()
-            return bool(resp.json().get("success"))
-        except httpx.HTTPError:
+            data = resp.json()
+            return isinstance(data, dict) and bool(data.get("success"))
+        except (httpx.HTTPError, ValueError):
+            # See ReCaptchaProvider.verify()'s identical fix -- a 200
+            # with a non-JSON body (proxy/WAF interstitial, maintenance
+            # page) made `resp.json()` raise `json.JSONDecodeError` (a
+            # `ValueError`), uncaught, instead of the documented
+            # fail-closed `False`.
             return False
         finally:
             if self._external_http_client is None:

@@ -99,6 +99,28 @@ def test_callback_with_mismatched_state_is_rejected() -> None:
 
 
 @respx.mock
+def test_callback_with_a_rejected_auth_code_returns_a_clean_400_not_a_500() -> None:
+    """Regression test: Discord authorization codes are single-use --
+    reloading/going back to the callback URL, or a double-click on
+    "Authorize", reuses one and Discord's token endpoint rejects it with
+    a normal HTTP error status. This used to propagate as an unhandled
+    500 instead of a clean, actionable 400."""
+    app, _auth = _make_app()
+    client = TestClient(app)
+    state = _login_and_get_state(client)
+    respx.mock.post(TOKEN_URL).mock(
+        return_value=httpx.Response(400, json={"error": "invalid_grant"})
+    )
+
+    resp = client.get(
+        f"/auth/discord/callback?code=already-used-code&state={state}", follow_redirects=False
+    )
+
+    assert resp.status_code == 400
+    assert "dwa_session" not in client.cookies
+
+
+@respx.mock
 def test_callback_without_state_cookie_is_rejected() -> None:
     app, _auth = _make_app()
     client = TestClient(app)

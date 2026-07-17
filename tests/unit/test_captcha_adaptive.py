@@ -215,6 +215,61 @@ async def test_is_currently_trusted_false_without_a_trust_store() -> None:
     assert await gate.is_currently_trusted(100, client_ip="1.2.3.4") is False
 
 
+class _SlowReputationChecker:
+    """An `IPReputationChecker` with a real, controllable suspension
+    point -- lets a test force two concurrent `get_info()`/`verify()`
+    calls for the same token to genuinely interleave (a plain in-memory
+    check like `StaticBlocklistReputationChecker`'s has no real `await`
+    suspension point, so without this, "concurrent" asyncio tasks would
+    just run to completion one after another with no actual race
+    window)."""
+
+    def __init__(self, suspicious_ips: set[str], release: asyncio.Event) -> None:
+        self._suspicious_ips = suspicious_ips
+        self._release = release
+
+    async def is_suspicious(self, ip: str) -> bool:
+        await self._release.wait()
+        return ip in self._suspicious_ips
+
+
+async def test_concurrent_get_info_calls_resolve_to_the_same_decision() -> None:
+    """Regression test: `_resolve_decision` used to have no locking, so
+    two concurrent `get_info()` calls for the same token (a double page
+    load, a client retry, two open tabs) could both see no decision
+    persisted yet and independently `escalation_provider.issue()` a
+    DIFFERENT challenge -- whichever `decision_store.set()` landed last
+    silently won, so a user who then solved the *other* (still displayed
+    on their screen) challenge would fail."""
+    release = asyncio.Event()
+    gate = AdaptiveCaptchaGate(
+        InProcessTransport(),
+        MemoryVerificationStore(),
+        _SlowReputationChecker({"1.2.3.4"}, release),
+        MathCaptchaProvider(MemoryCaptchaStore()),
+        MemoryAdaptiveDecisionStore(),
+    )
+    request = await gate.create_verification(user_id=100, purpose="signup")
+
+    task_a = asyncio.create_task(gate.get_info(request.token, client_ip="1.2.3.4"))
+    task_b = asyncio.create_task(gate.get_info(request.token, client_ip="1.2.3.4"))
+    await asyncio.sleep(0.01)  # let both reach is_suspicious() and start waiting
+    release.set()
+    info_a, info_b = await asyncio.gather(task_a, task_b)
+
+    assert info_a is not None and info_b is not None
+    assert info_a["challenge"].challenge_id == info_b["challenge"].challenge_id, (
+        "both concurrent calls must agree on the SAME challenge -- solving "
+        "either one must succeed"
+    )
+
+    store: MemoryCaptchaStore = gate.escalation_provider.store  # type: ignore[union-attr]
+    pending = await store.get(info_a["challenge"].challenge_id)
+    assert pending is not None
+    result = await gate.verify(request.token, pending.answer, client_ip="1.2.3.4")
+    assert result.verified is True
+
+
 async def test_verify_of_unknown_token_fails_gracefully() -> None:
     gate = _make_gate()
 

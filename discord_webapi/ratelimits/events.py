@@ -14,3 +14,4 @@ class RateLimitConfigChanged(BaseModel):
     schema_version: int = 1
     guild_id: int
     key: str
+    origin_instance_id: str | None = None

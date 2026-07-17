@@ -24,6 +24,7 @@ COMMAND_NAME = "kick"
 
 def _fake_interaction(guild_id: int | None, user_id: int) -> SimpleNamespace:
     return SimpleNamespace(
+        type=discord.InteractionType.application_command,
         guild_id=guild_id,
         command=SimpleNamespace(qualified_name=COMMAND_NAME),
         user=SimpleNamespace(id=user_id),

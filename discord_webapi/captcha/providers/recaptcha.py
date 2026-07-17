@@ -55,8 +55,17 @@ class ReCaptchaProvider:
                 _VERIFY_URL, data={"secret": self._secret_key, "response": response}
             )
             resp.raise_for_status()
-            return bool(resp.json().get("success"))
-        except httpx.HTTPError:
+            data = resp.json()
+            return isinstance(data, dict) and bool(data.get("success"))
+        except (httpx.HTTPError, ValueError):
+            # `resp.raise_for_status()` only raises on a non-2xx status --
+            # a 200 with a non-JSON body (a proxy/WAF interstitial, a
+            # maintenance page, any CDN error page in front of Google's
+            # API, all real things that happen to third-party services)
+            # makes `resp.json()` raise `json.JSONDecodeError` (a
+            # `ValueError` subclass), which used to propagate uncaught
+            # here as an unhandled 500 instead of the documented
+            # fail-closed `False`.
             return False
         finally:
             if self._external_http_client is None:

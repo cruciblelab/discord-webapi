@@ -1,6 +1,60 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## PageGuard: Cloudflare deseni artık HERHANGİ bir sayfayı koruyabiliyor (bu oturum, devam)
+## Tüm kütüphanenin paralel-ajan denetimi (bu oturum)
+
+PageGuard bittikten sonra kullanıcının verdiği talimat (birebir): "Tüm
+kütüphaneyi parçalara ayır ve her parçayı ayrı ayrı kontrol et deneyle
+incele buglar hatalar kırılma açıklar veya eksik kalmış yerler hepsini
+tespit et ve düzelt."
+
+**Yöntem**: Kütüphane (~13.000 satır, ~100 dosya) 6 örtüşmeyen dosya
+partisyonuna bölündü, her biri için `general-purpose` bir arka-plan ajanı
+TEK bir mesajda paralel başlatıldı. Her ajana: sadece kod okuyarak değil
+GERÇEKTEN deneyerek (çalıştırarak) incele, düzeltme YAPMA, sadece
+onaylanmış bulguları file:line + repro + önerilen düzeltmeyle raporla,
+talimatı verildi. Bu, tek bir oturumda tüm kütüphaneyi kapsamak için
+gerekliydi -- 6 ajan paralel ~24 bulgu raporladı.
+
+**Doğrulama disiplini (oturum boyunca sıkı uygulandı)**: her bulgu için
+önce gerçek bir regresyon testi yazıldı; `git stash` ile fix devre dışı
+bırakılıp testin GERÇEKTEN kırmızı olduğu (iddia edilen bug'ı birebir
+reprodüklediği) doğrulandı, sonra fix geri getirilip testin yeşile
+döndüğü doğrulandı. Bu round'da düzeltilen ~10 bulgunun HEPSİ bu iki
+adımdan geçti -- hiçbiri sadece kod okuyarak "mantıklı görünüyor" diye
+kabul edilmedi.
+
+**Düzeltilen 10 gerçek bug** (detaylı gerekçeler CHANGELOG.md'de):
+facade'da 6 router grubu arası paylaşılan rate-limit singleton'ı;
+commands/registry.py'de autocomplete'in cooldown/invocation_count'u
+yakması; escalation/engine.py'de add-then-count yarışı (çift
+kick/ban/timeout riski); ratelimits/limiter.py'de kendi yayınladığı
+event'i kendi bucket sıfırlaması için kullanması (bedava token sızıntısı);
+automod/link_filter.py'de port ve şema-atlama bypass'ları;
+automod/emoji_spam.py'de bayrak/ten-tonu emoji'lerin 2x fazla sayılması;
+automod/exemptions.py'de sunucu-geneli izin yerine kanal-özel izin
+kontrolü gerekliliği; extras/warn.py'de aynı escalation yarışının
+warn-özel kopyası; extensions/scaffold.py'de path traversal (gerçekten
+çalıştırılıp `target_dir` dışına dosya yazıldığı doğrulandı) VE mutlak
+yol enjeksiyonu; extensions/scaffold.py'de manifest adının sanitize
+edilmemiş ham girdiyi kullanması.
+
+**İncelenip düzeltme gerektirmediğine karar verilenler**: Commands/Web
+finding'lerinden biri (`extras/role_assign.py`'de eksik `ctx.guild is
+None` guard'ı, "düşük güven" etiketiyle raporlanmıştı) -- gerçek DM
+çağrılarının zaten `commands.has_permissions(manage_roles=True)` ->
+`Permissions._dm_permissions()` (manage_roles=False, doğrulandı) ile
+engellendiği, Group DM senaryosunun ise standart bot token'ları için
+zaten erişilemez olduğu (Discord bunu kaldırdı) confirmledi. Gerçekleşemeyen
+bir senaryo için sentetik/gereksiz bir guard eklemek "olamayacak
+senaryolar için validasyon ekleme" ilkesine aykırı olacağından atlandı.
+
+**Doğrulama**: `ruff check discord_webapi tests examples` (temiz),
+`mypy discord_webapi` (122 dosya, temiz), `python -m pytest` yerel Redis
+ile (752 geçti, 7 skip, yalnızca gerçek Postgres sunucusu gerektiren 1
+test bu ortamda deselect edildi -- temiz checkout'ta da aynı şekilde
+başarısız olduğu doğrulandı, bu round'daki değişikliklerle ilgisiz).
+
+## PageGuard: Cloudflare deseni artık HERHANGİ bir sayfayı koruyabiliyor (önceki oturum)
 
 Path-Trace kinematik düzeltmesinden sonra kullanıcı bambaşka, çok daha
 büyük bir isteğe geçti (birebir özet, yazım hatalarıyla): "altyapı olarak

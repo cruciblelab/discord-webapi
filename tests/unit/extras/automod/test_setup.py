@@ -41,6 +41,13 @@ def _fake_message(
     message.author.mention = f"<@{author_id}>"
     message.author.guild_permissions = discord.Permissions(manage_messages=has_manage_messages)
     message.author.roles = []
+    # exemptions.is_exempt() checks the *channel-effective* permission
+    # (channel.permissions_for), not just the guild-wide one -- no
+    # channel-specific overwrite is in play in this fixture, so it
+    # mirrors has_manage_messages.
+    message.channel.permissions_for.return_value = discord.Permissions(
+        manage_messages=has_manage_messages
+    )
     message.mentions = []
     message.role_mentions = []
     message.mention_everyone = False

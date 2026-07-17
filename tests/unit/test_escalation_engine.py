@@ -6,10 +6,27 @@ import discord
 
 from discord_webapi.escalation import EscalationAction, EscalationEngine
 from discord_webapi.escalation.memory import MemoryEscalationRuleStore, MemoryViolationStore
+from discord_webapi.escalation.models import ViolationRecord
 from discord_webapi.transport import InProcessTransport
 
 GUILD_ID = 1
 KEY = "warn"
+
+
+class _SlowViolationStore(MemoryViolationStore):
+    """Widens the window between `add()` and `count()` so two concurrent
+    `record_violation()` calls for the same member/key are forced to
+    interleave, exercising the add-then-count race deterministically
+    instead of relying on incidental scheduling luck."""
+
+    async def add(self, record: ViolationRecord) -> None:
+        await super().add(record)
+        # Yield here, *after* this violation is already recorded but
+        # *before* record_violation's subsequent count() call -- forces
+        # two concurrent record_violation() calls to both have their row
+        # added before either one counts, so an unsynchronized
+        # implementation has both count() calls observe the same total.
+        await asyncio.sleep(0.02)
 
 
 @dataclass
@@ -223,6 +240,30 @@ async def test_list_rules_and_list_all_rules() -> None:
 
     assert len(warn_rules) == 1
     assert {r.key for r in all_rules} == {"warn", "automod.spam"}
+
+
+async def test_concurrent_violations_for_the_same_member_do_not_double_trigger() -> None:
+    """Regression test: `record_violation` used to call
+    `violation_store.add()` then `violation_store.count()` as two separate,
+    unsynchronized calls. Two violations recorded concurrently for the same
+    (guild, user, key) -- e.g. two automod hits landing back-to-back --
+    could both land their `add()` before either ran `count()`, so both
+    calls would read the *same* post-increment count and both match a
+    threshold=2 rule, kicking the member twice for what should have been a
+    single threshold crossing."""
+    transport = InProcessTransport()
+    engine = EscalationEngine(transport, MemoryEscalationRuleStore(), _SlowViolationStore())
+    member = _make_member()
+    await engine.set_rule(GUILD_ID, KEY, 2, action=EscalationAction.KICK)
+
+    outcome1, outcome2 = await asyncio.gather(
+        engine.record_violation(member, KEY),
+        engine.record_violation(member, KEY),
+    )
+
+    triggered = [o for o in (outcome1, outcome2) if o.triggered_rule is not None]
+    assert len(triggered) == 1
+    assert len(member.guild.kicked) == 1
 
 
 async def test_a_second_engine_sharing_the_same_transport_sees_live_updates() -> None:

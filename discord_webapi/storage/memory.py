@@ -21,10 +21,19 @@ class MemorySessionStore:
         self._sessions: dict[str, Session] = {}
 
     async def create(self, session: Session) -> None:
-        self._sessions[session.session_id] = session
+        # deepcopy on both write and read (get/list_by_user below), same
+        # as every other Memory*Store in this file -- without it, this
+        # was the one store in the file that aliased the live object a
+        # caller handed it, so a caller mutating the `Session` it just
+        # passed to `create()` (or one it got back from `get()`) silently
+        # corrupted "persisted" state with no `update()` call ever made.
+        # `SQLSessionStore` can't exhibit this (every call round-trips
+        # through the DB), so this was a real dev/prod parity gap.
+        self._sessions[session.session_id] = copy.deepcopy(session)
 
     async def get(self, session_id: str) -> Session | None:
-        return self._sessions.get(session_id)
+        session = self._sessions.get(session_id)
+        return copy.deepcopy(session) if session is not None else None
 
     async def update(self, session: Session) -> None:
         if session.session_id not in self._sessions:
@@ -34,13 +43,13 @@ class MemorySessionStore:
             # `_ensure_fresh_discord_token` in auth/oauth.py, which catches
             # this specifically and treats it the same as an expired session.
             raise SessionExpiredError(f"Session {session.session_id!r} does not exist")
-        self._sessions[session.session_id] = session
+        self._sessions[session.session_id] = copy.deepcopy(session)
 
     async def delete(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
     async def list_by_user(self, user_id: int) -> list[Session]:
-        return [s for s in self._sessions.values() if s.user_id == user_id]
+        return [copy.deepcopy(s) for s in self._sessions.values() if s.user_id == user_id]
 
 
 class MemoryCommandConfigStore:

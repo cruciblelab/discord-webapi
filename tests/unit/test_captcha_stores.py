@@ -281,6 +281,35 @@ async def test_sql_trajectory_fingerprint_store_expires(engine: AsyncEngine) -> 
     assert await store.seen_recently("fp1") is False
 
 
+async def test_sql_trajectory_fingerprint_store_concurrent_first_record_does_not_crash(
+    tmp_path: object,
+) -> None:
+    """Regression test: `record()` used to be a plain SELECT-then-add()-
+    or-mutate, the same lost-update/IntegrityError race already fixed
+    for `SQLCaptchaStore.increment_attempts` elsewhere in this codebase.
+    Two concurrent replayed-trajectory checks for the SAME fingerprint
+    (a plausible real scenario -- replay_guard.py's own docstring
+    describes checking the same recording "across different accounts/
+    devices/IPs... even" at once) used to crash the loser with an
+    unhandled IntegrityError. Uses a real file-backed SQLite engine, not
+    `:memory:`+StaticPool -- that combination shares one physical
+    connection across "concurrent" sessions and can mask or spuriously
+    fail this exact class of race (noted independently while auditing
+    this codebase's escalation store)."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    file_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/fp.sqlite3")  # type: ignore[arg-type]
+    store = SQLTrajectoryFingerprintStore(file_engine)
+    await store.create_all()
+
+    await asyncio.gather(*(store.record("fp1", timedelta(hours=1)) for _ in range(10)))
+
+    assert await store.seen_recently("fp1") is True
+    await file_engine.dispose()
+
+
 # -- SQLAdaptiveDecisionStore --
 
 
@@ -325,6 +354,42 @@ async def test_sql_adaptive_decision_store_delete(engine: AsyncEngine) -> None:
     assert await store.get("t1") is None
 
 
+async def test_sql_adaptive_decision_store_concurrent_first_set_does_not_crash(
+    tmp_path: object,
+) -> None:
+    """Regression test: two concurrent `AdaptiveCaptchaGate`s (across web
+    replicas) racing to resolve the same token's decision both used to
+    call `set()` with no protection -- the loser crashed with an
+    unhandled IntegrityError instead of the first-writer-wins behavior
+    every other race fix in this codebase settled on. Real file-backed
+    engine, not `:memory:`+StaticPool -- see the fingerprint-store test
+    above for why."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    file_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/decisions.sqlite3")  # type: ignore[arg-type]
+    store = SQLAdaptiveDecisionStore(file_engine)
+    await store.create_all()
+
+    decisions = [
+        AdaptiveDecision(
+            requires_captcha=True,
+            challenge=CaptchaChallenge(challenge_id=f"c{i}", kind="math", prompt=f"{i} + 1 = ?"),
+        )
+        for i in range(10)
+    ]
+    await asyncio.gather(*(store.set("t1", d) for d in decisions))
+
+    # Whichever decision won, every subsequent read must agree on the
+    # SAME one -- not crash, and not silently vary between reads.
+    winner = await store.get("t1")
+    assert winner is not None
+    for _ in range(5):
+        assert (await store.get("t1")) == winner
+    await file_engine.dispose()
+
+
 # -- SQLTrustStore --
 
 
@@ -357,3 +422,25 @@ async def test_sql_trust_store_expires(engine: AsyncEngine) -> None:
     await store.trust(100, ttl=timedelta(seconds=-1))  # already expired
 
     assert await store.is_trusted(100) is False
+
+
+async def test_sql_trust_store_concurrent_first_trust_does_not_crash(tmp_path: object) -> None:
+    """Regression test: `trust()` used to be a plain SELECT-then-add()-
+    or-mutate -- two concurrent `verify()` successes for the same
+    user_id (plausible: two different gates/purposes sharing one
+    TrustStore, both completed around the same time) both calling
+    `trust()` used to crash the loser with an unhandled IntegrityError.
+    Real file-backed engine, not `:memory:`+StaticPool -- see the
+    fingerprint-store test above for why."""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    file_engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/trust.sqlite3")  # type: ignore[arg-type]
+    store = SQLTrustStore(file_engine)
+    await store.create_all()
+
+    await asyncio.gather(*(store.trust(100, ttl=timedelta(hours=1)) for _ in range(10)))
+
+    assert await store.is_trusted(100) is True
+    await file_engine.dispose()

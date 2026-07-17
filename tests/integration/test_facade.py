@@ -377,6 +377,47 @@ async def test_facade_wires_its_own_app_role_cache_into_the_registry() -> None:
     assert api.registry.app_role_cache is api.app_role_cache
 
 
+async def test_two_facade_instances_have_independent_rate_limit_budgets() -> None:
+    """Regression test: build_commands_router (and the 5 other write-router
+    builders) each fell back to a module-level default TokenBucketLimiter
+    whenever DiscordWebAPI.install() didn't pass an explicit override --
+    which it never did. That meant every DiscordWebAPI instance in one
+    process shared the same 6 limiter singletons, so one tenant/bot's
+    dashboard traffic could exhaust another, completely separate
+    instance's write budget. Confirms two full facades/apps now have
+    independently-scoped commands-PATCH budgets."""
+    app1, api1 = _build_app()
+    await api1._on_ready()
+
+    async def handle_get_member(payload: dict) -> dict:
+        return {"found": True, "role_ids": [], "permissions": discord.Permissions.all().value}
+
+    api1.transport._handlers.pop("get_member", None)
+    api1.transport.register_handler("get_member", handle_get_member)
+
+    app2, api2 = _build_app()
+    await api2._on_ready()
+    api2.transport._handlers.pop("get_member", None)
+    api2.transport.register_handler("get_member", handle_get_member)
+
+    client1 = TestClient(app1)
+    _log_in(client1)
+    client2 = TestClient(app2)
+    _log_in(client2)
+
+    # Exhaust app1's commands-PATCH budget (default max_calls=20).
+    for _ in range(20):
+        resp = client1.patch("/api/guilds/123/commands/ping", json={"enabled": False})
+        assert resp.status_code == 200
+    exhausted = client1.patch("/api/guilds/123/commands/ping", json={"enabled": True})
+    assert exhausted.status_code == 429
+
+    # app2 is a wholly separate DiscordWebAPI instance -- its very first
+    # PATCH must not be rate-limited by app1's exhausted budget.
+    fresh = client2.patch("/api/guilds/123/commands/ping", json={"enabled": False})
+    assert fresh.status_code == 200
+
+
 def test_enable_audit_log_wires_the_escalation_engines_logger() -> None:
     """P1.4: turning on audit should also audit bot-side escalation
     actions (auto timeout/kick/ban), using the same store the dashboard

@@ -203,6 +203,38 @@ async def test_global_check_is_a_noop_for_slash_invoked_hybrid_commands() -> Non
     assert registry._check_cooldown(GUILD_ID, COMMAND_NAME, ctx.interaction) is None
 
 
+async def test_autocomplete_interactions_do_not_consume_cooldown_or_count_invocations() -> None:
+    """Regression test: discord.py's CommandTree._call() calls
+    interaction_check(interaction) unconditionally, before it branches on
+    interaction.type -- an autocomplete request (fired once per keystroke
+    while the user is still typing an option value, long before the
+    command is actually invoked) went through the exact same
+    cooldown-consuming, invocation-counting code path as a real slash
+    invocation. A 1-use cooldown made a command look permanently on
+    cooldown after the user merely typed into an autocomplete-enabled
+    option, and invocation_count was inflated by every keystroke."""
+    registry = await _build_registry()
+    _set_cooldown(registry, uses=1, seconds=60)
+    autocomplete_interaction = SimpleNamespace(
+        type=discord.InteractionType.autocomplete,
+        guild_id=GUILD_ID,
+        command=SimpleNamespace(qualified_name=COMMAND_NAME),
+        user=SimpleNamespace(id=42, roles=[]),
+    )
+    interaction_check = registry.bot.tree.interaction_check
+
+    # Several "keystrokes" worth of autocomplete requests -- none of them
+    # should be rejected, and none should touch the cooldown bucket.
+    for _ in range(5):
+        assert await interaction_check(autocomplete_interaction) is True
+
+    status = registry._status_for(GUILD_ID, COMMAND_NAME)
+    assert status.invocation_count == 0
+    # The cooldown bucket is untouched: a real slash invocation right after
+    # all that "typing" still gets its single use.
+    assert registry._check_cooldown(GUILD_ID, COMMAND_NAME, autocomplete_interaction) is None
+
+
 async def test_disabled_command_does_not_increment_counter() -> None:
     registry = await _build_registry()
     registry._override_cache[(GUILD_ID, COMMAND_NAME)] = CommandOverride(

@@ -13,7 +13,7 @@ from starlette.requests import HTTPConnection
 
 from discord_webapi.auth.models import DiscordUser, SessionSummary
 from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
-from discord_webapi.exceptions import InvalidStateError, SessionExpiredError
+from discord_webapi.exceptions import DiscordAPIError, InvalidStateError, SessionExpiredError
 from discord_webapi.storage.base import Session, SessionStore
 from discord_webapi.storage.memory import MemorySessionStore
 
@@ -148,16 +148,33 @@ class DiscordAuth:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid OAuth2 state") from None
 
             is_mobile = cookie_state is not None and cookie_state.endswith(_MOBILE_STATE_SUFFIX)
-            session = await self._complete_login(code)
+            try:
+                session = await self._complete_login(code)
+            except DiscordAPIError as exc:
+                # A revoked/reused authorization code (Discord codes are
+                # single-use -- a double-click on "Authorize", or
+                # reloading/going back to this exact callback URL, both
+                # reuse one) used to propagate raw as an unhandled 500
+                # instead of a clean, actionable error.
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "Discord login failed (the authorization code was invalid or already used) "
+                    "-- please try logging in again.",
+                ) from exc
 
             if is_mobile:
                 assert self.mobile_redirect_uri is not None  # enforced at /login time
-                mobile_url = httpx.URL(
-                    self.mobile_redirect_uri,
-                    params={
+                # `httpx.URL(url, params=...)` REPLACES the URL's query
+                # string rather than merging with it -- a consumer using
+                # a deep link with its own query params (distinguishing
+                # app flows, a client-side nonce, ...) silently lost them
+                # on every successful mobile login. `copy_merge_params`
+                # adds ours alongside whatever was already there.
+                mobile_url = httpx.URL(self.mobile_redirect_uri).copy_merge_params(
+                    {
                         "session_id": session.session_id,
                         "expires_at": session.expires_at.isoformat(),
-                    },
+                    }
                 )
                 response: Response = RedirectResponse(
                     str(mobile_url), status_code=status.HTTP_302_FOUND
@@ -283,6 +300,21 @@ class DiscordAuth:
             )
             resp.raise_for_status()
             return dict(resp.json())
+        except httpx.HTTPStatusError as exc:
+            # A revoked/reused authorization code (double-click, a
+            # back-button reload of the callback URL -- Discord codes are
+            # single-use) or a revoked/expired refresh token (the user
+            # removed the app's Discord authorization) both land here.
+            # This used to propagate raw as an unhandled 500 -- and for
+            # the refresh path specifically, left the session stuck:
+            # every subsequent request for it hit the same crash forever,
+            # with no way to recover short of a manual logout. Callers
+            # (the /callback route, `_ensure_fresh_discord_token`) turn
+            # this into a clean, catchable outcome instead.
+            raise DiscordAPIError(
+                f"Discord's {grant_type!r} token exchange failed "
+                f"({exc.response.status_code}): {exc.response.text[:200]}"
+            ) from exc
         finally:
             if self._external_http_client is None:
                 await client.aclose()
@@ -354,7 +386,21 @@ class DiscordAuth:
                     return current
 
                 refresh_token = self._decrypt(current.encrypted_refresh_token)
-                token_data = await self._exchange("refresh_token", refresh_token=refresh_token)
+                try:
+                    token_data = await self._exchange(
+                        "refresh_token", refresh_token=refresh_token
+                    )
+                except DiscordAPIError as exc:
+                    # Discord rejected the refresh (revoked/expired) --
+                    # treat exactly like an expired session rather than
+                    # letting the error propagate: get_current_user's own
+                    # `except (InvalidStateError, SessionExpiredError)`
+                    # already deletes the session and returns a clean
+                    # 401, so the user can just log in again instead of
+                    # this session 500ing on every request forever.
+                    raise SessionExpiredError(
+                        f"Discord refresh token for session {session.session_id} was rejected"
+                    ) from exc
 
                 new_expiry = _now() + timedelta(seconds=token_data["expires_in"])
                 updated = current.model_copy(

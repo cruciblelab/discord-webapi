@@ -177,7 +177,21 @@ class RedisTransport:
                 continue
 
             if channel == self._events_channel:
-                await self._dispatch_event(envelope)
+                # A malformed envelope (a shape mismatch from version skew
+                # between deployed bot/web processes, a bug elsewhere on
+                # the wire, hand-crafted traffic) must not kill this loop
+                # -- `_dispatch_event` indexes `envelope["type"]`/
+                # `["payload"]` directly, and an uncaught KeyError here
+                # would propagate out of this whole read loop, silently
+                # ending event delivery forever (only the RPC-request
+                # branch below was already guarded, via
+                # `_create_tracked_task`).
+                try:
+                    await self._dispatch_event(envelope)
+                except (KeyError, TypeError) as exc:
+                    logger.warning(
+                        "Dropping malformed event envelope on channel %r: %s", channel, exc
+                    )
             elif channel.startswith(self._rpc_reply_prefix):
                 self._resolve_reply(channel, envelope)
             elif channel.startswith(self._rpc_request_prefix):

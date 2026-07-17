@@ -9,17 +9,51 @@ stores, same principle as `discord_webapi.escalation.sql`/
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String, Text, update
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from discord_webapi.captcha.adaptive import AdaptiveDecision
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
 
 _TIMESTAMP = DateTime(timezone=True)
+
+_Row = TypeVar("_Row")
+
+
+async def _commit_upsert(
+    db: AsyncSession,
+    *,
+    is_new: bool,
+    get_existing: Callable[[], Awaitable[_Row | None]],
+    apply_fields: Callable[[_Row], None],
+) -> None:
+    """Same helper (and same race) as `discord_webapi.storage.sql`'s --
+    each first-write-wins row in this module (a token's adaptive
+    decision, a replayed-trajectory fingerprint, a trusted user) used to
+    do a plain read-then-insert with no protection: two concurrent
+    callers for the same key (a double page load, two web replicas
+    handling the same request at once) could both see no row yet and
+    both `db.add()` the same primary key, and the loser's commit raised
+    an unhandled `IntegrityError` -- a 500 for what should just be
+    "someone already wrote this, I'm done too." Only relevant for
+    genuinely new rows."""
+    if not is_new:
+        await db.commit()
+        return
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = await get_existing()
+        assert existing is not None, "IntegrityError implies the row now exists"
+        apply_fields(existing)
+        await db.commit()
 
 
 class Base(DeclarativeBase):
@@ -234,14 +268,25 @@ class SQLTrajectoryFingerprintStore:
             return True
 
     async def record(self, fingerprint: str, ttl: timedelta) -> None:
+        expires_at = datetime.now(UTC) + ttl
+
+        def _apply(row: TrajectoryFingerprintRow) -> None:
+            row.expires_at = expires_at
+
         async with self._sessionmaker() as db:
             row = await db.get(TrajectoryFingerprintRow, fingerprint)
-            expires_at = datetime.now(UTC) + ttl
+            is_new = row is None
             if row is None:
-                db.add(TrajectoryFingerprintRow(fingerprint=fingerprint, expires_at=expires_at))
+                row = TrajectoryFingerprintRow(fingerprint=fingerprint, expires_at=expires_at)
+                db.add(row)
             else:
-                row.expires_at = expires_at
-            await db.commit()
+                _apply(row)
+            await _commit_upsert(
+                db,
+                is_new=is_new,
+                get_existing=lambda: db.get(TrajectoryFingerprintRow, fingerprint),
+                apply_fields=_apply,
+            )
 
 
 class AdaptiveDecisionRow(Base):
@@ -281,19 +326,37 @@ class SQLAdaptiveDecisionStore:
             )
 
     async def set(self, token: str, decision: AdaptiveDecision) -> None:
+        # Two concurrent AdaptiveCaptchaGates racing to resolve the same
+        # token's decision (across web replicas -- within one process,
+        # AdaptiveCaptchaGate's own per-token asyncio.Lock already
+        # prevents this) both calling `set()` used to make the loser
+        # crash with an unhandled IntegrityError. Unlike a plain "set my
+        # value" store (SQLTrustStore/SQLTrajectoryFingerprintStore
+        # below), overwriting here would be WRONG, not just redundant --
+        # the two racing decisions can carry genuinely DIFFERENT
+        # escalation challenges, and whichever was persisted FIRST is
+        # the one every caller must agree on (a different challenge may
+        # already be rendered on someone's screen). So on conflict we
+        # deliberately discard our own write rather than overwrite the
+        # existing row; `AdaptiveCaptchaGate._resolve_decision_locked`
+        # re-reads via `get()` after calling this, so the loser ends up
+        # returning the actually-persisted decision, not its own
+        # orphaned one.
+        challenge_json = (
+            decision.challenge.model_dump(mode="json") if decision.challenge is not None else None
+        )
         async with self._sessionmaker() as db:
             db.add(
                 AdaptiveDecisionRow(
                     token=token,
                     requires_captcha=decision.requires_captcha,
-                    challenge_json=(
-                        decision.challenge.model_dump(mode="json")
-                        if decision.challenge is not None
-                        else None
-                    ),
+                    challenge_json=challenge_json,
                 )
             )
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
 
     async def delete(self, token: str) -> None:
         async with self._sessionmaker() as db:
@@ -337,12 +400,23 @@ class SQLTrustStore:
             return True
 
     async def trust(self, user_id: int, *, ttl: timedelta, ip: str | None = None) -> None:
+        trusted_until = datetime.now(UTC) + ttl
+
+        def _apply(row: TrustRow) -> None:
+            row.trusted_until = trusted_until
+            row.bound_ip = ip
+
         async with self._sessionmaker() as db:
             row = await db.get(TrustRow, user_id)
-            trusted_until = datetime.now(UTC) + ttl
+            is_new = row is None
             if row is None:
-                db.add(TrustRow(user_id=user_id, trusted_until=trusted_until, bound_ip=ip))
+                row = TrustRow(user_id=user_id, trusted_until=trusted_until, bound_ip=ip)
+                db.add(row)
             else:
-                row.trusted_until = trusted_until
-                row.bound_ip = ip
-            await db.commit()
+                _apply(row)
+            await _commit_upsert(
+                db,
+                is_new=is_new,
+                get_existing=lambda: db.get(TrustRow, user_id),
+                apply_fields=_apply,
+            )

@@ -234,6 +234,71 @@ def test_kinematics_abstain_on_malformed_samples() -> None:
     assert score is None
 
 
+def test_kinematics_abstain_on_a_nan_coordinate_instead_of_scoring_maximally_human() -> None:
+    """Regression test: `float()` (and `json.loads` by default) happily
+    accepts NaN/Infinity literals -- an attacker who can't be bothered
+    synthesizing a fake human-like curve could smuggle a NaN coordinate
+    into `mouse_trajectory` and get FULL MARKS instead of the reject
+    these heuristics are supposed to give for nonsense input: Python's
+    `min`/`max` treat any NaN comparison as False, so an unguarded
+    `max(0.0, min(1.0, nan))` evaluates to 1.0 (the first argument wins
+    once `<` stops being decisive) -- scoring a degenerate, all-NaN-x
+    trajectory as confidently human on the two heaviest-weighted
+    heuristics in `default_behavior_heuristics()` (curvature and
+    velocity variance, weight 2.0 and 2.5 -- more combined weight than
+    any other single heuristic)."""
+    from discord_webapi.captcha.scoring import _mouse_path_curvature, _mouse_velocity_variance
+
+    nan_trajectory = [[float("nan"), 0.0, i * 20.0] for i in range(10)]
+    signals = {"pointer_type": "mouse", "mouse_trajectory": nan_trajectory}
+
+    assert _mouse_path_curvature(signals) is None
+    assert _mouse_velocity_variance(signals) is None
+
+
+def test_kinematics_abstain_on_an_infinite_coordinate() -> None:
+    from discord_webapi.captcha.scoring import _mouse_path_curvature
+
+    inf_trajectory = [[float("inf"), 0.0, i * 20.0] for i in range(10)]
+    score = _mouse_path_curvature(
+        {"pointer_type": "mouse", "mouse_trajectory": inf_trajectory}
+    )
+
+    assert score is None
+
+
+def test_full_score_does_not_reward_a_nan_smuggled_trajectory() -> None:
+    """End-to-end version of the regression above, through the real
+    scoring pipeline a client's submitted `signals` actually go through."""
+    from discord_webapi.captcha.scoring import SignalScoreCheck
+
+    check = SignalScoreCheck()
+    nan_trajectory = [[float("nan"), 0.0, i * 20.0] for i in range(10)]
+    signals = {
+        "webdriver": False,
+        "language": "en-US",
+        "timezone": "UTC",
+        "pointer_type": "mouse",
+        "pointer_moves": 40,
+        "mouse_trajectory": nan_trajectory,
+        "click_offset": 12,
+        "interaction_ms": 1500,
+    }
+
+    _score, breakdown = check.compute(signals)
+
+    # The NaN-tainted trajectory must make every kinematics heuristic that
+    # reads it abstain (excluded from the breakdown entirely), not score
+    # as confidently human -- the other, non-trajectory heuristics still
+    # legitimately pass on their own (deliberately clean `signals` here),
+    # so the overall score being high is correct; what matters is that
+    # the *kinematics* ones aren't the reason.
+    assert "mouse-curvature" not in breakdown
+    assert "mouse-velocity-variance" not in breakdown
+    assert "mouse-timing-variance" not in breakdown
+    assert "mouse-homing-correction" not in breakdown
+
+
 def test_kinematics_cap_an_oversized_trajectory_instead_of_choking_on_it() -> None:
     """A pathologically large payload gets truncated to the first N samples
     rather than processed in full -- this must stay fast."""

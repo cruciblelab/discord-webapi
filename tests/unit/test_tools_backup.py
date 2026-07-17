@@ -189,6 +189,60 @@ async def test_restore_skips_a_table_missing_in_the_destination(tmp_path: Path) 
     await backup.restore_backup(backup_path=out_path, dest_url=dest_url, assume_yes=True)
 
 
+async def test_restore_is_atomic_a_bad_row_does_not_wipe_existing_data(tmp_path: Path) -> None:
+    """Regression test: `restore_backup` used to call `delete_rows` then
+    `write_rows` as two SEPARATE transactions. If the write failed
+    partway (a corrupted backup file, a duplicate key, a schema
+    mismatch), the delete had already committed and the new data never
+    made it in -- the destination table was left PERMANENTLY EMPTY,
+    turning the recovery tool into a data-loss tool on a bad input
+    file. Restore must roll the delete back too when the write fails."""
+    import json
+
+    dest_url = _sqlite_url(tmp_path, "dest.sqlite3")
+    dest_engine = create_async_engine(dest_url)
+    await create_all_tables(dest_engine)
+    sessionmaker = async_sessionmaker(dest_engine, expire_on_commit=False)
+    async with sessionmaker() as db:
+        db.add(
+            CommandOverrideRow(
+                guild_id=1, command_name="ban", enabled=True, updated_at=datetime.now(UTC)
+            )
+        )
+        await db.commit()
+    await dest_engine.dispose()
+
+    # A backup file with two rows sharing the same primary key
+    # (guild_id, command_name) -- write_rows() will raise IntegrityError
+    # partway through inserting this table's rows.
+    bad_row = {
+        "guild_id": 2,
+        "command_name": "kick",
+        "enabled": True,
+        "cooldown_seconds": None,
+        "cooldown_uses": None,
+        "required_app_role": None,
+        "updated_at": {"__datetime_iso__": datetime.now(UTC).isoformat()},
+        "updated_by_user_id": None,
+    }
+    out_path = tmp_path / "corrupt.json"
+    out_path.write_text(
+        json.dumps({"dwa_command_overrides": [bad_row, bad_row]}, indent=2), encoding="utf-8"
+    )
+
+    with pytest.raises(Exception, match="UNIQUE|IntegrityError"):
+        await backup.restore_backup(backup_path=out_path, dest_url=dest_url, assume_yes=True)
+
+    verify_engine = create_async_engine(dest_url)
+    store = SQLCommandConfigStore(verify_engine)
+    overrides = await store.get_all_overrides(1)
+    await verify_engine.dispose()
+    assert {o.command_name for o in overrides} == {"ban"}, (
+        "the pre-existing row must survive a failed restore -- delete+write "
+        "must be one transaction, not two"
+    )
+
+
 def test_list_backup_prints_summary(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     out_path = tmp_path / "b.json"
     out_path.write_text(backup.dump_json({"dwa_command_overrides": [{"a": 1}]}))

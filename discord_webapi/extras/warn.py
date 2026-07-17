@@ -15,6 +15,7 @@ creates a table for people who didn't ask for it.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -105,6 +106,8 @@ def setup(
     the audit trail; omit it and nothing is audited.
     """
     warn_store = store or MemoryWarnStore()
+    # Per (guild_id, user_id) lock -- see the comment at its use below.
+    warn_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
     @bot.hybrid_command(  # type: ignore[arg-type]
         name=command_name, description="Warn a member"
@@ -131,50 +134,71 @@ def setup(
                 notice += f"\nReason: {reason}"
             await notify_member_best_effort(member, notice)
 
-        await warn_store.add(
-            WarnRecord(
-                guild_id=ctx.guild.id,
-                user_id=member.id,
-                moderator_id=ctx.author.id,
-                reason=reason,
-                created_at=datetime.now(UTC),
-            )
-        )
-        count = len(await warn_store.list_for_user(ctx.guild.id, member.id))
-
-        if audit_logger is not None:
-            await audit_logger.record(
-                guild_id=ctx.guild.id,
-                actor_user_id=ctx.author.id,
-                action="warn",
-                target=str(member.id),
-                detail={"reason": reason, "count": count},
-            )
-
-        confirmation = f"Warned **{member}** ({count} total warning(s))."
-        if reason:
-            confirmation += f"\nReason: {reason}"
-
-        if auto_timeout_after is not None and count == auto_timeout_after:
-            # Bot-permission check is deliberately runtime/best-effort, not
-            # a blanket @commands.bot_has_permissions(moderate_members=True)
-            # decorator -- that would require every bot using warn() to
-            # grant moderate_members even when auto_timeout_after is never
-            # configured, when the bot never calls Member.timeout at all.
-            until = discord.utils.utcnow() + timedelta(minutes=auto_timeout_minutes)
-            try:
-                await member.timeout(until, reason=f"Reached {count} warnings")
-                confirmation += f"\nAuto-timed out for {auto_timeout_minutes} minute(s)."
-            except discord.Forbidden:
-                confirmation += (
-                    "\nReached the auto-timeout threshold, but I don't have permission "
-                    "to time this member out."
+        # The add-then-count-then-maybe-timeout sequence below runs under
+        # a per-(guild, user) lock: `warn_store.add()`/`list_for_user()`
+        # are two separate store calls, so two concurrent warnings for
+        # the same member (two moderators warning at once, or a double
+        # click) could both land their `add()` before either counted --
+        # both would then read the *same* post-add count, and if it
+        # matches `auto_timeout_after`, both would fire the auto-timeout
+        # (and both audit-log it) for what should have been a single
+        # threshold crossing. Same class of fix as
+        # `EscalationEngine.record_violation`'s per-(guild, user, key)
+        # lock.
+        lock_key = (ctx.guild.id, member.id)
+        lock = warn_locks.setdefault(lock_key, asyncio.Lock())
+        try:
+            async with lock:
+                await warn_store.add(
+                    WarnRecord(
+                        guild_id=ctx.guild.id,
+                        user_id=member.id,
+                        moderator_id=ctx.author.id,
+                        reason=reason,
+                        created_at=datetime.now(UTC),
+                    )
                 )
-            except discord.NotFound:
-                confirmation += (
-                    "\nReached the auto-timeout threshold, but that member is no "
-                    "longer in the server."
-                )
+                count = len(await warn_store.list_for_user(ctx.guild.id, member.id))
+
+                if audit_logger is not None:
+                    await audit_logger.record(
+                        guild_id=ctx.guild.id,
+                        actor_user_id=ctx.author.id,
+                        action="warn",
+                        target=str(member.id),
+                        detail={"reason": reason, "count": count},
+                    )
+
+                confirmation = f"Warned **{member}** ({count} total warning(s))."
+                if reason:
+                    confirmation += f"\nReason: {reason}"
+
+                if auto_timeout_after is not None and count == auto_timeout_after:
+                    # Bot-permission check is deliberately runtime/best-effort,
+                    # not a blanket
+                    # @commands.bot_has_permissions(moderate_members=True)
+                    # decorator -- that would require every bot using warn()
+                    # to grant moderate_members even when auto_timeout_after
+                    # is never configured, when the bot never calls
+                    # Member.timeout at all.
+                    until = discord.utils.utcnow() + timedelta(minutes=auto_timeout_minutes)
+                    try:
+                        await member.timeout(until, reason=f"Reached {count} warnings")
+                        confirmation += (
+                            f"\nAuto-timed out for {auto_timeout_minutes} minute(s)."
+                        )
+                    except discord.Forbidden:
+                        confirmation += (
+                            "\nReached the auto-timeout threshold, but I don't have "
+                            "permission to time this member out."
+                        )
+                    except discord.NotFound:
+                        confirmation += (
+                            "\nReached the auto-timeout threshold, but that member is "
+                            "no longer in the server."
+                        )
+        finally:
+            warn_locks.pop(lock_key, None)
 
         await ctx.reply(confirmation)
 

@@ -163,6 +163,22 @@ def _sanitize_pkg(name: str) -> str:
     return pkg
 
 
+def _sanitize_dist(name: str) -> str:
+    """Turns arbitrary input into a plain path segment -- no `/`, no `..`,
+    no leading `/` that would make it absolute. `name` ends up in
+    `target_dir / dist` (the project root actually written to disk), so
+    without this, a name like `"../../../etc/whatever"` or
+    `"/etc/whatever"` escapes `target_dir` entirely (the former via `..`
+    traversal, the latter because `Path("a") / "/etc/x"` discards "a" and
+    becomes the absolute path outright) -- verified by actually running
+    `create_extension()` with both and watching it write outside the
+    target directory.
+    """
+    dist = re.sub(r"[^0-9a-zA-Z-]", "-", name.strip().lower())
+    dist = re.sub(r"-+", "-", dist).strip("-")
+    return dist or "ext"
+
+
 def _render(template: str, *, name: str, pkg: str, dist: str) -> str:
     return (
         template.replace("__NAME__", name).replace("__PKG__", pkg).replace("__DIST__", dist)
@@ -179,17 +195,29 @@ def create_extension(name: str, target_dir: Path) -> Path:
     returning the created project root. Raises `FileExistsError` if the
     project directory already exists (never overwrites)."""
     pkg = _sanitize_pkg(name)
-    dist = name.strip().lower().replace("_", "-").replace(" ", "-")
+    dist = _sanitize_dist(name)
     root = target_dir / dist
+    # Belt-and-suspenders on top of `_sanitize_dist` stripping `/`/`..`/a
+    # leading `/` already: confirm the path we're about to write into
+    # actually landed inside `target_dir`, so a future change to the
+    # sanitizer (or a platform-specific path quirk) fails loudly here
+    # instead of silently writing outside it again.
+    if target_dir.resolve() not in root.resolve().parents:
+        raise ValueError(f"refusing to write outside {target_dir!r}: resolved to {root!r}")
     if root.exists():
         raise FileExistsError(f"{root} already exists")
 
-    clean_name = name.strip()
-    _write(root / "pyproject.toml", _render(_PYPROJECT, name=clean_name, pkg=pkg, dist=dist))
-    _write(root / pkg / "__init__.py", _render(_INIT, name=clean_name, pkg=pkg, dist=dist))
-    _write(root / pkg / "commands.py", _render(_COMMANDS, name=clean_name, pkg=pkg, dist=dist))
-    _write(root / "tests" / f"test_{pkg}.py", _render(_TEST, name=clean_name, pkg=pkg, dist=dist))
-    _write(root / "README.md", _render(_README, name=clean_name, pkg=pkg, dist=dist))
+    # The manifest's `name` is documented (ExtensionManifest.name) as a
+    # "unique, importable-style short name" used as the ExtensionRegistry
+    # lookup key -- it must be the same sanitized slug as the package's
+    # own importable name (`pkg`), not the raw, arbitrary input a user
+    # typed (which could contain spaces/punctuation and wouldn't match
+    # what `from __PKG__.commands import setup` actually imports).
+    _write(root / "pyproject.toml", _render(_PYPROJECT, name=pkg, pkg=pkg, dist=dist))
+    _write(root / pkg / "__init__.py", _render(_INIT, name=pkg, pkg=pkg, dist=dist))
+    _write(root / pkg / "commands.py", _render(_COMMANDS, name=pkg, pkg=pkg, dist=dist))
+    _write(root / "tests" / f"test_{pkg}.py", _render(_TEST, name=pkg, pkg=pkg, dist=dist))
+    _write(root / "README.md", _render(_README, name=pkg, pkg=pkg, dist=dist))
     return root
 
 

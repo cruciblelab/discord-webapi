@@ -39,3 +39,33 @@ def test_message_without_emoji_passes() -> None:
     assert check is not None
 
     assert check(_msg("plain text, no emoji at all")) is None  # type: ignore[arg-type]
+
+
+def test_flag_emoji_count_once_not_twice() -> None:
+    """Regression test: a flag emoji (e.g. the US flag) is two REGIONAL
+    INDICATOR SYMBOL codepoints forming a single glyph -- matching each
+    codepoint separately double-counted every flag."""
+    check = make_check(max_emoji=3)
+    assert check is not None
+
+    us_flag = "\U0001f1fa\U0001f1f8"
+    three_flags = " ".join([us_flag] * 3)
+    assert check(_msg(three_flags)) is None  # type: ignore[arg-type]
+
+    four_flags = " ".join([us_flag] * 4)
+    assert check(_msg(four_flags)) is not None  # type: ignore[arg-type]
+
+
+def test_skin_toned_emoji_count_once_not_twice() -> None:
+    """Regression test: a skin-toned emoji is a base codepoint plus one
+    EMOJI MODIFIER FITZPATRICK codepoint forming a single glyph --
+    matching each codepoint separately double-counted every one."""
+    check = make_check(max_emoji=3)
+    assert check is not None
+
+    thumbs_up_medium = "\U0001f44d\U0001f3fd"
+    three = " ".join([thumbs_up_medium] * 3)
+    assert check(_msg(three)) is None  # type: ignore[arg-type]
+
+    four = " ".join([thumbs_up_medium] * 4)
+    assert check(_msg(four)) is not None  # type: ignore[arg-type]

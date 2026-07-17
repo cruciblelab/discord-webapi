@@ -42,12 +42,12 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from discord_webapi.tools._sql_dump import (
     DumpFileError,
     confirm,
-    delete_rows,
     ensure_table,
     load_dump_file,
     read_rows,
     redact,
     reflect,
+    replace_rows,
     table_exists,
     write_rows,
 )
@@ -171,8 +171,7 @@ async def restore_checkpoint(*, checkpoint_path: Path, dest_url: str, assume_yes
         if table is None:
             print(f"  - {name}: hedefte bu tablo yok, atlanıyor")
             continue
-        await delete_rows(dest_engine, table)
-        await write_rows(dest_engine, table, rows)
+        await replace_rows(dest_engine, table, rows)
         print(f"  - {name}: {len(rows)} satır geri yüklendi")
 
     print("\nGeri yükleme tamamlandı.")

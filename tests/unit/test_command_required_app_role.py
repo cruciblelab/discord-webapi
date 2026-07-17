@@ -170,6 +170,7 @@ async def test_slash_interaction_check_also_enforces_required_app_role() -> None
     _set_required_app_role(registry, "moderator")
 
     interaction = SimpleNamespace(
+        type=discord.InteractionType.application_command,
         guild_id=GUILD_ID,
         command=SimpleNamespace(qualified_name=COMMAND_NAME),
         user=SimpleNamespace(id=1, roles=[]),
@@ -177,6 +178,7 @@ async def test_slash_interaction_check_also_enforces_required_app_role() -> None
     assert await registry.bot.tree.interaction_check(interaction) is False
 
     interaction_allowed = SimpleNamespace(
+        type=discord.InteractionType.application_command,
         guild_id=GUILD_ID,
         command=SimpleNamespace(qualified_name=COMMAND_NAME),
         user=SimpleNamespace(id=1, roles=[SimpleNamespace(id=MOD_ROLE_ID)]),

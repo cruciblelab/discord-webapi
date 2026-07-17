@@ -1,10 +1,22 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 from discord.ext import commands as dpy_commands
 
-from discord_webapi.extras.warn import MemoryWarnStore
+from discord_webapi.extras.warn import MemoryWarnStore, WarnRecord
 from discord_webapi.extras.warn import setup as setup_warn
+
+
+class _SlowWarnStore(MemoryWarnStore):
+    """Widens the window between `add()` and the following
+    `list_for_user()` count so two concurrent warn invocations for the
+    same member are forced to interleave, exercising the add-then-count
+    race deterministically."""
+
+    async def add(self, record: WarnRecord) -> None:
+        await super().add(record)
+        await asyncio.sleep(0.02)
 
 
 def _build_bot() -> dpy_commands.Bot:
@@ -99,6 +111,28 @@ async def test_auto_timeout_does_not_refire_on_warnings_past_the_threshold() -> 
 
     await command.callback(ctx, member, "third")
     member.timeout.assert_called_once()  # still only once, not called again
+
+
+async def test_concurrent_warnings_for_the_same_member_do_not_double_fire_timeout() -> None:
+    """Regression test: the warn command used to call `warn_store.add()`
+    then `list_for_user()` (for the count) as two separate, unsynchronized
+    calls. Two warnings recorded concurrently for the same member (two
+    moderators warning at once, or a double-click) could both land their
+    `add()` before either counted -- both would then read the *same*
+    post-add count, and if it matched `auto_timeout_after`, both would
+    fire the auto-timeout instead of exactly once."""
+    bot = _build_bot()
+    store = _SlowWarnStore()
+    command = setup_warn(bot, store=store, auto_timeout_after=2, auto_timeout_minutes=5)
+    ctx = _fake_ctx()
+    member = _fake_member()
+
+    await asyncio.gather(
+        command.callback(ctx, member, "first"),
+        command.callback(ctx, member, "second"),
+    )
+
+    member.timeout.assert_called_once()
 
 
 async def test_auto_timeout_forbidden_is_reported_without_crashing() -> None:

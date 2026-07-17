@@ -155,6 +155,7 @@ def _automod_message(content: str) -> MagicMock:
     msg.author.roles = []
     msg.channel = MagicMock()
     msg.channel.id = 555
+    msg.channel.permissions_for.return_value = discord.Permissions.none()
     msg.delete = AsyncMock()
     msg.channel.send = AsyncMock()
     return msg
