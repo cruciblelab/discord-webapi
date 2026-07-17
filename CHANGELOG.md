@@ -2,6 +2,41 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — widget: başarıdan sonra kendini sıfırlayıp tekrar captcha sormuyor artık (gerçek bug)
+
+Kullanıcı fiziksel testte net bir bug bildirdi: bir captcha'yı çözüp
+"Doğrulandı" gördükten ~1 saniye sonra widget kendini sıfırlayıp tekrar
+captcha soruyordu -- "başarılı olan yer artık başarılı görünsün, tekrar
+tekrar captcha çözmeyelim, potansiyel saldırı açığı." Haklı.
+
+### `discord_webapi/captcha/widget.js`
+
+- **Kök neden**: `runVerification`'ın sonundaki `setTimeout(..., 2500)`
+  widget'ı başarı/başarısızlık AYRIMI yapmadan her durumda "tekrar dene"
+  durumuna sıfırlıyordu. Yani doğrulanmış bir token için bile kutu 2.5
+  saniye sonra yeniden "İnsan olduğumu doğrula"ya dönüyor, kullanıcı aynı
+  captcha'yı tekrar tekrar çözebiliyordu.
+- **Düzeltme**: başarıda widget artık kalıcı olarak "Doğrulandı"
+  durumunda donuyor (yeşil tik kalıyor, challenge paneli -- math görseli /
+  çizim canvas'ı / 3. taraf -- kapatılıyor ki harcanmış submit butonu
+  tekrar tıklanamasın, `busy`/`verified` kalıcı olarak true, kutu
+  tıklanamaz). YALNIZCA başarısızlıkta eskisi gibi 2.5s sonra yeniden
+  deneme sunuluyor (yanlış math cevabı, özensiz çizim gibi gerçek
+  retry'lar hâlâ mümkün).
+- **Güvenlik notu**: sunucu tarafı zaten güvenliydi -- doğrulanmış token
+  tek-kullanımlık, `CaptchaGate.verify` ikinci çağrıda kontrolleri
+  tekrar çalıştırmadan idempotent başarı döndürüyor ve `on_verified`
+  yalnızca İLK doğrulamada yayınlanıyor (çift katılım/çift sayım yok).
+  Yani gerçek bir güvenlik açığı değildi; ama kullanıcının içgüdüsü doğru
+  -- bir captcha'yı sonsuz kez "çöz" diye sunmak kötü bir desen, düzeltildi.
+- **Doğrulama**: gerçek headless Chromium (Playwright) ile uçtan uca
+  sürüldü -- Math captcha doğru cevaplanınca kutu "Doğrulandı"da kalıyor
+  ve 4 saniye sonra (eski 2.5s sıfırlama penceresinin ötesinde) hâlâ
+  yeşil/doğrulanmış, panel kapalı; yanlış cevaplanınca "Doğrulanamadı"
+  gösterip 3 saniye sonra "Tekrar deneyin"e dönerek retry'a izin veriyor.
+  Bu, bundled widget'ı kullanan TÜM akışları (giveaway/appeal/test/
+  adaptive) birden düzeltiyor.
+
 ## [Unreleased] — fiziksel test geri bildirimi: 4 gerçek bug/tasarım hatası düzeltildi
 
 Kullanıcı önceki turdaki 5 test sayfasını gerçekten deneyip dört somut

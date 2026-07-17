@@ -128,6 +128,7 @@
     this.captchaResponse = null;
     this.needsExplicitAnswer = false;
     this.busy = false;
+    this.verified = false;
     this.approached = false;
     this.build();
     this.trackMovement();
@@ -350,7 +351,7 @@
   };
 
   CaptchaWidget.prototype.onBoxClick = function (e) {
-    if (this.busy) return;
+    if (this.busy || this.verified) return;
     if (this.needsExplicitAnswer) {
       // Image/canvas/3rd-party challenges are solved and submitted from
       // their own button in the expanded panel below -- clicking the
@@ -361,7 +362,7 @@
   };
 
   CaptchaWidget.prototype.runVerification = async function (e) {
-    if (this.busy) return;
+    if (this.busy || this.verified) return;
     this.busy = true;
     var rect = this.boxEl.getBoundingClientRect();
     var cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
@@ -390,18 +391,36 @@
     this.boxEl.classList.add('dwa-cw-done');
 
     if (result.verified) {
+      // Freeze permanently in the verified state -- do NOT re-arm. A
+      // verified token is one-time-use server-side (re-posting it just
+      // returns the same success idempotently, without re-running any
+      // check), so resetting the widget back to "click me" only invites
+      // the user to solve the same captcha over and over into an
+      // already-done result -- the confusing "it says done, then a second
+      // later asks me to solve it again" loop reported in testing. Once
+      // it's green, it stays green.
+      this.verified = true;
       this.checkboxEl.classList.add('dwa-cw-ok');
       this.checkboxEl.innerHTML = CHECK_SVG;
       this.labelEl.textContent = 'Doğrulandı';
+      this.boxEl.style.cursor = 'default';
+      // Collapse any challenge panel (math image / trace canvas / 3rd
+      // party) so its now-spent submit button can't be clicked again.
+      this.expandEl.classList.remove('dwa-cw-shown');
+      this.expandEl.innerHTML = '';
       emit(this.token, 'widget: doğrulama sonucu', true);
-    } else {
-      this.checkboxEl.classList.add('dwa-cw-fail');
-      this.checkboxEl.innerHTML = CROSS_SVG;
-      this.labelEl.textContent = result.detail || 'Doğrulanamadı';
-      emit(this.token, 'widget: doğrulama sonucu', false, result.failed_check || result.detail);
+      fireCallback(this.token, result);
+      return;  // leave busy=true forever: no further clicks do anything
     }
+
+    this.checkboxEl.classList.add('dwa-cw-fail');
+    this.checkboxEl.innerHTML = CROSS_SVG;
+    this.labelEl.textContent = result.detail || 'Doğrulanamadı';
+    emit(this.token, 'widget: doğrulama sonucu', false, result.failed_check || result.detail);
     fireCallback(this.token, result);
 
+    // Only re-arm after a FAILURE, so a genuine retry (wrong math answer,
+    // a sloppy trace) is still possible.
     var self = this;
     setTimeout(function () {
       self.busy = false;

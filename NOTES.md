@@ -1,5 +1,64 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## widget: başarıdan sonra sıfırlanıp tekrar captcha sorma bug'ı (bu oturum)
+
+Kullanıcının fiziksel test bildirimi (birebir özet): "test-join
+komutunu kullandım, katıl butonuna tıkladım, url verdi, 2 captcha vardı,
+çözdüm, ikisi de doğru dedi, geri döndüm Discord'a, otomatik katılma
+mesajı gelmediği için tekrar katıl dedim, yine captcha çöz dedi, aynı
+url'de captchayı tekrar çözüyoruz, hepsinde 'tamamlandı' diyip 1 saniye
+sonra tekrar captcha geliyor. Öyle olmasın, test-join'de captcha
+başarılıya orası artık başarılı gözüksün, tekrar tekrar captcha
+çözmeyelim, potansiyel saldırı açığı, testte olsa gözden kaçırmamak
+gerekli."
+
+**Kök neden -- gerçek bug, bundled widget'ta.** `widget.js`'in
+`runVerification`'ı fetch cevabından sonra, başarı/başarısızlık ayrımı
+yapmadan, her durumda `setTimeout(re-arm, 2500)` ile kutuyu 2.5 saniye
+sonra "tekrar dene" durumuna sıfırlıyordu. Doğrulanmış bir token için
+bile kutu yeniden tıklanabilir hale geliyor, kullanıcı aynı captcha'yı
+sonsuz kez çözebiliyordu. Kullanıcının gördüğü "tamamlandı, 1 saniye
+sonra tekrar captcha" tam olarak buydu.
+
+**Sunucu tarafı zaten güvenliydi (önce bunu doğruladım).** `gate.py`
+`verify()`: `if request.verified: return CheckResult(verified=True, ...)`
+-- doğrulanmış token ikinci çağrıda kontrolleri TEKRAR ÇALIŞTIRMADAN
+idempotent başarı döndürüyor, ve `transport.publish(captcha_verified)`
+yalnızca ilk (henüz verified=False) doğrulamada çalışıyor. Yani widget
+sıfırlanıp kullanıcı tekrar çözse bile: (1) çift katılım/çift sayım YOK
+(`on_verified` bir daha fire etmiyor), (2) captcha cevabı bir daha
+tüketilmiyor. Gerçek bir exploit değildi -- ama kullanıcının içgüdüsü
+haklı, bir captcha'yı tekrar tekrar "çöz" diye sunmak kötü desen.
+
+**Düzeltme.** Başarıda widget artık kalıcı olarak donuyor:
+`this.verified = true`, yeşil tik + "Doğrulandı" kalıyor, challenge
+paneli (`expandEl`) kapatılıp içi boşaltılıyor (harcanmış submit butonu
+gitsin), `return` ile re-arm setTimeout'una hiç girilmiyor, `busy` da
+kalıcı true kalıyor. `onBoxClick` ve `runVerification`'a `|| this.verified`
+guard'ı, constructor'a `this.verified = false` eklendi. YALNIZCA
+başarısızlık yolu eskisi gibi 2.5s sonra re-arm ediyor (yanlış cevap/
+özensiz çizim retry'ı korunsun diye).
+
+**Doğrulama -- gerçek tarayıcı.** Playwright + pre-installed Chromium
+(`/opt/pw-browsers/chromium-1194/chrome-linux/chrome`, `--no-sandbox`)
+ile uçtan uca sürüldü: (a) Math doğru cevap → kutu "Doğrulandı"da kalıyor,
+4sn sonra (eski 2.5s sıfırlamanın ötesinde) hâlâ yeşil + panel kapalı;
+(b) yanlış cevap → "Doğrulanamadı", 3sn sonra "Tekrar deneyin"e dönüyor
+(retry çalışıyor). Bundled widget'ı kullanan TÜM akışları birden
+düzeltiyor. `tests/unit/test_captcha_widget.py` sadece serving
+kontratını test ediyor (JS davranışı unit test'le sürülemez, bu yüzden
+gerçek tarayıcı doğrulaması manuel yapıldı -- dosyanın kendi docstring'i
+de bunu söylüyor).
+
+**Hâlâ açık (kullanıcıya sorulacak).** "otomatik katılma mesajı gelmedi"
+-- `/test-join` (Scenario 3) bir KARŞILAŞTIRMA demosu, gerçek katılım
+akışı değil; widget artık başarıda "Doğrulandı" gösterip donduğu için
+en azından her widget'ın kendi başarı geri bildirimi net. Gerçek
+otomatik-katıl akışı `/giveaway-test`'te. Test sayfalarının çokluğu/
+isim karışıklığı bu kafa karışıklığının kaynağı -- sonraki adım olarak
+kullanıcı onayıyla test sayfalarını sadeleştirmek gündemde.
+
+
 ## Fiziksel test geri bildirimi: 4 gerçek bug/tasarım hatası (bu oturum)
 
 Kullanıcı bir önceki turda eklenen 5 test sayfasını gerçekten fiziksel
