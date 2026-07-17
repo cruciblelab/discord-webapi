@@ -39,6 +39,12 @@ from discord_webapi.captcha.providers.path_trace import PathTraceProvider
 from discord_webapi.captcha.providers.proof_of_work import ProofOfWorkProvider
 from discord_webapi.captcha.providers.recaptcha import ReCaptchaProvider
 from discord_webapi.captcha.providers.text_captcha import TextCaptchaProvider
+from discord_webapi.captcha.replay_guard import (
+    MemoryTrajectoryFingerprintStore,
+    RepeatedMovementCheck,
+    TrajectoryFingerprintStore,
+    fingerprint_trajectory,
+)
 from discord_webapi.captcha.scoring import (
     ScoringHeuristic,
     SignalScoreCheck,
@@ -51,7 +57,11 @@ from discord_webapi.captcha.signals import (
 )
 
 if TYPE_CHECKING:
-    from discord_webapi.captcha.sql import SQLCaptchaStore, SQLVerificationStore
+    from discord_webapi.captcha.sql import (
+        SQLCaptchaStore,
+        SQLTrajectoryFingerprintStore,
+        SQLVerificationStore,
+    )
 
 __all__ = [
     "EVENT_TYPE_CAPTCHA_VERIFIED",
@@ -67,23 +77,28 @@ __all__ = [
     "HCaptchaProvider",
     "MathCaptchaProvider",
     "MemoryCaptchaStore",
+    "MemoryTrajectoryFingerprintStore",
     "MemoryVerificationStore",
     "PathTraceProvider",
     "PendingCaptcha",
     "PredicateCheck",
     "ProofOfWorkProvider",
     "ReCaptchaProvider",
+    "RepeatedMovementCheck",
     "SQLCaptchaStore",
+    "SQLTrajectoryFingerprintStore",
     "SQLVerificationStore",
     "ScoringHeuristic",
     "SignalScoreCheck",
     "TextCaptchaProvider",
+    "TrajectoryFingerprintStore",
     "VerificationCheck",
     "VerificationContext",
     "VerificationRequest",
     "VerificationStore",
     "build_captcha_router",
     "default_behavior_heuristics",
+    "fingerprint_trajectory",
     "reject_webdriver",
     "require_min_interaction_ms",
     "require_signal_flag",
@@ -93,7 +108,7 @@ __all__ = [
 def __getattr__(name: str) -> object:
     # SQL* stores need the optional `sql` extra (`discord-webapi[sql]`) --
     # imported lazily so the base package never requires SQLAlchemy.
-    if name in ("SQLCaptchaStore", "SQLVerificationStore"):
+    if name in ("SQLCaptchaStore", "SQLVerificationStore", "SQLTrajectoryFingerprintStore"):
         from discord_webapi.captcha import sql
 
         return getattr(sql, name)

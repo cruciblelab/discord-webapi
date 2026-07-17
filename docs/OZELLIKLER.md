@@ -316,6 +316,24 @@ Sağlayıcı aileleri:
   değer katmadığı için kaldırıldı.)
 - **Üçüncü-taraf widget'lar** -- `ReCaptchaProvider`, `HCaptchaProvider`
   (kendi site_key/secret_key'iniz). Sadece `httpx` (zaten çekirdek).
+- **Tekrarlanan-hareket / replay tespiti** (`RepeatedMovementCheck`,
+  `discord_webapi.captcha.replay_guard`) -- yukarıdaki kinematik
+  sezgisellerin **tek gerçek çözemediği** sorunu (bir bot gerçek bir insan
+  hareketini kaydedip replay ederse tek-istekli hiçbir analiz bunu
+  yakalayamaz) için: bu, tek istekli değil **geçmişe bakan** bir kontrol.
+  `mouse_trajectory`'den kaba, öteleme-bağımsız (translation-invariant)
+  bir parmak izi çıkarır (ilk örneğe göre normalize edilmiş, kuantize
+  `dx,dy,dt` deltalarının hash'i) ve bu parmak izinin **yakın zamanda
+  -- kim tarafından olursa olsun --** kullanılıp kullanılmadığına bakar.
+  Bilerek **global** (kullanıcı/IP/oturum bazlı değil): asıl yakalamak
+  istediği tam da "aynı kayıt farklı bir hesap/cihaz/IP altında tekrar
+  sunuluyor" senaryosu -- per-hesap/per-IP rate limit bunu göremez.
+  Sinyal eksikse veya dokunmatikse **fail-open** (geçer) -- bu sinyali
+  henüz göndermeyen bir istemciyi asla bloklamaz. `MemoryTrajectoryFingerprintStore`
+  (tek process) / `SQLTrajectoryFingerprintStore` (çoklu web replica'sı
+  -- aksi halde bir load balancer arkasında replay farklı bir replica'ya
+  düşünce yakalanmayabilir). Varsayılan olarak hiçbir gate'e bağlı değil --
+  `extra_checks=[RepeatedMovementCheck(store)]` ile isteyen ekler.
 
 Rate limiter/escalation'ın aksine `DiscordWebAPI` hiçbir captcha
 sağlayıcısını otomatik kurmaz (hangi sağlayıcı, hangi reCAPTCHA
@@ -406,6 +424,43 @@ hiç kullanmaz, tamamen kendininkini koyar. `verify()` bir `CheckResult`
 döndürüyor (`.verified`, hangi check patladı `.failed_check`, hangileri
 geçti `.passed`) ve `captcha_verified` event'i `checks_passed` taşıyor --
 bot ne kadar güçlü doğrulandığını bilerek tepki verebilir.
+
+**Katman içi granülerlik -- tek tek özellik açıp kapatmak da mümkün, sadece
+kat seviyesinde değil.** Yukarıdaki "bir check'i tamamen kullan/kullanma"
+seçiminin bir seviye altında: her katmanın kendi içinde de neyi
+kullanacağınızı seçebiliyorsunuz --
+
+```python
+# Davranışsal skorun İÇİNDE hangi sezgisellerin çalışacağını seçin --
+# örn. mouse-kinematiğini istemiyorsanız listeden çıkarın, kendi
+# sezgiselinizi ekleyin, ağırlıkları değiştirin:
+from discord_webapi.captcha.scoring import ScoringHeuristic, default_behavior_heuristics
+
+heuristics = [
+    h for h in default_behavior_heuristics()
+    if not h.name.startswith("mouse-")   # kinematik sezgiselleri tamamen çıkar
+]
+heuristics.append(ScoringHeuristic("kendi-sinyalim", 2.0, kendi_sezgiselim))
+SignalScoreCheck(heuristics=heuristics)
+
+# Kendi sağlayıcınızı/3. taraf servisinizi kullanın, bizimkini hiç
+# kurmayın -- CaptchaProvider Protocol'ü herkese açık:
+CaptchaGate(transport, store, provider=ReCaptchaProvider(site_key=..., secret_key=...))
+
+# Ya da hiçbirini kullanmayın, tamamen kendi captcha kütüphanenizi
+# CaptchaProvider Protocol'üyle sarın -- gate hangi implementasyon
+# olduğunu hiç bilmiyor.
+class MyCaptcha:
+    kind = "my-captcha"
+    async def issue(self): ...
+    async def verify(self, challenge_id, response): ...
+```
+
+Yani "bu algoritmayı/özelliği istemiyorum, şunu istiyorum" ya da "zaten
+3. taraf bir hizmet kullanacağım" dediğinizde hiçbir şeyi zorla dayatan
+bir yer yok -- her katman (provider, check, hatta bir check'in içindeki
+tek tek sezgiseller) bağımsız olarak değiştirilebilir/kaldırılabilir/
+eklenebilir listeler ve Protocol'ler üzerine kurulu.
 
 Not: tüketici bu check'leri ve eşikleri kendi yazabildiği için, ihtiyaçları
 yoksa hiç captcha kullanmadan sadece hesap-doğrulamayla da geçebilirler,

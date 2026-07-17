@@ -9,7 +9,7 @@ stores, same principle as `discord_webapi.escalation.sql`/
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String, Text
@@ -50,6 +50,13 @@ class VerificationRequestRow(Base):
     challenge_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
+    expires_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
+
+
+class TrajectoryFingerprintRow(Base):
+    __tablename__ = "dwa_captcha_trajectory_fingerprints"
+
+    fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
     expires_at: Mapped[datetime] = mapped_column(_TIMESTAMP)
 
 
@@ -183,3 +190,40 @@ class SQLVerificationStore:
             if row is not None:
                 await db.delete(row)
                 await db.commit()
+
+
+class SQLTrajectoryFingerprintStore:
+    """`TrajectoryFingerprintStore` backed by SQLAlchemy 2.0 async -- the
+    multi-process-safe version of `MemoryTrajectoryFingerprintStore`, so a
+    replayed fingerprint is caught even if it lands on a different web
+    replica than the one that saw it first. Call `create_all()` once at
+    startup (or manage the tables via Alembic)."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+        self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_all(self) -> None:
+        async with self._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def seen_recently(self, fingerprint: str) -> bool:
+        async with self._sessionmaker() as db:
+            row = await db.get(TrajectoryFingerprintRow, fingerprint)
+            if row is None:
+                return False
+            if _as_utc(row.expires_at) <= datetime.now(UTC):
+                await db.delete(row)
+                await db.commit()
+                return False
+            return True
+
+    async def record(self, fingerprint: str, ttl: timedelta) -> None:
+        async with self._sessionmaker() as db:
+            row = await db.get(TrajectoryFingerprintRow, fingerprint)
+            expires_at = datetime.now(UTC) + ttl
+            if row is None:
+                db.add(TrajectoryFingerprintRow(fingerprint=fingerprint, expires_at=expires_at))
+            else:
+                row.expires_at = expires_at
+            await db.commit()

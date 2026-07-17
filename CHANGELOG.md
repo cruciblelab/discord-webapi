@@ -2,6 +2,56 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: replay-tespiti (`RepeatedMovementCheck`) + granüler açma/kapama
+
+Kullanıcının iki isteği: (1) her özelliğin/algoritmanın tek tek
+açılıp kapatılabilir olduğunu netleştirmek ("bu algoritmayı istemiyorum,
+şunu istiyorum ya da zaten 3. taraf hizmet kullanacağım" senaryosu), (2)
+aynı hareketin/tıklamanın hep tekrarlandığı, farklı cihaz/IP'lerden de
+olsa hep aynı davranışın sergilendiği durumları şüpheli sayacak bir katman.
+
+### Değişenler
+
+- **`RepeatedMovementCheck` eklendi** (`discord_webapi.captcha.replay_guard`,
+  yeni modül): önceki turda dürüstçe yazılan "tek istekli kinematik analiz
+  replay saldırısını yakalayamaz" sınırına karşı **tek gerçek çözüm** --
+  çünkü bu, tek isteğe değil **geçmişe** bakan bir kontrol. `mouse_trajectory`'den
+  kaba, öteleme-bağımsız bir parmak izi (`fingerprint_trajectory`) çıkarıp
+  bu izin yakın zamanda -- **kim tarafından olursa olsun** -- kullanılıp
+  kullanılmadığına bakıyor. Bilerek global (kullanıcı/IP bazlı değil):
+  amaç, aynı kaydın farklı bir hesap/cihaz/IP altında tekrar sunulmasını
+  yakalamak -- per-hesap/per-IP rate limit bunu göremez. Sinyal
+  eksik/dokunmatikse fail-open (geçer). `MemoryTrajectoryFingerprintStore`
+  (tek process) + `SQLTrajectoryFingerprintStore` (çoklu web replica'sı)
+  -- diğer tüm store'larla aynı Protocol + Memory/SQL deseni. Varsayılan
+  olarak hiçbir gate'e bağlı değil, `extra_checks=[...]` ile isteğe bağlı.
+- **Homing-dynamics denendi, eklenmedi**: kullanıcının önerdiği "hedefe
+  yaklaşırken overshoot-düzeltme" sinyalini gerçek veriyle test ettim --
+  kendi elle kurduğum "insan" trajectory'sinde bile sıfır overshoot
+  çıktı (minimum-jerk modeli zaten monoton, overshoot sadece hızlı/balistik
+  hareketlerde ortaya çıkan ikincil bir olgu, her insan hareketinde yok).
+  İkili yapılırsa meşru düz hareketleri cezalandırır; dereceli yapılırsa
+  zaten var olan `mouse-velocity-variance` ile neredeyse aynı bilgiyi
+  tekrarlar. Bağımsız değer katmadığı için eklenmedi -- test etmeden
+  eklemek yerine dürüstçe geri çekildi.
+- **Granülerlik netleştirildi (docs)**: `docs/OZELLIKLER.md`'ye, katman
+  seviyesinin (provider/check aç-kapa) bir altında, katmanın İÇİNDEKİ
+  tek tek özelliklerin de (örn. `SignalScoreCheck`'in belirli bir
+  sezgiselini listeden çıkarmak, kendi provider'ınızı/3. taraf servisinizi
+  hiç bizim kodumuza dokunmadan kullanmak) nasıl seçilip
+  değiştirilebileceğini gösteren somut bir örnek eklendi. Bu zaten mevcut
+  bir yetenekti (`heuristics=[...]`, `CaptchaProvider` Protocol'ü) --
+  netlik için dokümante edildi.
+
+15 yeni test (`fingerprint_trajectory`'nin determinizmi/öteleme-bağımsızlığı/
+farklı şekilleri ayırt etmesi/bozuk-veride None dönmesi; Memory+SQL
+fingerprint store CRUD+expiry; `RepeatedMovementCheck`'in ilk gönderimi
+geçirmesi, aynı hareketi tekrar reddetmesi, **farklı hesap altında bile**
+reddetmesi, ötelenmiş replay'i de yakalaması, iki farklı gerçek hareketi
+ikisini de geçirmesi, sinyal yoksa/dokunmatikse fail-open olması, gate'e
+extra_check olarak oturması). Tüm suite yeşil (bilinen Postgres ortam
+hatası hariç), ruff+mypy temiz.
+
 ## [Unreleased] — captcha: mouse kinematiği skoru (araştırma + uygulama)
 
 Kullanıcının somut sorusu: "ardışık mouse hareketleri/hızlanma-yavaşlama

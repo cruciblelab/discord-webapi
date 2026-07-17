@@ -10,7 +10,11 @@ from sqlalchemy.pool import StaticPool
 
 from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
-from discord_webapi.captcha.sql import SQLCaptchaStore, SQLVerificationStore
+from discord_webapi.captcha.sql import (
+    SQLCaptchaStore,
+    SQLTrajectoryFingerprintStore,
+    SQLVerificationStore,
+)
 
 
 @pytest_asyncio.fixture
@@ -226,3 +230,26 @@ async def test_sql_verification_store_delete(engine: AsyncEngine) -> None:
     await store.delete("t1")
 
     assert await store.get("t1") is None
+
+
+# -- SQLTrajectoryFingerprintStore --
+
+
+async def test_sql_trajectory_fingerprint_store_records_and_sees(engine: AsyncEngine) -> None:
+    store = SQLTrajectoryFingerprintStore(engine)
+    await store.create_all()
+
+    assert await store.seen_recently("fp1") is False
+
+    await store.record("fp1", timedelta(hours=1))
+
+    assert await store.seen_recently("fp1") is True
+
+
+async def test_sql_trajectory_fingerprint_store_expires(engine: AsyncEngine) -> None:
+    store = SQLTrajectoryFingerprintStore(engine)
+    await store.create_all()
+
+    await store.record("fp1", timedelta(seconds=-1))  # already expired
+
+    assert await store.seen_recently("fp1") is False

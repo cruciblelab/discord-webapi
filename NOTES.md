@@ -1,5 +1,83 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: replay-tespiti (RepeatedMovementCheck) + granülerlik netliği (bu oturumda)
+
+Kullanıcının önceki mesajdaki ChatGPT önerilerine verdiğim cevaptan sonra
+iki yeni istek geldi: (1) her algoritmanın/özelliğin tek tek açılıp
+kapatılabilir olmasını istiyor -- "bu algoritmayı istemiyorum, şunu
+istiyorum ya da zaten 3. taraf hizmet kullanacağım" senaryosu; bunun
+zaten mevcut olduğunu doğrulayıp somut örneklerle dokümante ettim
+(`heuristics=[...]` listesinden istediğinizi çıkarın/ekleyin,
+`CaptchaProvider` Protocol'üyle kendi/3.taraf sağlayıcınızı hiç bizim
+kodumuza dokunmadan kullanın). (2) Daha önemlisi: "aynı hareket hiç
+değişmeden tekrarlanıyorsa, telefonda hep aynı piksele dokunuyorsa,
+mouse hiç hareket etmeden captcha yüklenirken bile orada beliriyorsa,
+başka cihaz/IP'lerde de aynı şeyi tekrarlıyorsa şüpheli değil mi" diye
+sordu.
+
+**Bu ikinci soru gerçekten önemli bir gedik yakalamış**: önceki turda
+"tek istekli kinematik analiz replay saldırısını yakalayamaz, bu yapısal
+bir sınır" dedim -- ve bu hâlâ doğru, AMA kullanıcının önerdiği şey tek
+istekli değil, **geçmişe bakan (cross-request)** bir kontrol. Aynı kaydı
+tekrar tekrar oynatan bir bot -- hatta farklı hesap/cihaz/IP'ler
+altında -- her seferinde aynı şekli bırakır. Bu, tek isteğin kinematik
+analizinin göremediği ama bir *tarih*in görebileceği tam olarak o şey.
+Yani kullanıcı, önceki dürüst sınırlamamın "aşılamaz" kısmına değil,
+"tek istekli analiz" kısmına itiraz etmiş oldu -- ve haklı, cross-request
+katmanı gerçekten ek koruma sağlıyor (daha önce "aggregate/cross-request
+anomaly detection" olarak bahsettiğim ama uygulamadığım katmanın somut
+bir versiyonu).
+
+**Yapılan** (`discord_webapi/captcha/replay_guard.py`, yeni modül):
+- `fingerprint_trajectory(trajectory)`: `mouse_trajectory`'den kaba,
+  **öteleme-bağımsız** bir parmak izi çıkarıyor -- ilk örneğe göre
+  normalize edilmiş `(dx, dy, dt)` deltalarını kuantize edip (6px/25ms
+  grid) hash'liyor. Öteleme-bağımsız olması kritik: aynı kayıt farklı bir
+  widget konumuna/zamanına karşı replay edilse bile parmak izi aynı kalır
+  (test'le doğrulandı). Kaba kuantizasyon sayesinde iki *farklı* gerçek
+  insan hareketi neredeyse hiç çakışmıyor (doğal jitter yeterince farklı
+  kalıyor), ama tam replay her zaman çakışıyor.
+- `TrajectoryFingerprintStore` Protocol + `MemoryTrajectoryFingerprintStore`
+  (varsayılan, tek process) + `SQLTrajectoryFingerprintStore` (çoklu web
+  replica'sı için -- diğer store'larla aynı desende, `captcha/sql.py`'ye
+  eklendi, kendi tablosu `dwa_captcha_trajectory_fingerprints`).
+- `RepeatedMovementCheck` (`VerificationCheck`): parmak izi yakın zamanda
+  görülmüşse reddediyor. **Bilerek global** -- kullanıcı/IP/oturum bazlı
+  DEĞİL, çünkü asıl yakalamak istediği "aynı kayıt başka bir kimlik
+  altında tekrar geliyor" senaryosu; per-hesap/per-IP rate limit bunu
+  göremez (bu, kullanıcının "başka cihazlar başka IP'lerde yapıyorsa"
+  cümlesinin birebir karşılığı). Sinyal eksikse/dokunmatikse fail-open
+  (geçer) -- bu sinyali göndermeyen bir istemciyi asla bloklamıyor.
+  Varsayılan olarak hiçbir gate'e bağlı değil, `extra_checks=[...]` ile
+  isteğe bağlı ekleniyor -- diğer her şeyle aynı "kullan/kullanma"
+  felsefesi.
+
+**Denenip eklenmeyen**: kullanıcının/ChatGPT'nin önerdiği "hedefe
+yaklaşırken overshoot-düzeltme" (homing dynamics) sinyalini gerçek veriyle
+test ettim (`e(t) = hedef - x(t)`, artış var mı diye baktım) -- kendi elle
+kurduğum, minimum-jerk modeline dayanan "insan" trajectory'sinde bile SIFIR
+overshoot çıktı. Sebebi mantıklı: minimum-jerk modeli zaten monoton bir
+eğri, overshoot sadece hızlı/balistik hareketlerde ortaya çıkan ikincil bir
+olgu, yavaş/hassas fare hareketlerinde hiç yok. İkili (var/yok) yapılırsa
+meşru düzgün insan hareketlerinin çoğunu "bot gibi" işaretler (yanlış
+pozitif riski -- tam olarak bu projede baştan beri kaçınılan şey); dereceli
+yapılırsa zaten var olan `mouse-velocity-variance` ile neredeyse aynı
+bilgiyi tekrarlıyor, bağımsız değer katmıyor. Test etmeden eklemek yerine
+sonucu kullanıcıya dürüstçe raporlayıp geri çektim -- bu projenin baştan
+beri sürdürdüğü "iddia etmeden önce doğrula" disiplininin aynısı.
+
+**Granülerlik dokümantasyonu**: `docs/OZELLIKLER.md`'ye, "check seviyesinde
+aç/kapa" örneğinin bir altına, bir check'in İÇİNDEKİ tek tek özelliklerin
+de (belirli bir `ScoringHeuristic`'i listeden çıkarmak, kendi/3.taraf
+provider'ı hiç bizim kodumuza dokunmadan kullanmak) nasıl seçilebileceğini
+gösteren somut kod örnekleri eklendi. Bu zaten var olan bir yetenekti
+(`heuristics=[...]` her zaman değiştirilebilir bir liste, `CaptchaProvider`
+Protocol'ü zaten "kendi getir" deseni) -- yeni bir mekanizma eklemedim,
+sadece netleştirdim.
+
+15 yeni test, tüm suite yeşil (bilinen Postgres ortam hatası hariç),
+ruff+mypy temiz.
+
 ## captcha: mouse kinematiği skoru -- araştırma + uygulama (bu oturumda)
 
 Kullanıcının sorusu birebir: "Mousede ardışık hareketler ardışık hızlanma
