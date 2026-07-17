@@ -23,6 +23,22 @@ The gate's account-check (`require_account=True`) reads the signed-in
 Discord user from the same OAuth session the rest of the library uses, so
 `DiscordAuth.install(app)` must have run for that mode to have anyone to
 match against. Captcha-only / click-only gates work without it.
+
+**More than one `CaptchaGate` purpose at once** (e.g. a giveaway-entry
+gate and a separate "verify before appealing a ban" gate)? Pass `gate=`
+explicitly and mount the router once per gate under different prefixes
+instead of relying on the single `app.state.discord_webapi_captcha_gate`:
+
+    app.include_router(build_captcha_router(gate=giveaway_gate), prefix="/giveaway")
+    app.include_router(build_captcha_router(gate=appeal_gate), prefix="/appeal")
+
+Each mount gets its own `/{prefix}/api/captcha/gate/{token}` pair, fully
+independent. Point the bundled widget's `data-api-base` at the matching
+prefix (empty string, the default, means unprefixed -- the single-gate
+case above). The plain `/challenge`+`/verify` provider endpoints get
+duplicated harmlessly under each prefix; mount the router without a
+`gate=` (or without a `prefix`) once more if you only want one
+unprefixed copy of those for direct site usage.
 """
 
 from __future__ import annotations
@@ -95,17 +111,28 @@ def _get_provider(request: Request, kind: str) -> CaptchaProvider:
     return provider
 
 
-def _get_gate(request: Request) -> CaptchaGate:
-    gate: CaptchaGate | None = getattr(request.app.state, "discord_webapi_captcha_gate", None)
-    if gate is None:
+def _get_gate(request: Request, gate: CaptchaGate | None) -> CaptchaGate:
+    resolved = gate or getattr(request.app.state, "discord_webapi_captcha_gate", None)
+    if resolved is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            "No CaptchaGate configured -- set app.state.discord_webapi_captcha_gate",
+            "No CaptchaGate configured -- pass gate=... to build_captcha_router() or "
+            "set app.state.discord_webapi_captcha_gate",
         )
-    return gate
+    return resolved
 
 
-def build_captcha_router(*, verify_rate_limiter: TokenBucketLimiter | None = None) -> APIRouter:
+def build_captcha_router(
+    *,
+    gate: CaptchaGate | None = None,
+    verify_rate_limiter: TokenBucketLimiter | None = None,
+) -> APIRouter:
+    """`gate=None` (the default) reads `app.state.discord_webapi_captcha_gate`
+    at request time -- the single-gate case. Pass an explicit `gate=` to
+    bind this particular router mount to one gate regardless of app
+    state, so you can mount the router more than once (each under its own
+    `prefix=`) for more than one gate purpose at once -- see the module
+    docstring."""
     limiter = verify_rate_limiter or _DEFAULT_VERIFY_LIMITER
     router = APIRouter(prefix="/api/captcha", tags=["captcha"])
 
@@ -131,8 +158,8 @@ def build_captcha_router(*, verify_rate_limiter: TokenBucketLimiter | None = Non
 
     @router.get("/gate/{token}")
     async def get_gate_info(token: str, request: Request) -> GateInfo:
-        gate = _get_gate(request)
-        info = await gate.get_info(token)
+        resolved_gate = _get_gate(request, gate)
+        info = await resolved_gate.get_info(token)
         if info is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "This verification link has expired or was already used"
@@ -147,8 +174,8 @@ def build_captcha_router(*, verify_rate_limiter: TokenBucketLimiter | None = Non
         user: DiscordUser | None = Depends(get_current_user_optional),
     ) -> GateVerifyResult:
         limiter.check(token)
-        gate = _get_gate(request)
-        result = await gate.verify(
+        resolved_gate = _get_gate(request, gate)
+        result = await resolved_gate.verify(
             token,
             body.captcha_response,
             authenticated_user_id=user.id if user is not None else None,

@@ -366,6 +366,25 @@ sonucu) `document` üzerinde bir `dwa-captcha-widget-log` CustomEvent'i
 olarak da yayınlanır -- kendi görünür zaman çizelgenizi istiyorsanız
 onu dinleyin (`examples/captcha_playground` tam olarak bunu yapıyor).
 
+**Birden fazla gate amacı aynı anda** (örn. bir çekiliş gate'i + ayrı bir
+"çok ban yemişse itiraz komutundan önce doğrula" gate'i): `build_captcha_router()`
+varsayılan olarak tek bir `app.state.discord_webapi_captcha_gate`'i okur --
+tek bir entegrasyonu olan gerçek bir deploy için doğru tasarım budur. Birden
+fazla gate'iniz varsa `gate=` parametresini açıkça verip router'ı her gate
+için ayrı bir prefix altında mount edin:
+
+```python
+app.include_router(build_captcha_router(gate=giveaway_gate), prefix="/giveaway")
+app.include_router(build_captcha_router(gate=appeal_gate), prefix="/appeal")
+```
+
+Widget'ın `data-api-base` özniteliğini de eşleşen prefix'e ayarlayın
+(`data-api-base="/giveaway"`). Somut, gerçek bir bot üzerinde çalışan örnek:
+`examples/captcha_gate_bot/` -- tam olarak sorduğunuz iki senaryo: `/join`
+(çekilişe katılma linki, DM, gerçek Discord hesabına bağlı doğrulama,
+`on_verified` ile "katıldın!" DM'i) ve `/appeal` (belli bir ban eşiğini
+geçen kullanıcı, ayrı bir gate üzerinden doğrulanmadan komutu kullanamıyor).
+
 Bu, `DiscordWebAPI.install()`'a otomatik bağlanan diğer opt-in
 özelliklerin (audit/consent/ratelimits) aksine hâlâ elle mount ediliyor
 -- ama önceki katmanların hepsi gibi **tamamen isteğe bağlı**: kendi

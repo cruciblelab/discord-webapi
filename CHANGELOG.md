@@ -2,6 +2,57 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: gerçek bot-komut senaryoları için çoklu-gate desteği + `examples/captcha_gate_bot`
+
+Kullanıcının sorusu: "peki komutlarda çalışıyor mu, çekiliş botu +
+'çok ban yemiş kullanıcı itiraz komutundan önce doğrulasın' senaryoları
+şu an gerçekten çalışıyor mu?" Dürüst cevap araştırılırken gerçek, önceden
+bilinmeyen bir mimari sınır ortaya çıktı ve düzeltildi.
+
+### Bulunan gerçek sınır ve düzeltmesi
+
+- **`build_captcha_router()` tek bir global `app.state.discord_webapi_captcha_gate`
+  okuyordu** -- tek entegrasyonu olan bir bot için doğru tasarım, ama
+  kullanıcının sorduğu senaryo (çekiliş gate'i + ayrı bir itiraz gate'i,
+  aynı anda) için yetersiz: iki gate aynı anda çalışamıyordu. Düzeltme:
+  `build_captcha_router(gate=...)` artık isteğe bağlı bir `gate` parametresi
+  alıyor -- verilirse app.state yerine o gate'e bağlanıyor (geriye dönük
+  uyumlu, `gate=None` eski davranışın aynısı). Router her gate için ayrı
+  bir `prefix` ile birden fazla kez mount edilebiliyor.
+- **Widget'a `data-api-base` özniteliği eklendi** -- prefix'li mount'larla
+  konuşabilmesi için (`data-api-base="/giveaway"`).
+- **`examples/captcha_gate_bot/`** (yeni örnek): kullanıcının birebir
+  sorduğu iki senaryo, gerçek bir discord.py bot'una ve gerçek Discord
+  OAuth hesap-bağlamasına karşı (playground'un sahte `user_id=0`'ı değil):
+  1. **`/join`** -- çekilişe katılma linki DM'leniyor, web tarafında
+     görünmez PoW + davranış skoru + **gerçek Discord hesabına bağlama**
+     (`require_account=True`) ile doğrulanıyor, `on_verified` ateşlenince
+     bot "katıldın!" DM'i atıyor -- polling yok.
+  2. **`/appeal`** -- bir ban eşiğini (demo: `_fake_ban_counts`, gerçek
+     kullanımda kendi `WarnStore`/`EscalationEngine`'inizle değiştirin)
+     geçen kullanıcı, **ayrı bir gate** üzerinden doğrulanmadan komutu
+     kullanamıyor; bir kez doğrulanınca temiz kalıyor.
+  İki gate de `/giveaway` ve `/appeal` prefix'leri altında ayrı ayrı mount
+  ediliyor -- yukarıdaki çoklu-gate desteğinin somut kullanımı.
+
+### Doğrulama
+
+Gerçek bir Discord bot bağlantısı gerektirmeden (`FastAPI` `TestClient`
+ile, diğer örnek botlardaki "fiziksel test" adımının bir öncesi):
+modülün gerçekten import edilip her iki prefix'in de doğru mount
+olduğu, `/giveaway` prefix'i altındaki bir token'ın `/appeal` prefix'i
+altında 404 döndüğü (ve tersi -- gerçek izolasyon), gerçek bir PoW
+challenge'ının issue edildiği, ve `require_account=True` olduğu için
+giriş yapmadan verify çağrısının doğru şekilde `failed_check="account"`
+döndürdüğü doğrulandı. Discord Gateway bağlantısı gerektiren kısım
+(`/join`/`/appeal` komutlarının gerçekten tetiklenmesi) bu repodaki her
+örnek bot için zaten dokümante edilen fiziksel-test adımı olarak kalıyor.
+
+4 yeni entegrasyon testi (`test_captcha_api.py`: iki gate'in `gate=`
+parametresiyle çakışmadan aynı anda mount edilmesi, token izolasyonu,
+`gate=`'nin app.state'e göre önceliği). Tüm suite yeşil (bilinen Postgres
+ortam hatası hariç), ruff+mypy temiz.
+
 ## [Unreleased] — captcha: hazır, dahili widget (`discord_webapi.captcha.widget`)
 
 Kullanıcı iki şey istedi: (1) playground'daki elle yazılmış doğrulama

@@ -1,5 +1,80 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: "komutlarda gerçekten çalışıyor mu" sorusu gerçek bir mimari sınır ortaya çıkardı (bu oturumda)
+
+Kullanıcının sorusu birebir: "Peki komutlsrda şeylerde çalışıyor mu
+dediimya örnek seneryo verdim giveway botunda çekilişe katılmak için
+tıklarlar robot doğrulaması ister özel url giriş yapmalı veya komutlsrda
+mesela çok ban attı capctha doğrulaması devam için seneryo bunlar
+oluyormu şuan". Yani: playground'da test ettiğim şeyler (sahte
+`user_id=0` ile) gerçek bot komutlarında da çalışıyor mu, özellikle iki
+somut senaryo -- çekiliş botu `/join` ve "çok ban yemiş kullanıcı devam
+etmeden önce doğrulasın" gibi bir escalation-gate senaryosu.
+
+**Dürüst yaklaşım**: varsayımla "evet çalışıyor" demek yerine gerçekten
+inşa etmeye çalıştım -- ve bu, önceden fark edilmemiş gerçek bir mimari
+sınırı ortaya çıkardı: `build_captcha_router()`'ın `/api/captcha/gate/
+{token}` endpoint'i TEK bir `app.state.discord_webapi_captcha_gate`
+okuyor. Kullanıcının sorduğu senaryo tam olarak İKİ ayrı gate amacı
+gerektiriyor (çekiliş gate'i + itiraz gate'i) -- bunlar aynı anda mount
+edilemiyordu, ikincisi birincisinin üstüne yazardı. Bu, playground'da
+zaten bir kez karşılaştığım "tek global gate" sınırının (o zaman
+app.state'i token-mint anında değiştiren bir hack ile geçiştirmiştim,
+sadece tek-operatörlü yerel demo için uygun olduğunu not düşerek) gerçek
+bir production senaryosunda tekrar karşıma çıkması -- bu sefer hack kabul
+edilemezdi, gerçek bir kütüphane düzeltmesi gerekiyordu.
+
+**Yapılan düzeltme** (`discord_webapi/captcha/api.py`):
+- `build_captcha_router(*, gate: CaptchaGate | None = None, ...)` --
+  `gate` verilirse app.state yerine doğrudan o gate'e bağlanıyor (closure
+  üzerinden), `gate=None` (varsayılan) eski davranışın birebir aynısı
+  (geriye dönük tam uyumlu, mevcut tüm testler değişmeden geçti). Artık
+  router birden fazla kez, her biri kendi `prefix`'i ve kendi `gate`'iyle
+  mount edilebiliyor:
+  ```python
+  app.include_router(build_captcha_router(gate=giveaway_gate), prefix="/giveaway")
+  app.include_router(build_captcha_router(gate=appeal_gate), prefix="/appeal")
+  ```
+- `widget.js`'e `data-api-base` özniteliği eklendi -- widget'ın hangi
+  prefix altındaki gate'e konuşacağını bilmesi için (`this.apiBase + '/api/captcha/gate/' + token`).
+- 4 yeni entegrasyon testi: iki gate'in çakışmadan aynı anda mount
+  edilmesi, bir gate'in token'ının DİĞER gate'in prefix'i altında 404
+  dönmesi (gerçek izolasyon kanıtı), `gate=`'nin app.state'e göre önceliği.
+
+**`examples/captcha_gate_bot/`** (yeni, gerçek bir bot): kullanıcının
+sorduğu iki senaryoyu birebir, gerçek bir discord.py `commands.Bot`'una
+ve gerçek Discord OAuth hesap-bağlamasına (`require_account=True`) karşı
+kuruyor -- playground'un sahte `user_id=0`'ının aksine:
+1. `/join giveaway_name:...` -- `giveaway_gate.create_verification()`,
+   DM ile link, web tarafında görünmez PoW + davranış skoru + gerçek
+   hesap eşleşmesi, `on_verified` ile "katıldın!" DM'i.
+2. `/simulate-ban @kullanıcı` (demo-only sayaç) + `/appeal reason:...` --
+   `BAN_THRESHOLD`'u geçen kullanıcı, `appeal_gate` üzerinden AYRICA
+   doğrulanmadan komutu kullanamıyor; bir kez doğrulanınca
+   `_appeal_verified_users` setinde kalıyor (gerçek bir bot bunu
+   kalıcı tutar, in-memory set değil).
+
+Her iki gate `/giveaway` ve `/appeal` prefix'leri altında ayrı ayrı mount
+ediliyor, widget'ların `data-api-base`'i buna göre ayarlanıyor. Bir de
+basit bir `/verify/{purpose}/{token}` HTML sayfası (Discord login linki +
+widget) -- gerçek `login_success_redirect`'in sabit olduğunu (dinamik
+`redirect_uri` query param'ı YOK, `DiscordAuth`'un gerçek API'sinde böyle
+bir şey yok) keşfedip sayfayı ona göre düzelttim (giriş yap, aynı linke
+geri dön, widget'a tıkla -- tek adımlık "redirect_uri" varsayımım yanlış
+çıkmıştı, koda bakıp düzelttim).
+
+**Doğrulama (gerçek Discord bağlantısı olmadan)**: modülü gerçek env
+değişkenleriyle import edip `FastAPI` route listesinde her iki prefix'in
+de doğru göründüğünü doğruladım; `TestClient` ile: `/giveaway` prefix'i
+altında mint edilen bir token'ın `/appeal` prefix'inde 404 döndüğünü (ve
+tersi) -- yani gerçek izolasyon; gerçek bir PoW challenge'ının issue
+edildiğini; `require_account=True` olduğu için oturum açmadan verify
+çağrısının doğru şekilde `failed_check="account"` döndürdüğünü; widget
+script'inin servis edildiğini kontrol ettim. Gateway bağlantısı gerektiren
+kısım (komutların gerçekten Discord'dan tetiklenmesi) bu repodaki her
+örnek bot için zaten var olan "fiziksel test" adımı olarak kaldı --
+bunu açıkça söyledim, "tamamen test edildi" gibi göstermedim.
+
 ## captcha: hazır, dahili widget -- ilk kez UI kütüphanenin kendisine giriyor (bu oturumda)
 
 Kullanıcının isteği birebir: playground'daki elle-yazılmış doğrulama

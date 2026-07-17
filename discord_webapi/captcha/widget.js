@@ -116,6 +116,11 @@
   function CaptchaWidget(el) {
     this.el = el;
     this.token = el.getAttribute('data-token');
+    // Only needed when build_captcha_router(gate=...) is mounted more
+    // than once (one prefix per CaptchaGate purpose) instead of the
+    // single unprefixed app.state.discord_webapi_captcha_gate -- point
+    // this at the matching prefix, e.g. data-api-base="/giveaway".
+    this.apiBase = el.getAttribute('data-api-base') || '';
     this.pageLoadedAt = performance.now();
     this.trajectory = [];
     this.lastPointerType = 'mouse';
@@ -184,7 +189,7 @@
 
   CaptchaWidget.prototype.loadInfo = async function () {
     try {
-      var resp = await fetch('/api/captcha/gate/' + this.token);
+      var resp = await fetch(this.apiBase + '/api/captcha/gate/' + this.token);
       if (!resp.ok) { this.showFatalError('Doğrulama linki geçersiz veya süresi dolmuş.'); return; }
       this.info = await resp.json();
     } catch (e) {
@@ -375,7 +380,7 @@
       'pointer_type=' + frozenSignals.pointer_type + ', pointer_moves=' + frozenSignals.pointer_moves +
       ', interaction_ms=' + frozenSignals.interaction_ms.toFixed(0));
 
-    var resp = await fetch('/api/captcha/gate/' + this.token + '/verify', {
+    var resp = await fetch(this.apiBase + '/api/captcha/gate/' + this.token + '/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ captcha_response: this.captchaResponse, signals: frozenSignals }),

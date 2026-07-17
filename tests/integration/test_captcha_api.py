@@ -305,3 +305,61 @@ def test_captcha_router_without_a_gate_configured_returns_404_for_gate_routes() 
         resp = client.get("/api/captcha/gate/whatever")
 
         assert resp.status_code == 404
+
+
+def test_two_gates_can_be_mounted_at_once_via_explicit_gate_param() -> None:
+    """A bot with two independent gate purposes (e.g. giveaway entry vs. a
+    separate "verify before appealing a ban" gate) mounts the router twice
+    under different prefixes, each bound to its own gate via `gate=` --
+    app.state's single-gate slot never comes into it, so there's no
+    cross-talk between the two."""
+    app = FastAPI()
+    transport = InProcessTransport()
+    giveaway_gate = CaptchaGate(
+        transport, MemoryVerificationStore(), require_captcha=False, require_account=False
+    )
+    appeal_gate = CaptchaGate(
+        transport, MemoryVerificationStore(), require_captcha=False, require_account=False
+    )
+    app.include_router(build_captcha_router(gate=giveaway_gate), prefix="/giveaway")
+    app.include_router(build_captcha_router(gate=appeal_gate), prefix="/appeal")
+
+    with TestClient(app) as client:
+        giveaway_req = asyncio.run(giveaway_gate.create_verification(user_id=1, purpose="join"))
+        appeal_req = asyncio.run(appeal_gate.create_verification(user_id=1, purpose="appeal"))
+
+        # each token only resolves under its own gate's prefix
+        assert client.get(f"/giveaway/api/captcha/gate/{giveaway_req.token}").status_code == 200
+        assert client.get(f"/giveaway/api/captcha/gate/{appeal_req.token}").status_code == 404
+        assert client.get(f"/appeal/api/captcha/gate/{appeal_req.token}").status_code == 200
+        assert client.get(f"/appeal/api/captcha/gate/{giveaway_req.token}").status_code == 404
+
+        giveaway_result = client.post(
+            f"/giveaway/api/captcha/gate/{giveaway_req.token}/verify", json={}
+        )
+        assert giveaway_result.json()["verified"] is True
+        appeal_result = client.post(
+            f"/appeal/api/captcha/gate/{appeal_req.token}/verify", json={}
+        )
+        assert appeal_result.json()["verified"] is True
+
+
+def test_explicit_gate_param_takes_precedence_over_app_state() -> None:
+    app = FastAPI()
+    transport = InProcessTransport()
+    state_gate = CaptchaGate(
+        transport, MemoryVerificationStore(), require_captcha=False, require_account=False
+    )
+    explicit_gate = CaptchaGate(
+        transport, MemoryVerificationStore(), require_captcha=False, require_account=False
+    )
+    app.state.discord_webapi_captcha_gate = state_gate
+    app.include_router(build_captcha_router(gate=explicit_gate), prefix="/explicit")
+
+    with TestClient(app) as client:
+        explicit_req = asyncio.run(explicit_gate.create_verification(user_id=1, purpose="x"))
+        state_req = asyncio.run(state_gate.create_verification(user_id=1, purpose="x"))
+
+        assert client.get(f"/explicit/api/captcha/gate/{explicit_req.token}").status_code == 200
+        # the state gate's own token isn't known to the explicitly-bound gate
+        assert client.get(f"/explicit/api/captcha/gate/{state_req.token}").status_code == 404
