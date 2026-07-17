@@ -149,6 +149,54 @@ caller's own connecting IP) and minting a fresh token then shows
 it back -- the debug endpoints genuinely control the escalation, not just
 cosmetically.
 
+## Standalone test pages (`/test-index`)
+
+Five pages exercising the detection pipeline directly, with no Discord
+round-trip needed for most of them -- start at `/test-index` for a hub
+linking all of them.
+
+1. **`/test-instant-widget`** -- just the bundled widget, no login, no
+   account requirement (`CaptchaGate(require_captcha=False,
+   extra_checks=_behavior_checks())`). Click it: human-like signals
+   succeed immediately; bot-like ones (real ones, from an actual
+   automated browser -- not this repo's own hand-crafted test data)
+   reveal a second widget below, bound to a separate Path-Trace gate.
+2. **`/test-forced-bad-data`** -- the exact same two gates as page 1, but
+   the page's own JS skips the widget entirely and posts a raw,
+   hardcoded, obviously-bot-shaped payload straight to the gate's
+   `/verify` endpoint (`webdriver: true`, zero pointer movement,
+   1ms interaction time). This is a red-team-style regression check, not
+   a real-user test: it proves the rejection is real and repeatable, not
+   cosmetic -- verified directly (see below): the response comes back
+   `verified: false, failed_check: "no-webdriver"` every time.
+3. **`/giveaway-test`'s participant bookkeeping** -- see Scenario 4 above.
+   Solving either the adaptive or the original widget on that flow now
+   really adds the signed-in user to that specific giveaway's
+   participant set (keyed by a `giveaway_id` assigned per
+   `/giveaway-test title:...` invocation), checkable with
+   `/giveaway-test-participants giveaway_id:N`.
+4. **`/test-cloudflare`** -- a Cloudflare "Under Attack Mode"-style
+   interstitial, reusing the exact same `blocklist` object (and
+   `/api/test/block-my-ip`/`unblock-my-ip` debug endpoints) as Scenario
+   5's `/join-adaptive`, but through a *second*, no-login-required
+   `AdaptiveCaptchaGate` -- a real anonymous-traffic gate has no account
+   to require. Passing that first check is not automatically the end:
+   a stricter second-tier behavior-only gate (`test4_strict_gate`) runs
+   next, and only if that one *also* looks suspicious does a third,
+   final Path-Trace widget appear -- a genuine double-escalation chain,
+   composed the same "page JS reveals the next gate on failure" way as
+   every other escalation in this file, not a new library feature.
+5. **`/test-index`** -- links all of the above (plus the Discord-side
+   commands) with a one-line description of each.
+
+Verified directly with `TestClient` (no live Discord connection needed
+for any of these five, since none require login): page 1 and 2's shared
+`test1-behavior` gate genuinely rejects `{webdriver: true, pointer_moves:
+0, interaction_ms: 1, mouse_trajectory: []}` every time
+(`failed_check: "no-webdriver"`); `/api/test/block-my-ip` genuinely
+flips what `/test-cloudflare`'s first widget requires, same as it does
+for `/join-adaptive`.
+
 ## Running it
 
 ```bash

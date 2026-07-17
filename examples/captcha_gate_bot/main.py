@@ -65,6 +65,25 @@ general pattern for physical-testing an example bot):
                                      always does. GET /api/test/block-my-ip
                                      (and /unblock-my-ip) let you flip
                                      your own connecting IP for testing.
+    /test-index                  -> a hub page linking every test page
+                                     below, so you don't have to remember
+                                     every URL/command by heart
+    /test-instant-widget          -> no login, no Discord round-trip:
+                                     click the widget, human-like signals
+                                     succeed outright, bot-like ones
+                                     escalate to a Path-Trace widget
+    /test-forced-bad-data         -> the same pipeline as above, but the
+                                     page skips the widget and posts
+                                     hardcoded bot-shaped signals directly,
+                                     proving detection isn't cosmetic
+    /test-cloudflare              -> our own Cloudflare-style "verifying
+                                     you are human" interstitial: blocking
+                                     your own IP (via /api/test/block-my-ip)
+                                     triggers a real AdaptiveCaptchaGate
+                                     challenge, and even passing it chains
+                                     into a stricter second check and,
+                                     if that's still suspicious, a final
+                                     Path-Trace widget
 """
 
 from __future__ import annotations
@@ -453,14 +472,47 @@ app.include_router(
     build_captcha_router(gate=giveaway_test_original_gate), prefix="/giveaway-test-original"
 )
 
+# Real participation bookkeeping -- keyed by giveaway_id (one per
+# `/giveaway-test` invocation, so re-running the command starts a fresh
+# giveaway with its own participant list) rather than a single global
+# set. A real bot would persist this (a SQL table, a WarnStore-style
+# Store); an in-memory dict is enough to prove the wiring here.
+_giveaway_test_titles: dict[int, str] = {}
+_giveaway_test_participants: dict[int, set[int]] = {}
+_next_giveaway_test_id = 1
+
+
+async def _on_giveaway_test_joined(event: CaptchaVerified) -> None:
+    """Either widget succeeding (the adaptive one, possibly after a
+    Path-Trace escalation, or the plain original one) counts as "solved a
+    captcha to join" -- both are independent, sufficient proof on their
+    own, matching how the two widgets were designed as separate slots
+    rather than a chain you must complete both of."""
+    giveaway_id = event.metadata.get("giveaway_id")
+    if giveaway_id is None:
+        return
+    _giveaway_test_participants.setdefault(giveaway_id, set()).add(event.user_id)
+
+
+giveaway_test_invisible_gate.on_verified(
+    _on_giveaway_test_joined, purpose="giveaway_test_invisible"
+)
+giveaway_test_pathtrace_gate.on_verified(
+    _on_giveaway_test_joined, purpose="giveaway_test_pathtrace"
+)
+giveaway_test_original_gate.on_verified(
+    _on_giveaway_test_joined, purpose="giveaway_test_original"
+)
+
 
 class _GiveawayTestJoinView(discord.ui.View):
     """A real giveaway bot would register this with `bot.add_view()` so
     the button keeps working across restarts -- skipped here to keep the
     demo to one file."""
 
-    def __init__(self) -> None:
+    def __init__(self, giveaway_id: int) -> None:
         super().__init__(timeout=None)
+        self.giveaway_id = giveaway_id
 
     @discord.ui.button(
         label="Katıl", style=discord.ButtonStyle.success, custom_id="giveaway_test_join"
@@ -469,14 +521,15 @@ class _GiveawayTestJoinView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> None:
         user_id = interaction.user.id
+        metadata = {"giveaway_id": self.giveaway_id}
         invisible_req = await giveaway_test_invisible_gate.create_verification(
-            user_id=user_id, purpose="giveaway_test_invisible"
+            user_id=user_id, purpose="giveaway_test_invisible", metadata=metadata
         )
         pathtrace_req = await giveaway_test_pathtrace_gate.create_verification(
-            user_id=user_id, purpose="giveaway_test_pathtrace"
+            user_id=user_id, purpose="giveaway_test_pathtrace", metadata=metadata
         )
         original_req = await giveaway_test_original_gate.create_verification(
-            user_id=user_id, purpose="giveaway_test_original"
+            user_id=user_id, purpose="giveaway_test_original", metadata=metadata
         )
         url = (
             f"{_base_url}/giveaway-test/verify"
@@ -494,11 +547,37 @@ class _GiveawayTestJoinView(discord.ui.View):
 @bot.hybrid_command(
     name="giveaway-test", description="Demo: gerçek bir çekiliş botu gibi bir 'Katıl' mesajı at"
 )
-async def giveaway_test(ctx: commands.Context) -> None:
+async def giveaway_test(ctx: commands.Context, title: str = "Test çekilişi") -> None:
+    global _next_giveaway_test_id
+    giveaway_id = _next_giveaway_test_id
+    _next_giveaway_test_id += 1
+    _giveaway_test_titles[giveaway_id] = title
+    _giveaway_test_participants[giveaway_id] = set()
+
     embed = discord.Embed(
-        title="Test çekilişi", description="Katılmak için aşağıdaki butona tıkla."
+        title=title,
+        description=f"Katılmak için aşağıdaki butona tıkla. (giveaway_id={giveaway_id})",
     )
-    await ctx.send(embed=embed, view=_GiveawayTestJoinView())
+    await ctx.send(embed=embed, view=_GiveawayTestJoinView(giveaway_id))
+
+
+@bot.hybrid_command(
+    name="giveaway-test-participants",
+    description="Demo: bir test çekilişine gerçekten katılanları listele",
+)
+async def giveaway_test_participants_cmd(ctx: commands.Context, giveaway_id: int) -> None:
+    title = _giveaway_test_titles.get(giveaway_id)
+    if title is None:
+        await ctx.reply(f"giveaway_id={giveaway_id} bulunamadı.", ephemeral=True)
+        return
+    participants = _giveaway_test_participants.get(giveaway_id, set())
+    if not participants:
+        await ctx.reply(f"**{title}** -- henüz kimse katılmadı.", ephemeral=True)
+        return
+    mentions = "\n".join(f"- <@{user_id}>" for user_id in sorted(participants))
+    await ctx.reply(
+        f"**{title}** -- {len(participants)} katılımcı:\n{mentions}", ephemeral=True
+    )
 
 
 @app.get("/giveaway-test/verify")
@@ -647,3 +726,303 @@ async def unblock_my_ip(request: Request) -> dict:
         return {"unblocked": None}
     blocklist.unblock(ip)
     return {"unblocked": ip}
+
+
+# ---------------------------------------------------------------------
+# Test page 1 -- just the widget, no login, no Discord round-trip: click
+# it, and if the behavior signals look human it succeeds; if not, a
+# second widget appears asking you to draw a line (Path-Trace). No
+# account requirement here on purpose -- this page is about testing the
+# *detection*, not account-binding (already covered by the giveaway/
+# appeal gates above).
+# ---------------------------------------------------------------------
+
+test1_behavior_gate = CaptchaGate(
+    transport, MemoryVerificationStore(), require_captcha=False, extra_checks=_behavior_checks()
+)
+test1_pathtrace_gate = CaptchaGate(
+    transport, MemoryVerificationStore(), PathTraceProvider(_captcha_store)
+)
+app.include_router(build_captcha_router(gate=test1_behavior_gate), prefix="/test1-behavior")
+app.include_router(build_captcha_router(gate=test1_pathtrace_gate), prefix="/test1-pathtrace")
+
+_test_synthetic_user_id = 900_000_000_000_000_000
+
+
+def _next_synthetic_user_id() -> int:
+    # No login on these test pages -- there's no real Discord account to
+    # bind to, so each page load gets its own fake snowflake-shaped id,
+    # just so require_account=False gates (which still take a user_id)
+    # have something to key on.
+    global _test_synthetic_user_id
+    _test_synthetic_user_id += 1
+    return _test_synthetic_user_id
+
+
+def _escalation_page(
+    title: str,
+    intro_html: str,
+    first_token: str,
+    first_prefix: str,
+    second_token: str,
+    second_prefix: str,
+    *,
+    extra_body: str = "",
+) -> HTMLResponse:
+    # The same "try the invisible/behavior gate, only reveal the harder
+    # one if it fails" page-JS composition already used by
+    # /giveaway-test/verify above, factored out since pages 1, 2 and 4 all
+    # need a version of it.
+    return HTMLResponse(f"""<!doctype html>
+<title>{title}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:40px auto;padding:0 16px">
+<h2>{title}</h2>
+{intro_html}
+<div id="first-widget" class="dwa-captcha-widget" data-token="{first_token}"
+     data-api-base="{first_prefix}"></div>
+<div id="second-widget-holder"></div>
+{extra_body}
+<script src="/static/discord-webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
+<script>
+var FIRST_TOKEN = {first_token!r};
+var SECOND_TOKEN = {second_token!r};
+
+function onWidgetVerified(result) {{
+  if (result.token !== FIRST_TOKEN) return;
+  if (result.verified) {{
+    document.getElementById("first-widget").insertAdjacentHTML(
+      "afterend", "<p>İnsan gibi göründün -- ek bir teste gerek yok.</p>"
+    );
+    return;
+  }}
+  document.getElementById("second-widget-holder").innerHTML =
+    "<p>Robot gibi göründün -- lütfen aşağıdaki çizgiyi çiz.</p>" +
+    "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + SECOND_TOKEN +
+    "\\" data-api-base=\\"{second_prefix}\\"></div>";
+  if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+}}
+</script>
+</body>""")
+
+
+@app.get("/test-instant-widget")
+async def test_instant_widget_page() -> HTMLResponse:
+    user_id = _next_synthetic_user_id()
+    behavior_req = await test1_behavior_gate.create_verification(
+        user_id=user_id, purpose="test1_behavior"
+    )
+    pathtrace_req = await test1_pathtrace_gate.create_verification(
+        user_id=user_id, purpose="test1_pathtrace"
+    )
+    return _escalation_page(
+        "Test 1 -- anında widget",
+        "<p>Kutucuğa tıkla. Fare/dokunma hareketlerin insan gibiyse doğrudan "
+        "başarılı sayılırsın; robot gibi görünürse aşağıda çizgi-takip "
+        "captcha'sı çıkar.</p>",
+        behavior_req.token,
+        "/test1-behavior",
+        pathtrace_req.token,
+        "/test1-pathtrace",
+    )
+
+
+# ---------------------------------------------------------------------
+# Test page 2 -- the same detection pipeline as page 1, but this page
+# does NOT use the bundled widget's real signal-collection at all: it
+# deliberately sends hardcoded, obviously-bot-shaped signals with a raw
+# fetch() call. The point isn't to test a real user's browser -- it's a
+# red-team-style regression check that the detection genuinely rejects
+# bad data every time, rather than being cosmetic.
+# ---------------------------------------------------------------------
+
+
+@app.get("/test-forced-bad-data")
+async def test_forced_bad_data_page() -> HTMLResponse:
+    user_id = _next_synthetic_user_id()
+    behavior_req = await test1_behavior_gate.create_verification(
+        user_id=user_id, purpose="test1_behavior"
+    )
+    pathtrace_req = await test1_pathtrace_gate.create_verification(
+        user_id=user_id, purpose="test1_pathtrace"
+    )
+    return HTMLResponse(f"""<!doctype html>
+<title>Test 2 -- sahte veri</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:40px auto;padding:0 16px">
+<h2>Test 2 -- kasıtlı sahte/kötü veri</h2>
+<p>Bu sayfa widget'ı hiç kullanmıyor -- doğrudan gate'in verify uç noktasına
+elle uydurduğumuz, açıkça robot-gibi sinyaller gönderiyor
+(<code>webdriver: true</code>, sıfır fare hareketi, anlık tıklama).
+Amaç: tespitin gerçekten her seferinde reddettiğini kanıtlamak, kozmetik
+olmadığını göstermek.</p>
+<button id="send-bad" onclick="sendBad()">Sahte veriyi gönder</button>
+<pre id="result" style="white-space:pre-wrap;background:#f4f4f4;padding:8px"></pre>
+<div id="second-widget-holder"></div>
+
+<script src="/static/discord-webapi-captcha-widget.js"></script>
+<script>
+var TOKEN = {behavior_req.token!r};
+var PATHTRACE_TOKEN = {pathtrace_req.token!r};
+
+async function sendBad() {{
+  var res = await fetch("/test1-behavior/api/captcha/gate/" + TOKEN + "/verify", {{
+    method: "POST",
+    headers: {{"Content-Type": "application/json"}},
+    body: JSON.stringify({{
+      captcha_response: null,
+      signals: {{
+        webdriver: true,
+        pointer_moves: 0,
+        interaction_ms: 1,
+        mouse_trajectory: [],
+        click_offset_x: 0,
+        click_offset_y: 0
+      }}
+    }})
+  }});
+  var body = await res.json();
+  document.getElementById("result").textContent = JSON.stringify(body, null, 2) +
+    (body.verified
+      ? "\\n\\nBEKLENMEDIK: sahte veri geçti -- bu bir regresyon."
+      : "\\n\\nBeklendiği gibi reddedildi (failed_check: " + body.failed_check + ").");
+  if (!body.verified) {{
+    document.getElementById("second-widget-holder").innerHTML =
+      "<p>Beklendiği gibi şüpheli sayıldı -- ek test: aşağıdaki çizgiyi çiz.</p>" +
+      "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + PATHTRACE_TOKEN +
+      "\\" data-api-base=\\"/test1-pathtrace\\"></div>";
+    if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+  }}
+}}
+</script>
+</body>""")
+
+
+# ---------------------------------------------------------------------
+# Test page 4 -- a Cloudflare "Under Attack Mode"-style interstitial:
+# putting your own connecting IP on the shared `blocklist` (the same one
+# /join-adaptive uses, via the same /api/test/block-my-ip debug endpoint)
+# makes this page show a "verifying you are human" screen. Unlike
+# /join-adaptive this needs no Discord login at all (a real Cloudflare-
+# style gate runs in front of anonymous traffic) -- so a second,
+# no-login AdaptiveCaptchaGate is used here. Passing that first check is
+# not automatically the end: a stricter second-tier behavior-only check
+# runs next, and only if *that* also looks suspicious does a final
+# Path-Trace widget show up -- a genuine double-escalation chain, not
+# just one gate.
+# ---------------------------------------------------------------------
+
+test4_adaptive_gate = AdaptiveCaptchaGate(
+    transport,
+    MemoryVerificationStore(),
+    blocklist,
+    MathCaptchaProvider(_captcha_store),
+    MemoryAdaptiveDecisionStore(),
+)
+test4_strict_gate = CaptchaGate(
+    transport, MemoryVerificationStore(), require_captcha=False, extra_checks=_behavior_checks()
+)
+test4_pathtrace_gate = CaptchaGate(
+    transport, MemoryVerificationStore(), PathTraceProvider(_captcha_store)
+)
+app.include_router(build_captcha_router(gate=test4_adaptive_gate), prefix="/test4-adaptive")
+app.include_router(build_captcha_router(gate=test4_strict_gate), prefix="/test4-strict")
+app.include_router(build_captcha_router(gate=test4_pathtrace_gate), prefix="/test4-pathtrace")
+
+
+@app.get("/test-cloudflare")
+async def test_cloudflare_page() -> HTMLResponse:
+    user_id = _next_synthetic_user_id()
+    adaptive_req = await test4_adaptive_gate.create_verification(
+        user_id=user_id, purpose="test4_adaptive"
+    )
+    strict_req = await test4_strict_gate.create_verification(
+        user_id=user_id, purpose="test4_strict"
+    )
+    pathtrace_req = await test4_pathtrace_gate.create_verification(
+        user_id=user_id, purpose="test4_pathtrace"
+    )
+    return HTMLResponse(f"""<!doctype html>
+<title>Test 4 -- kendi Cloudflare'imiz</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:420px;margin:40px auto;
+padding:0 16px;background:#f2f4f5">
+<h2>Doğrulanıyor: bir insan mısın?</h2>
+<p style="font-size:.85rem;color:#555">
+Önce IP itibarına göre karar veriliyor (kara listeye kendi IP'ni eklemek için
+<a href="/api/test/block-my-ip">/api/test/block-my-ip</a>, çıkarmak için
+<a href="/api/test/unblock-my-ip">/api/test/unblock-my-ip</a>). Bu geçse
+bile ikinci, daha katı bir davranış testi çalışır -- o da şüpheliyse üçüncü
+adım olarak çizgi-takip captcha'sı çıkar.
+</p>
+<div id="adaptive-widget" class="dwa-captcha-widget" data-token="{adaptive_req.token}"
+     data-api-base="/test4-adaptive"></div>
+<div id="strict-widget-holder"></div>
+<div id="pathtrace-widget-holder"></div>
+
+<script src="/static/discord-webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
+<script>
+var ADAPTIVE_TOKEN = {adaptive_req.token!r};
+var STRICT_TOKEN = {strict_req.token!r};
+var PATHTRACE_TOKEN = {pathtrace_req.token!r};
+
+function onWidgetVerified(result) {{
+  if (result.token === ADAPTIVE_TOKEN) {{
+    if (!result.verified) return;  // widget itself already shows the failure
+    document.getElementById("adaptive-widget").insertAdjacentHTML(
+      "afterend", "<p>İlk kontrol geçti -- ikinci, daha katı kontrol çalışıyor...</p>"
+    );
+    document.getElementById("strict-widget-holder").innerHTML =
+      "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + STRICT_TOKEN +
+      "\\" data-api-base=\\"/test4-strict\\"></div>";
+    if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+    return;
+  }}
+  if (result.token === STRICT_TOKEN) {{
+    if (result.verified) {{
+      document.getElementById("strict-widget-holder").insertAdjacentHTML(
+        "beforeend", "<p>İkinci kontrol de geçti -- insansın.</p>"
+      );
+      return;
+    }}
+    document.getElementById("pathtrace-widget-holder").innerHTML =
+      "<p>Hâlâ şüpheli -- son adım: aşağıdaki çizgiyi çiz.</p>" +
+      "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + PATHTRACE_TOKEN +
+      "\\" data-api-base=\\"/test4-pathtrace\\"></div>";
+    if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+  }}
+}}
+</script>
+</body>""")
+
+
+# ---------------------------------------------------------------------
+# Test page 5 -- an index/hub page linking every test scenario in this
+# file together, so you don't have to remember every URL/command.
+# ---------------------------------------------------------------------
+
+
+@app.get("/test-index")
+async def test_index_page() -> HTMLResponse:
+    return HTMLResponse("""<!doctype html>
+<title>Captcha test merkezi</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<body style="font-family:system-ui,sans-serif;max-width:520px;margin:40px auto;padding:0 16px">
+<h2>Captcha test merkezi</h2>
+<ul>
+<li><a href="/test-instant-widget">Test 1 -- anında widget</a>: kutucuğa
+tıkla, insansa başarılı, robotsa çizgi-takip'e yükseltir.</li>
+<li><a href="/test-forced-bad-data">Test 2 -- kasıtlı sahte veri</a>:
+widget'ı atlayıp elle uydurulmuş robot-sinyalleri gönderir, reddedildiğini
+kanıtlar.</li>
+<li>Test 3 -- Discord'da <code>/giveaway-test</code> komutu: gerçek bir
+çekiliş botu gibi bir "Katıl" mesajı, doğrulanınca gerçekten katılımcı
+listesine ekler (<code>/giveaway-test-participants</code> ile kontrol et).</li>
+<li><a href="/test-cloudflare">Test 4 -- kendi Cloudflare'imiz</a>: IP'ni
+kara listeye ekleyip (<a href="/api/test/block-my-ip">block-my-ip</a>)
+"insan mısın" ekranını tetikle; geçsen bile ikinci, daha katı bir test ve
+gerekirse üçüncü bir çizgi-takip testi seni bekliyor.</li>
+<li>Diğer senaryolar için Discord'da <code>/join</code>, <code>/appeal</code>,
+<code>/test-join</code>, <code>/join-adaptive</code> komutlarını dene.</li>
+</ul>
+</body>""")

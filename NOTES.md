@@ -1,5 +1,109 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## examples/captcha_gate_bot: 5 test sayfası + gerçek katılımcı kaydı + kendi "Cloudflare"imiz (bu oturum)
+
+Kullanıcının tam isteği (birebir, yazım hatalarıyla): "Şimdi 5 farklı test
+sayfası oekle veya uygun gördüğün şekilde examples/captcha_gate_bot'a ek
+testte biri direk widget olacak kutucuğa tıklayacak normal şekilde
+insansa başarılı diyecek başarısız olursa çizgi captchasını soracak yeni
+bir sayfada widgete tıklayacaksın ama normalde olsa anormal sayacak teste
+tabi tutacak maksat denemek için sahte veri yollayacaz ona 3. Test
+fiscordda o giveway yaptığımız test varya en son çekiliş mesajı givi buton
+ve test komutlu capctha başarılı olunca bot katılmayı gerçekleştirecek
+veritabanı şeyleri komutta o mesajda katılımcılara eklenecek diğerinde o
+sayfa blokeli kara listeye ekleyinc ekendikimiiz cloudflare gibi bir ekran
+dofurlanihor eğer şüpheliye captchaya tıkla yine şüpheliyse teste tabi
+tut ... Ve notlarını güncellemeyi unuttuysan önceki şeylerde felan
+tamamen güncelle."
+
+Yorumlanışı: (1) sadece widget, insansa direkt başarılı, robotsa
+Path-Trace'e yükselt; (2) aynı akış ama sayfa bilerek sahte/kötü veri
+yollasın, tespitin gerçekten çalıştığını kanıtlasın; (3) `/giveaway-test`
+akışında captcha başarılı olunca gerçekten katılımcı listesine eklensin
+(veritabanı/bellek düzeyinde, sadece log değil); (4) kendi IP'ni kara
+listeye ekleyince Cloudflare tarzı "insan mısın" ekranı çıksın, geçilse
+bile hâlâ şüpheliyse ikinci bir teste tabi tutulsun (çift eskalasyon);
+(5, kendi eklediğim) tüm bunları bağlayan bir index sayfası.
+
+**Test 3 zaten yapılmıştı**: bu isteğin gelmesinden hemen önceki bir
+düzenlemede `_giveaway_test_participants: dict[int, set[int]]`
+(giveaway_id anahtarlı), `_on_giveaway_test_joined` handler'ı (üç
+Scenario-4 gate'inin hepsine `purpose=` filtresiyle bağlı) ve
+`/giveaway-test-participants giveaway_id:N` komutu zaten eklenmişti;
+`/giveaway-test` artık bir `title` parametresi alıp her çağrıda yeni bir
+`giveaway_id` atıyor. Bu turda sadece README/module docstring'e
+eklendiğinden emin olundu -- kod bu turda değişmedi.
+
+**Test 1/2 mimari kararı**: `test1_behavior_gate`
+(`require_captcha=False`, `extra_checks=_behavior_checks()`) ve
+`test1_pathtrace_gate` (Path-Trace) -- ikisi de `require_account=False`,
+kasıtlı: bu iki sayfa *tespiti* test ediyor, hesap-bağlamayı değil (o
+zaten giveaway/appeal gate'lerinde kanıtlanmış). Sayfa 1'de widget'ın
+`onWidgetVerified` callback'i üzerinden JS, başarısızlıkta ikinci bir
+Path-Trace widget'ını DOM'a ekliyor -- `giveaway-test/verify`'de zaten
+kullanılan aynı "iki gate'i sayfa JS'iyle zincirle" deseni, `_escalation_page`
+adlı küçük bir yardımcıya çıkarıldı (3 sayfa da aynı JS iskeletini
+kullanıyor). Sayfa 2 aynı iki gate'i paylaşıyor ama widget'ı hiç
+çağırmıyor -- `fetch()` ile doğrudan `/test1-behavior/api/captcha/gate/
+{token}/verify`'a `{webdriver: true, pointer_moves: 0, interaction_ms: 1,
+mouse_trajectory: []}` gönderiyor. Bu, önceki bir turda "insan-benzeri
+sinyaller simüle edilip geçti, bu kötü değil mi" sorusuna verdiğim
+cevabın tam tersi yönde bir test: burada KÖTÜ sinyal gönderiliyor ve
+REDDEDİLMESİ bekleniyor -- `TestClient` ile doğrudan doğrulandı, cevap
+her zaman `{"verified": false, "failed_check": "no-webdriver", "detail":
+"navigator.webdriver was true"}`.
+
+**Test 4 mimari kararı**: `/join-adaptive`'in kullandığı AYNI paylaşılan
+`blocklist` (`StaticBlocklistReputationChecker`) nesnesi tekrar
+kullanıldı (`/api/test/block-my-ip` iki senaryoyu da aynı anda etkiliyor
+-- bu kasıtlı, ayrı bir blocklist açmak "kendi IP'ni engelle" testini
+gereksiz yere iki debug endpoint'e bölerdi). Ama `/join-adaptive`'in
+aksine bu sayfa hesap/login istemiyor -- gerçek bir Cloudflare tarzı
+ekran anonim, henüz kimliği belirsiz trafiğin önünde çalışır, bu yüzden
+ayrı, login gerektirmeyen ikinci bir `AdaptiveCaptchaGate`
+(`test4_adaptive_gate`, `require_account=False`) kullanıldı.
+"Geçilse bile yine şüpheliyse teste tabi tut" isteği tam olarak
+uygulandı: `test4_adaptive_gate`'i geçmek tek başına yetmiyor, ardından
+daha katı bir ikinci, sadece-davranış gate'i (`test4_strict_gate`)
+devreye giriyor; o da başarısız olursa üçüncü ve son adım olarak bir
+Path-Trace gate'i (`test4_pathtrace_gate`) çıkıyor -- gerçek, üç
+aşamalı bir zincir, tek bir "geç/kal" değil. `TestClient` ile
+doğrulandı: `/api/test/block-my-ip` çağrısından sonra `/test-cloudflare`
+sayfasının ilk widget'ı gerçekten bir Math challenge istiyor (aynı
+`/join-adaptive` testinde kanıtlanan mekanizma, farklı bir gate
+üzerinden).
+
+**Test 5**: kullanıcının "veya uygun gördüğün şekilde" notuyla eklediğim
+tek ekleme -- `/test-index`, yukarıdaki 4 test sayfasını ve ilgili
+Discord komutlarını (`/join`, `/appeal`, `/test-join`, `/join-adaptive`)
+tek bir linkler listesinde toplayan basit bir hub sayfası.
+
+**Doğrulama** (`TestClient`, canlı Discord bağlantısı gerekmeden --
+bu 5 sayfanın hiçbiri login istemiyor): `/test-instant-widget`,
+`/test-forced-bad-data`, `/test-cloudflare`, `/test-index` hepsi 200
+dönüyor ve beklenen HTML/JS parçalarını içeriyor; `test1-behavior`
+gate'i sahte-kötü sinyalleri her seferinde reddediyor;
+`/api/test/block-my-ip` gerçekten `test4_adaptive_gate`'in
+`requires_captcha`'sını etkiliyor. `ruff check discord_webapi tests
+examples` temiz, `mypy discord_webapi` 121 dosyada temiz (mypy'nin
+kütüphane dışına -- örnek dosyalara -- uygulanmadığı doğrulandı, bu
+zaten önceki turlarda da böyleydi), `pytest -q` 698 passed / 7 skipped
+(bilinen `test_quickstart_database_url_wires_up_postgres` ortam
+bağımlılığı hariç -- Postgres servisi olmayan bu ortamda beklenen tek
+hata, önceki turlarda da aynı şekilde belgelendi).
+
+**Önceki turların notları gözden geçirildi** (kullanıcının açık isteği:
+"notlarını güncellemeyi unuttuysan önceki şeylerde felan tamamen
+güncelle"): mouse-kinematics, replay-guard, captcha_playground, widget'ın
+dahili hale getirilmesi, `build_captcha_router(gate=...)` çoklu-mount
+düzeltmesi, `on_verified(purpose=...)` cross-gate sızıntı düzeltmesi,
+Math captcha zorluk düzeltmesi, giveaway-test adaptif eskalasyon
+simülasyonu, PoW sertleştirmesi, SQL rate-limit race condition + timing
+side-channel güvenlik düzeltmeleri, `client_ip`/IP itibarı kancası, ve
+`AdaptiveCaptchaGate`'in kendisi -- hepsi zaten bu dosyada ayrıntılı
+olarak mevcuttu, eksik bulunmadı. Tek eksik, bu son turun (5 test
+sayfası) kendisiydi, şimdi eklendi.
+
 ## captcha: AdaptiveCaptchaGate -- Cloudflare "Under Attack Mode" deseni (bu oturumda, devam)
 
 Kullanıcının isteği (bir önceki turdaki IP itibarı hook'unun doğal

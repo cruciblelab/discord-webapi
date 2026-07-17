@@ -393,6 +393,15 @@ yazmak isterseniz widget'ı hiç kullanmayabilirsiniz, kütüphane hiçbir
 şekilde dayatmıyor -- "hem alt yapıyı verelim hem hazır kullanım isteyenlere
 de bir UI verelim" ilkesinin birebir uygulanışı.
 
+Aynı örnekte, `/test-index`'ten ulaşılan beş bağımsız test sayfası da
+var: sadece widget/anında insan-mı-robot-mu testi (`/test-instant-widget`),
+kasıtlı sahte veri gönderip tespitin gerçekten çalıştığını kanıtlayan bir
+regresyon sayfası (`/test-forced-bad-data`), gerçek katılımcı kaydı tutan
+bir çekiliş simülasyonu (`/giveaway-test`), ve kendi IP'nizi kara listeye
+ekleyince tetiklenen, geçilse bile ikinci/üçüncü bir teste eskale
+edebilen kendi Cloudflare tarzı ekranınız (`/test-cloudflare`). Detaylar
+için `examples/captcha_gate_bot/README.md`.
+
 **Tıklayarak test etmek isteyenler için**: `examples/captcha_playground/` --
 Discord bot'u/OAuth'u gerektirmeden, tarayıcıda tek sayfada hem bu hazır
 widget'ı (bir `CaptchaGate` konfigürasyonu seçip canlı deneyebileceğiniz

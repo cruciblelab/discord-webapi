@@ -2,6 +2,67 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — `examples/captcha_gate_bot`: 5 test sayfası + gerçek giveaway katılımcı kaydı + kendi "Cloudflare"imiz
+
+Kullanıcı isteği (özet, Türkçe): "5 farklı test sayfası ekle: (1) sadece
+widget, insansa başarılı/robotsa çizgi captcha'sına yükselt, (2) aynı
+akış ama sayfa kasıtlı sahte/kötü veri yollasın, tespitin gerçekten
+reddettiğini kanıtlasın, (3) `/giveaway-test`'te captcha başarılı olunca
+bot gerçekten katılımcı listesine eklesin, (4) IP'yi kara listeye
+eklenince kendi Cloudflare'imiz gibi bir 'insan mısın' ekranı çıksın,
+geçilse bile hâlâ şüpheliyse ikinci bir teste tabi tutulsun." Ayrıca
+önceki turların notlarının eksiksiz güncellendiği doğrulandı.
+
+### `examples/captcha_gate_bot/main.py`
+
+- **Test 1 (`/test-instant-widget`)**: iki yeni gate --
+  `test1_behavior_gate` (`require_captcha=False`, sadece davranış
+  kontrolleri) ve `test1_pathtrace_gate` (Path-Trace). Hesap şartı yok
+  (kasıtlı -- bu sayfa *tespiti* test ediyor, hesap-bağlamayı değil,
+  onu zaten giveaway/appeal gate'leri kapsıyor). Widget'ın kendi
+  `onWidgetVerified` callback'i üzerinden: başarısızsa ikinci bir
+  Path-Trace widget'ı sayfaya JS ile ekleniyor -- yeni bir `CaptchaGate`
+  özelliği değil, dosyanın her yerinde kullanılan "iki ayrı gate'i sayfa
+  JS'iyle birleştir" deseni.
+- **Test 2 (`/test-forced-bad-data`)**: Test 1'le AYNI iki gate'i
+  kullanıyor, ama widget'ı hiç çağırmıyor -- sayfa doğrudan
+  `fetch("/test1-behavior/api/captcha/gate/{token}/verify", ...)`'a elle
+  uydurulmuş `{webdriver: true, pointer_moves: 0, interaction_ms: 1,
+  mouse_trajectory: []}` gönderiyor. Amaç gerçek bir kullanıcıyı test
+  etmek değil -- tespitin kozmetik olmadığını, her seferinde reddettiğini
+  kanıtlamak (red-team tarzı regresyon testi). Doğrudan doğrulandı:
+  cevap her zaman `verified: false, failed_check: "no-webdriver"`.
+- **Test 3 (`/giveaway-test` katılımcı kaydı)**: önceki oturumda zaten
+  eklenmişti (`giveaway_id`-anahtarlı `_giveaway_test_participants`,
+  `_on_giveaway_test_joined` handler'ı, `/giveaway-test-participants`
+  komutu) -- bu turda sadece README/docstring'e eklendiğinden emin
+  olundu, kod değişmedi.
+- **Test 4 (`/test-cloudflare`)**: `/join-adaptive` ile AYNI paylaşılan
+  `blocklist` nesnesini (ve `/api/test/block-my-ip`/`unblock-my-ip`
+  debug endpoint'lerini) kullanan ama girişte hesap istemeyen İKİNCİ bir
+  `AdaptiveCaptchaGate` (`test4_adaptive_gate`) -- gerçek bir Cloudflare
+  tarzı ekran anonim trafiğin önünde çalışır, hesaba bağlı olamaz. Bunu
+  geçmek tek başına yetmiyor: ardından daha katı, sadece-davranış bir
+  ikinci gate (`test4_strict_gate`) çalışıyor; o da şüpheliyse üçüncü ve
+  son adım olarak bir Path-Trace gate'i (`test4_pathtrace_gate`)
+  devreye giriyor -- gerçek bir çift-eskalasyon zinciri, tek bir gate
+  değil. Doğrudan doğrulandı: `/api/test/block-my-ip` çağrısı
+  `/test-cloudflare`'in ilk widget'ının gerçekten bir Math challenge
+  istemesine sebep oluyor, `/join-adaptive` için olduğu gibi.
+- **Test 5 (`/test-index`)**: yukarıdaki dördünü (ve Discord komutlarını)
+  tek bir linkler sayfasında toplayan, kullanıcının "veya uygun
+  gördüğün şekilde" notuyla eklenen bir hub sayfası.
+
+### Doğrulama
+
+`TestClient` ile (canlı Discord bağlantısı gerekmeden, hiçbiri login
+istemediği için): Test 1/2'nin sahte-kötü sinyalleri her zaman
+`no-webdriver` ile reddettiği; Test 4'te `block-my-ip`'in gerçekten
+adaptive gate'in `requires_captcha`'sını `true`'ya çevirdiği; Test 5'in
+tüm linkleri içerdiği -- doğrudan çağrılarak kanıtlandı. `ruff check`
+temiz, `mypy discord_webapi` 121 dosyada temiz, `pytest` 698 passed / 7
+skipped (bilinen Postgres-ortam testi hariç).
+
 ## [Unreleased] — captcha: `AdaptiveCaptchaGate` -- IP itibarına göre otomatik escalation (Cloudflare "Under Attack Mode" deseni)
 
 Kullanıcının önceki turdaki IP itibarı hook'unu bir adım ileri taşıma
