@@ -55,6 +55,7 @@ from discord_webapi.captcha.signals import (
     require_min_interaction_ms,
     require_signal_flag,
 )
+from discord_webapi.captcha.widget import DEFAULT_WIDGET_MOUNT_PATH, build_captcha_widget_router
 
 if TYPE_CHECKING:
     from discord_webapi.captcha.sql import (
@@ -64,6 +65,7 @@ if TYPE_CHECKING:
     )
 
 __all__ = [
+    "DEFAULT_WIDGET_MOUNT_PATH",
     "EVENT_TYPE_CAPTCHA_VERIFIED",
     "AccountMatchCheck",
     "CaptchaChallenge",
@@ -97,6 +99,7 @@ __all__ = [
     "VerificationRequest",
     "VerificationStore",
     "build_captcha_router",
+    "build_captcha_widget_router",
     "default_behavior_heuristics",
     "fingerprint_trajectory",
     "reject_webdriver",

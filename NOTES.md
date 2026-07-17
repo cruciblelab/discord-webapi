@@ -1,5 +1,99 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: hazır, dahili widget -- ilk kez UI kütüphanenin kendisine giriyor (bu oturumda)
+
+Kullanıcının isteği birebir: playground'daki elle-yazılmış doğrulama
+kutusu "aşırı yapay, 2010lardan fırlama" duruyordu (haklıydı -- düz
+dikdörtgen, kalın gri kenarlık, metin karakteriyle tik/çarpı). Ama asıl
+önemli kısım ikinciydi: "birde dahili değil mi bu capctha dikdörtgenin
+uisi dahili yapalım ... hem alt yapıyı verelim hemde hızlı kullanmak
+isterler diye hazır direk kullanım için seçilen özellikler ile ui sinide
+verek". Yani: bu artık playground'a özel bir demo değil, kütüphanenin
+kendisinin sunduğu bir bileşen olmalı.
+
+**Önemli karar/gerginlik notu**: proje planında ("encapsulated-nibbling-
+pnueli.md") şu kayıtlı: "Dashboard UI genişletmesi: reddedildi (kullanıcı
+kararı, kalıcı)" -- kütüphane bilinçli olarak "sadece backend, frontend'i
+herkes kendi yazar" ilkesini benimsemişti. Bu yeni istek görünüşte bunu
+çiğniyor gibi dursa da, aslında AYNI ilkenin devamı: `discord_webapi.web.
+dashboard.py`'nin zaten yaptığı şeyin (bundled, opt-in, minimal bir HTML
+sayfası -- asla zorunlu, asla `install()`'a otomatik bağlı) captcha
+alanındaki karşılığı. Reddedilen şey "kapsamlı bir admin paneli/tam bir
+ürün UI'sı" idi, bu ise dar kapsamlı, tek-amaçlı, opsiyonel bir widget --
+aynı "bundled dashboard" presedansına uyuyor, onu genişletmiyor. Yine de
+bu gerilimi burada açıkça not düşüyorum ki gelecekte biri "UI eklemeyiz"
+kararını hatırlayıp bu widget'ı çelişki sanmasın.
+
+**Yapılan** (`discord_webapi/captcha/widget.py` + `widget.js`, yeni
+modül, `discord_webapi/web/dashboard.py`'nin `Path(__file__).parent /
+"....html"` okuma deseniyle birebir aynı):
+- `build_captcha_widget_router(mount_path=...)`: widget script'ini
+  `GET /static/discord-webapi-captcha-widget.js` (özelleştirilebilir yol)
+  üzerinden `application/javascript` olarak servis ediyor.
+- `widget.js`: `.dwa-captcha-widget` class'lı her `<div data-token="...">`
+  için bir `CaptchaWidget` instance'ı kuruyor. Akış: `GET /api/captcha/
+  gate/{token}` ile challenge bilgisini çekiyor, `challenge.kind`'a göre
+  kendi UI'sını seçiyor (captcha yok -> sade checkbox; math/text ->
+  görsel+input+kendi submit butonu; pow -> tamamen otomatik arka plan
+  hashcash araması, bitince checkbox aktifleşiyor; path-trace -> gömülü
+  canvas; recaptcha/hcaptcha -> onların script'ini enjekte edip kendi
+  submit butonuyla token okuyor). Path-trace geometrisi
+  (`_dist_point_to_segment`/`_dist_point_to_polyline`) sunucudakiyle
+  birebir aynı mantıkla JS'e taşındı (playground'da zaten yazılmıştı,
+  buraya genelleştirilip taşındı). Mouse/dokunma sinyallerini sayfa
+  yüklendiği andan itibaren kendisi topluyor (playground'daki
+  `currentSignals()` deseninin genelleştirilmiş hali).
+- **Diagnostics tasarımı**: widget host sayfasının bir `#log` div'i
+  olduğunu VARSAYMIYOR (playground'a özel bir bağımlılık kurmamak için)
+  -- bunun yerine her adımda `document`'a bir `dwa-captcha-widget-log`
+  CustomEvent'i (`{token, message, ok, detail}`) yayınlıyor. Herhangi bir
+  host sayfası isterse dinler, istemezse görmezden gelir. `data-callback`
+  özniteliği (reCAPTCHA/hCaptcha'nın kendi `data-callback` desenine
+  paralel) doğrulama bitince çağrılacak global fonksiyonun adını taşıyor.
+  `window.dwaCaptchaWidgetInit` dışa açıldı -- dinamik olarak sonradan
+  eklenen widget div'lerini (örn. yeni bir token alındığında) sayfa
+  yenilenmeden tekrar taratmak için.
+- **Modernizasyon**: yuvarlatılmış köşeler (12px), ince/yumuşak gölge,
+  hover'da hafif yükselme, SVG path ile çizilen tik/çarpı (opacity+scale
+  geçişli), conic-gradient tabanlı yumuşak dönen spinner (kalın çizgili
+  eski spinner yerine), sistem font stack'i, `prefers-color-scheme` ile
+  koyu tema desteği. Playwright ile ekran görüntüsü alıp göz kontrolü
+  yaptım -- eski "kalın gri kenarlıklı düz kutu" görünümü tamamen gitti.
+
+**`examples/captcha_playground`'a dogfooding**: eski elle-yazılmış widget
+IIFE'si (yaklaşık 100 satır) tamamen silindi, yerine gerçek
+`<div class="dwa-captcha-widget">` + bir `CaptchaGate` konfigürasyonu
+seçme dropdown'u (`none`/`math`/`text`/`pow`/`path-trace`/varsa
+`recaptcha`/`hcaptcha`) geldi. Playground artık widget'ın KENDİ
+`dwa-captcha-widget-log` event'lerini dinleyip mevcut log paneline
+yazıyor -- playground tarafında widget mantığının hiçbir kopyası yok.
+
+**Bulunan gerçek bug**: `main.py`'de her kind için ayrı bir `CaptchaGate`
+kurdum ama `build_captcha_router()`'ın `/api/captcha/gate/{token}`
+endpoint'i TEK bir `app.state.discord_webapi_captcha_gate`'i okuyor
+(gerçek bir deploy'da doğru tasarım -- bir entegrasyon, bir gate). Onu
+hiç atamamıştım, widget her zaman 404/hata alıyordu. Bunu Playwright ile
+gerçek bir tarayıcıda test ederken yakaladım (log'da "Doğrulama linki
+geçersiz veya süresi dolmuş" ve ardından "No CaptchaGate configured"
+hatası çıktı). Düzeltme: playground'un token-mint endpoint'i artık token
+verirken ilgili gate'i `app.state`'e de atıyor -- yalnızca tek-operatörlü
+yerel demo için uygun (gerçek çoklu-kullanıcılı bir deploy'da tek bir
+gate seçilmeli, koda bunu açıkça yazdım).
+
+**Uçtan uca doğrulama** (Playwright, gerçek headless Chromium,
+`/opt/pw-browsers/chromium-1194`): "none" gate'inde davranış katmanı
+çalıştı ve Playwright'ın kendi `navigator.webdriver=true` izini doğru
+şekilde yakalayıp reddetti; Math gate'inde görsel+input+yanlış-cevap
+submit akışı çöküşsüz tamamlandı (`pageerror` hiç görülmedi); PoW
+gate'inde arka plan hashcash araması gerçekten çalışıp birkaç saniye
+içinde checkbox'ı otomatik aktif etti; Path-trace gate'inde canvas
+doğru boyutlarda render edildi. Ekran görüntüsüyle görsel kontrol de
+yapıldı.
+
+3 yeni test (widget script'in servis edilmesi, özel mount path, gerçek
+endpoint'lere referans kontrolü). Tüm suite yeşil (bilinen Postgres
+hatası hariç), ruff+mypy temiz (119 dosya, yeni `widget.py` dahil).
+
 ## captcha: homing-correction'ı yine de ekle + tıklanabilir test sitesi (bu oturumda)
 
 Kullanıcının isteği: önceki turda test edip "bağımsız değer katmıyor,

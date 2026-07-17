@@ -7,14 +7,20 @@ değil); sonuç ekrandaki log paneline PASS/FAIL olarak yazılır.
 
 ## Ne test edilebiliyor
 
-0. **Doğrulama widget'ı** -- gerçek bir Cloudflare Turnstile / "ben robot
-   değilim" kutusu gibi. Sayfaya girdiğiniz andan itibaren her adım ayrı
-   ayrı loglanıyor: ilk hareket/dokunuş, mouse'un kutuya yaklaşması, tam
-   tıklanan piksel + merkezden sapma (tam ortaya tıklarsanız bunu açıkça
-   "şüpheli" diye işaretliyor), kontrol animasyonu, sunucunun verdiği
-   sonuç. Widget her tıklamadan ~2.5sn sonra kendini sıfırlayıp tekrar
-   denemenize izin veriyor -- fiziksel testin ana noktası burası.
-1. **Görünmez davranış katmanı** -- `reject_webdriver`,
+0. **Hazır widget** (`discord_webapi.captcha.widget`) -- kütüphanenin
+   kendi sunduğu, tek `<div>` + tek `<script>` ile gömülen gerçek
+   bundled widget (elle yazılmış bir mock değil). Bir `CaptchaGate`
+   konfigürasyonu seçin (hiçbiri/Math/Text/PoW/Path-trace/varsa
+   reCAPTCHA-hCaptcha) -- widget kendi UI'sını o gate'in verdiği
+   challenge'a göre otomatik uyarlıyor. Sayfaya girdiğiniz andan
+   itibaren her adım (ilk hareket/dokunuş, kutuya yaklaşma, tam tıklanan
+   piksel + merkezden sapma -- tam ortaya tıklarsanız bunu açıkça
+   "şüpheli" diye işaretliyor --, kontrol animasyonu, sunucunun verdiği
+   sonuç) widget'ın kendi `dwa-captcha-widget-log` event'leri üzerinden
+   loglanıyor; playground bu event'leri dinlemekten başka bir şey
+   yapmıyor. ~2.5sn sonra kendini sıfırlayıp tekrar denemenize izin
+   veriyor -- fiziksel testin ana noktası burası.
+1. **Görünmez davranış katmanı -- ham/elle tetikleme** -- `reject_webdriver`,
    `require_min_interaction_ms`, `SignalScoreCheck` (mouse-kinematiği ve
    homing-correction dahil tüm varsayılan sezgiseller),
    `RepeatedMovementCheck`. "Aynı hareketi tekrar gönder" butonu, replay

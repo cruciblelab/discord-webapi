@@ -340,13 +340,48 @@ Sağlayıcı aileleri:
   düşünce yakalanmayabilir). Varsayılan olarak hiçbir gate'e bağlı değil --
   `extra_checks=[RepeatedMovementCheck(store)]` ile isteyen ekler.
 
+**Hazır widget (`discord_webapi.captcha.widget`, opt-in)**: alt yapının
+üstüne "hızlı kullanmak isteyenler için" bir katman -- kendi frontend'ini
+sıfırdan yazmak istemeyenler için tek `<div>` + tek `<script>` ile gömülen,
+gerçek bir Cloudflare-Turnstile-tarzı checkbox widget:
+
+```python
+app.include_router(build_captcha_widget_router())
+```
+```html
+<div class="dwa-captcha-widget" data-token="{token}"></div>
+<script src="/static/discord-webapi-captcha-widget.js" data-callback="onVerified"></script>
+<script>function onVerified(result) { /* result.verified, result.failed_check */ }</script>
+```
+
+Widget kendi UI'sını `CaptchaGate`'in verdiği challenge'a göre otomatik
+uyarlıyor -- captcha yoksa sade bir checkbox; Math/Text ise görsel+metin
+kutusu; PoW ise tamamen görünmez (arka planda kendi hashcash aramasını
+`crypto.subtle.digest` ile yapıp bitince checkbox'ı aktif eder);
+Path-trace ise gömülü bir `<canvas>`; reCAPTCHA/hCaptcha ise onların kendi
+widget'ını gömer. Mouse/dokunma sinyallerini (kinematik dahil) sayfa
+yüklendiği andan itibaren kendisi toplar -- ayrıca bir şey yazmanıza
+gerek yok. Her adım (yaklaşma, tam tıklanan piksel, animasyon, sunucu
+sonucu) `document` üzerinde bir `dwa-captcha-widget-log` CustomEvent'i
+olarak da yayınlanır -- kendi görünür zaman çizelgenizi istiyorsanız
+onu dinleyin (`examples/captcha_playground` tam olarak bunu yapıyor).
+
+Bu, `DiscordWebAPI.install()`'a otomatik bağlanan diğer opt-in
+özelliklerin (audit/consent/ratelimits) aksine hâlâ elle mount ediliyor
+-- ama önceki katmanların hepsi gibi **tamamen isteğe bağlı**: kendi
+frontend'inizi `build_captcha_router()`'ın ham endpoint'lerine karşı
+yazmak isterseniz widget'ı hiç kullanmayabilirsiniz, kütüphane hiçbir
+şekilde dayatmıyor -- "hem alt yapıyı verelim hem hazır kullanım isteyenlere
+de bir UI verelim" ilkesinin birebir uygulanışı.
+
 **Tıklayarak test etmek isteyenler için**: `examples/captcha_playground/` --
-Discord bot'u/OAuth'u gerektirmeden, tarayıcıda tek sayfada tüm
-provider'ları (Math/Text/PoW/Path-trace + varsa reCAPTCHA/hCaptcha) VE
-görünmez katmanın tamamını (davranış skoru, replay-tespiti) gerçekten
-çalıştırıp PASS/FAIL log paneline yazan bir örnek. "Aynı hareketi tekrar
-gönder" butonu, replay tespitinin ikinci gönderimde FAIL'e döndüğünü
-canlı gösteriyor.
+Discord bot'u/OAuth'u gerektirmeden, tarayıcıda tek sayfada hem bu hazır
+widget'ı (bir `CaptchaGate` konfigürasyonu seçip canlı deneyebileceğiniz
+şekilde) hem de her provider'ı (Math/Text/PoW/Path-trace + varsa
+reCAPTCHA/hCaptcha) ham endpoint seviyesinde VE görünmez katmanın tamamını
+(davranış skoru, replay-tespiti) gerçekten çalıştırıp PASS/FAIL log
+paneline yazan bir örnek. "Aynı hareketi tekrar gönder" butonu, replay
+tespitinin ikinci gönderimde FAIL'e döndüğünü canlı gösteriyor.
 
 Rate limiter/escalation'ın aksine `DiscordWebAPI` hiçbir captcha
 sağlayıcısını otomatik kurmaz (hangi sağlayıcı, hangi reCAPTCHA

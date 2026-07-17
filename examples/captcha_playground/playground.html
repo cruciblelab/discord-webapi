@@ -17,26 +17,6 @@
   #trace-canvas { touch-action: none; cursor: crosshair; }
   .kind-block { border: 1px solid #ddd; border-radius: 6px; padding: 10px; margin-bottom: 8px; }
   code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; }
-
-  /* the Cloudflare-Turnstile-style verification widget */
-  #captcha-widget {
-    display: flex; align-items: center; gap: 12px;
-    width: 300px; min-height: 74px; padding: 0 16px;
-    border: 1px solid #d3d3d3; border-radius: 6px; background: #fafafa;
-    cursor: pointer; user-select: none; box-shadow: 0 1px 2px rgba(0,0,0,.05);
-  }
-  #captcha-widget.done { cursor: default; }
-  #widget-checkbox {
-    flex: 0 0 auto; width: 30px; height: 30px; border: 2px solid #999;
-    border-radius: 4px; background: #fff; display: flex; align-items: center;
-    justify-content: center; font-size: 18px; font-weight: bold; color: #999;
-  }
-  #widget-spinner {
-    width: 20px; height: 20px; border: 3px solid #ccc; border-top-color: #2b6fff;
-    border-radius: 50%; animation: dwa-spin 0.8s linear infinite; display: none;
-  }
-  @keyframes dwa-spin { to { transform: rotate(360deg); } }
-  #widget-label { font-size: 0.95rem; color: #333; }
 </style>
 
 <h1>discord-webapi -- captcha playground</h1>
@@ -48,19 +28,23 @@
 </p>
 
 <section>
-  <h2>0) Doğrulama widget'ı (fiziksel test için)</h2>
+  <h2>0) Hazır widget (kütüphanenin kendi bundled UI'sı)</h2>
   <p class="muted">
-    Gerçek bir Cloudflare Turnstile / "ben robot değilim" kutusu gibi --
-    sayfaya girdiğiniz andan itibaren her adım (mouse'un kutuya yaklaşması,
-    tam tıklanan piksel ve merkezden sapması, kontrol animasyonu, sunucu
-    sonucu) aşağıdaki log'a yazılıyor. Telefonda parmakla, bilgisayarda
-    fareyle -- tam ortadan tıklarsanız bunu da açıkça not ediyor.
+    Bu, elle yazılmış bir mock değil -- <code>discord_webapi.captcha.widget</code>'ın
+    bizzat sunduğu, tek &lt;div&gt; + tek &lt;script&gt; ile gömülen gerçek
+    widget. Aşağıdaki listeden bir <code>CaptchaGate</code> konfigürasyonu
+    seçin -- widget kendi UI'sını o gate'in verdiği challenge'a göre
+    (görsel/PoW/çizgi/3.taraf/hiçbiri) otomatik uyarlıyor. Her adım
+    (yaklaşma, tam tıklanan piksel, animasyon, sunucu sonucu) aşağıdaki
+    log'a widget'ın kendi <code>dwa-captcha-widget-log</code> event'leri
+    üzerinden yazılıyor -- playground bu event'leri dinlemekten başka bir
+    şey yapmıyor.
   </p>
-  <div id="captcha-widget">
-    <div id="widget-checkbox"></div>
-    <div id="widget-spinner"></div>
-    <span id="widget-label">İnsan olduğumu doğrula</span>
-  </div>
+  <label>Gate:
+    <select id="widget-gate-kind"></select>
+  </label>
+  <button id="btn-widget-reload" type="button">Widget'ı yeniden yükle</button>
+  <div id="widget-holder"></div>
 </section>
 
 <section>
@@ -124,6 +108,12 @@
 <button id="btn-copy-log" type="button">Logu kopyala</button>
 <button id="btn-clear-log" type="button">Logu temizle</button>
 <div id="log"></div>
+
+<!-- the bundled widget script -- loaded here (before the page's own
+     script below) so window.dwaCaptchaWidgetInit exists by the time
+     this page calls it. data-callback names the function the widget
+     calls once a verification finishes. -->
+<script src="/static/discord-webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
 
 <script>
 'use strict';
@@ -244,110 +234,47 @@ document.getElementById('btn-behavior-replay').addEventListener('click', async (
   await runBehaviorCheck(signals, 'replay testi (aynı hareket ikinci kez)');
 });
 
-// ---- 0) the Cloudflare-Turnstile-style verification widget ----
-// Every step gets its own log line, from the first time the pointer
-// enters the box through the exact click pixel to the server's verdict --
-// this is the "physical test" element: click it for real, on a real
-// phone or a real mouse, and read the timeline below.
-(() => {
-  const widgetEl = document.getElementById('captcha-widget');
-  const checkboxEl = document.getElementById('widget-checkbox');
-  const spinnerEl = document.getElementById('widget-spinner');
-  const labelEl = document.getElementById('widget-label');
-  let approached = false;
-  let busy = false;
+// ---- 0) the bundled widget (discord_webapi.captcha.widget) ----
+// This section doesn't reimplement anything -- it just renders the
+// real <div class="dwa-captcha-widget" data-token="..."> the library
+// ships, and listens for the widget's own diagnostic events to display
+// them here. Everything you see in the log for this section is the
+// widget's own doing, not playground-specific code.
+document.addEventListener('dwa-captcha-widget-log', (e) => {
+  const d = e.detail;
+  log(d.message, d.ok, d.detail);
+});
 
-  function since(t) { return `${(t - pageLoadedAt).toFixed(0)}ms sayfa yüklendiğinden sonra`; }
+function onWidgetVerified(result) {
+  // The library calls this (named via the script tag's data-callback)
+  // once verification finishes -- this is where *your* page would react
+  // (enable a submit button, redirect, etc). Here we just note it fired.
+  log('widget: onVerified callback tetiklendi', result.verified, result.failed_check);
+}
 
-  let lastPointerTypeSeen = 'mouse';
-  let lastEnterAt = null;
+async function reloadWidget() {
+  const kind = document.getElementById('widget-gate-kind').value;
+  const resp = await fetch(`/api/playground/widget-token?kind=${kind}`);
+  const { token } = await resp.json();
+  document.getElementById('widget-holder').innerHTML =
+    `<div class="dwa-captcha-widget" data-token="${token}"></div>`;
+  if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+  log('widget: yeni token alındı', null, `gate=${kind}, token=${token}`);
+}
 
-  widgetEl.addEventListener('pointerenter', (e) => {
-    lastPointerTypeSeen = e.pointerType;
-    lastEnterAt = performance.now();
-    if (approached) return;
-    approached = true;
-    log('widget: mouse/parmak kutuya yaklaştı', null, `${since(performance.now())}, pointer_type=${e.pointerType}`);
-  });
-  widgetEl.addEventListener('pointerleave', (e) => {
-    // On touch/pen there is no real "hover and approach" -- the browser
-    // synthesizes an enter+leave pair around the tap itself, so this
-    // fires a few ms before the click on the *same* tap, not because the
-    // finger genuinely left and came back. Logging it for touch would
-    // misleadingly look like a second, separate approach. Only meaningful
-    // for a real mouse cursor, which can genuinely hover and retreat.
-    if (approached && !busy && e.pointerType !== 'touch' && e.pointerType !== 'pen') {
-      log('widget: kutudan uzaklaşıldı (henüz tıklanmadı)', null, since(performance.now()));
-    }
-  });
+document.getElementById('btn-widget-reload').addEventListener('click', reloadWidget);
 
-  widgetEl.addEventListener('click', async (e) => {
-    if (busy) return;
-    busy = true;
-
-    const rect = widgetEl.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    const offset = Math.hypot(e.clientX - cx, e.clientY - cy);
-    const localX = Math.round(e.clientX - rect.left);
-    const localY = Math.round(e.clientY - rect.top);
-    const centerNote = offset < 2
-      ? ' -- DİKKAT: neredeyse tam matematiksel merkez, bir insan için fazla kusursuz, şüpheli sayılır'
-      : '';
-    const touchNote = (lastPointerTypeSeen === 'touch' || lastPointerTypeSeen === 'pen')
-      ? ' [dokunmatik: yaklaşma+tıklama aynı dokunuşun parçası olduğu için birbirine çok yakın zamanlıdır, ' +
-        'bu normaldir -- bir mouse imlecinin gerçekten "önce yaklaşıp sonra tıklaması" gibi ayrı iki an değildir]'
-      : '';
-    log(
-      'widget: tıklandı', null,
-      `kutu-içi konum=(${localX},${localY}), merkezden sapma=${offset.toFixed(1)}px, ` +
-      `${since(performance.now())}, o ana kadar toplanan mouse örneği=${trajectory.length}${centerNote}${touchNote}`
-    );
-
-    // Freeze the trajectory/click data at the moment of the click -- the
-    // check should score *this* interaction, not whatever the pointer
-    // does during the animation delay below.
-    const frozenTrajectory = trajectory.slice();
-    const signals = currentSignals();
-    signals.mouse_trajectory = frozenTrajectory;
-    signals.click_offset = offset;
-    lastSubmittedTrajectory = frozenTrajectory;
-    lastClickOffset = offset;
-
-    checkboxEl.textContent = '';
-    spinnerEl.style.display = 'inline-block';
-    labelEl.textContent = 'Kontrol ediliyor...';
-    log('widget: kontrol animasyonu başladı', null);
-    await new Promise((r) => setTimeout(r, 700)); // a short Turnstile-like "thinking" delay
-    log('widget: kontrol animasyonu bitti, sunucuya gönderiliyor', null);
-
-    logRawSignals(signals);
-    const result = await runBehaviorCheck(signals, 'widget doğrulaması');
-
-    spinnerEl.style.display = 'none';
-    widgetEl.classList.add('done');
-    if (result.overall_passed) {
-      checkboxEl.textContent = '✓';
-      checkboxEl.style.borderColor = '#2fae4e';
-      checkboxEl.style.color = '#2fae4e';
-      labelEl.textContent = 'Doğrulandı';
-    } else {
-      checkboxEl.textContent = '✕';
-      checkboxEl.style.borderColor = '#d13b3b';
-      checkboxEl.style.color = '#d13b3b';
-      labelEl.textContent = 'Doğrulanamadı';
-    }
-
-    setTimeout(() => {
-      busy = false;
-      widgetEl.classList.remove('done');
-      checkboxEl.textContent = '';
-      checkboxEl.style.borderColor = '#999';
-      checkboxEl.style.color = '#999';
-      labelEl.textContent = 'İnsan olduğumu doğrula';
-      log('widget: sıfırlandı, tekrar tıklanabilir', null);
-    }, 2500);
-  });
+(async () => {
+  const config = await (await fetch('/api/playground/config')).json();
+  const select = document.getElementById('widget-gate-kind');
+  for (const kind of config.widget_gate_kinds) {
+    const opt = document.createElement('option');
+    opt.value = kind;
+    opt.textContent = kind;
+    select.appendChild(opt);
+  }
+  select.addEventListener('change', reloadWidget);
+  await reloadWidget();
 })();
 
 // ---- 2) Math / Text image captchas ----

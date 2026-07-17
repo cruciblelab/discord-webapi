@@ -2,6 +2,76 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: hazır, dahili widget (`discord_webapi.captcha.widget`)
+
+Kullanıcı iki şey istedi: (1) playground'daki elle yazılmış doğrulama
+kutusunun görünümü "2010lardan fırlama" duruyordu, modernleştirilsin; (2)
+daha önemlisi -- bu widget playground'a özel bir mock olmaktan çıkıp
+**kütüphanenin kendisinin** sunduğu hazır bir UI bileşeni olsun: hem alt
+yapıyı (checks/heuristics/providers -- zaten vardı) hem de hızlı
+kullanmak isteyenler için tek satırlık hazır bir widget'ı birlikte verelim.
+
+### Eklenenler
+
+- **`discord_webapi/captcha/widget.py` + `widget.js`** (yeni modül):
+  `build_captcha_widget_router()` -- bir tek `<div class="dwa-captcha-widget"
+  data-token="...">` + bir tek `<script src="...">` ile gömülen, gerçek bir
+  Cloudflare-Turnstile-tarzı checkbox widget'ı sunuyor. Widget kendi
+  UI'sını `CaptchaGate`'in verdiği `challenge.kind`'a göre otomatik
+  uyarlıyor: captcha yoksa sade checkbox; Math/Text ise gömülü görsel +
+  metin kutusu + kendi "Doğrula" butonu; PoW ise tamamen görünmez (arka
+  planda gerçek hashcash aramasını `crypto.subtle.digest` ile yapıp
+  bitince checkbox'ı aktif ediyor); Path-trace ise gömülü bir
+  `<canvas>`; reCAPTCHA/hCaptcha ise onların kendi widget script'ini
+  gömüp kendi "Doğrula" butonuyla token okuyor. Mouse/dokunma
+  sinyallerini (kinematik dahil) sayfa yüklendiği andan itibaren kendisi
+  topluyor. Her adım (yaklaşma, tam tıklanan piksel + merkezden sapma,
+  kontrol animasyonu, sunucu sonucu) `document` üzerinde bir
+  `dwa-captcha-widget-log` CustomEvent'i olarak yayınlanıyor -- kendi
+  görünür zaman çizelgesini isteyen sayfa sadece bunu dinliyor.
+  `data-callback` özniteliğiyle adı verilen fonksiyon, doğrulama
+  bitince `result` ile çağrılıyor (`grecaptcha`/`hcaptcha`'nın
+  `data-callback` desenine benzer). `window.dwaCaptchaWidgetInit()` de
+  dışa açık -- dinamik olarak eklenen widget div'lerini sayfa
+  yenilenmeden tekrar taratmak için.
+- **Modern görünüm**: eski kalın-kenarlıklı düz dikdörtgen yerine
+  yuvarlatılmış köşeler, ince/yumuşak gölge, SVG çizgili tik/çarpı
+  ikonları (düz metin karakteri yerine), conic-gradient tabanlı yumuşak
+  spinner, sistem font stack'i, açık/koyu tema desteği
+  (`prefers-color-scheme`).
+- **Bilerek opsiyonel**: rate limiter/escalation gibi
+  `DiscordWebAPI.install()`'a otomatik bağlanmıyor -- kendi frontend'ini
+  ham `build_captcha_router()` endpoint'lerine karşı yazmak isteyenler
+  widget'ı hiç kullanmayabilir, kütüphane hiçbir şekilde dayatmıyor.
+- **`examples/captcha_playground`** artık bu bundled widget'ı
+  dogfoodluyor: eski elle-yazılmış widget IIFE'si tamamen kaldırıldı,
+  yerine gerçek `<div class="dwa-captcha-widget">` + bir
+  `CaptchaGate` konfigürasyonu seçme dropdown'u geldi (hiçbiri/Math/
+  Text/PoW/Path-trace/varsa reCAPTCHA-hCaptcha) -- widget'ın kendi
+  UI'sının her birine göre değiştiğini canlı gösteriyor.
+- **Gerçek bir bug bulunup düzeltildi bu sırada**: `build_captcha_router()`
+  tek bir global `app.state.discord_webapi_captcha_gate`'i okuyor (gerçek
+  bir deploy'da doğru tasarım -- tek entegrasyon, tek gate), ama
+  playground birden fazla gate (kind başına biri) kurup hiçbirini
+  `app.state`'e atamamıştı -- widget'ın `GET /api/captcha/gate/{token}`
+  isteği sessizce 404 dönüyordu. Playground'un token-mint endpoint'i
+  artık token verirken ilgili gate'i `app.state`'e de atıyor (yalnızca bu
+  tek-operatörlü yerel demo için uygun bir çözüm, gerçek çoklu-kullanıcılı
+  bir deploy'da tek bir gate seçilmeli).
+
+Playwright ile gerçek bir headless Chromium'da uçtan uca doğrulandı:
+"none" gate'inde davranış katmanı çalıştı (webdriver=true olduğu için
+doğru şekilde reddetti -- Playwright'ın kendi otomasyon izini
+yakaladığının kanıtı), Math gate'inde görsel+input+submit akışı
+çöküşsüz tamamlandı, PoW gate'inde arka plan araması gerçekten çalışıp
+checkbox'ı otomatik aktif etti, Path-trace gate'inde canvas doğru
+render edildi. Sayfa hatası (`pageerror`) hiç görülmedi.
+
+3 yeni test (`tests/unit/test_captcha_widget.py`: script'in doğru
+content-type ile servis edilmesi, özel mount path, gerçek gate
+endpoint'lerine referans verdiğinin sağlaması). Tüm suite yeşil (bilinen
+Postgres ortam hatası hariç), ruff+mypy temiz (119 dosya).
+
 ## [Unreleased] — captcha_playground: dokunmatik "yaklaşma" log'u yanıltıcıydı, düzeltildi
 
 Kullanıcı telefonda widget'ı test edince log'da `yaklaştı` -> 89ms sonra
