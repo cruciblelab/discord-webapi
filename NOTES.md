@@ -1,5 +1,73 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: mouse kinematiği skoru -- araştırma + uygulama (bu oturumda)
+
+Kullanıcının sorusu birebir: "Mousede ardışık hareketler ardışık hızlanma
+yavaşlama gibi şeylerlede puan ölçülebilir mi insanı bot sanma ihtimali
+minimum yapılabiliyorsa imkansıza yakın ama botları otomatik sistemleri
+felan iyi tespit eden birşey olmalı bunun için iyice araştırma ve
+hesaplama yapıp karar verir misin." Yani: tahmin değil, gerçek
+araştırma/hesaplama istedi ve dürüst bir karar bekledi.
+
+**Yapılan araştırma**: `/tmp/.../scratchpad/kinematics_research.py`
+scriptinde iki sentetik model yazıp karşılaştırdım:
+- **İnsan modeli**: minimum-jerk motor-kontrol modeli (Flash & Hogan,
+  1985) -- `ease = 10s³-15s⁴+6s⁵`, çan-eğrisi hız profili veriyor. Buna
+  dikey sinüs-eğrisi bulge (doğal kavis), pozisyonel Gauss jitter (el
+  titremesi), zamanlama jitter'ı eklendi.
+- **Bot modeli**: naive otomasyonun en yaygın deseni -- sabit adımlarla
+  düz çizgi lineer interpolasyon, sabit zaman aralığı.
+- 20 deneme her biri için üç istatistik ölçüldü: **eğrilik oranı** (kat
+  edilen yol / düz mesafe), **hız değişkenlik katsayısı** (std/mean),
+  **zamanlama değişkenlik katsayısı**.
+- **Sonuç -- temiz ayrışma, örtüşme yok**: İnsan eğrilik 1.011-1.051, hız
+  CV 0.591-0.658, zamanlama CV 0.071-0.099. Bot(linear) üçünde de tam
+  olarak 0.000/1.000 (sıfır varyans, tam düz çizgi).
+
+**Dürüst karar (kullanıcının asıl sorduğu şey)**: Evet, ölçülebilir ve
+gerçek bir sinyal -- ekledim. Hayır, "insanı bot sanma ihtimalini
+imkansıza yakın" yapılamaz, ve bu ayar/eşik meselesi değil, **yapısal bir
+sınır**: bir bot, gerçek ve önceden kaydedilmiş bir insan fare hareketini
+**replay** edebilir (kendi operatörünün ya da başka yerden alınmış).
+Replay edilen veri gerçek insan hareketi *olduğu için* herhangi bir
+kinematik kontrolü kusursuz geçer -- tek bir isteğin analizi "insan şimdi
+hareket etti" ile "bu kaydın replay'i şimdi oynatılıyor" arasını asla
+ayıramaz. Bu prensipte kanıtlanamaz değil, çünkü replay verisi ve gerçek
+veri istatistiksel olarak özdeş (aynı veri). Ayrıca bunu atlatmaya özel
+yazılmış halka açık "insan gibi fare yolu" üretici araçlar (Bezier-eğrisi +
+jitter) zaten var. Bu yüzden bu sinyal de aynı "şeffaf, dürüst sezgisel"
+kovasında kalıyor -- naive/düşük-emekli otomasyonun (ki gerçekte
+karşılaşılanın büyük kısmı budur) maliyetini ciddi yükseltiyor, ama PoW
+(gerçek maliyet) + hesap-bağlama (gerçek kimlik) yerine geçmiyor.
+
+**Uygulama** (`captcha/scoring.py`): üç yeni `ScoringHeuristic` --
+`mouse-curvature` (ağırlık 2.0), `mouse-velocity-variance` (ağırlık 2.5,
+en güçlü sinyal), `mouse-timing-variance` (ağırlık 1.0, en zayıf/en kolay
+taklit edilebilir -- düşük weight bilinçli). Yeni `signals["mouse_trajectory"]`
+girdisi: `[x, y, t_ms]` örnekleri, widget'a **yaklaşırken** toplanmaya
+başlanır (diğer sezgisellerle aynı "tıklama-öncesi" kuralı). Skorlar
+[0,1] aralığında **graded** (ikili değil) -- `(oran - eşik) / span`
+şeklinde ölçekleniyor, span sabitleri sentetik insan aralığının içine
+(kenarına değil) bilerek konuldu ki gürültülü/seyrek gerçek insan verisi
+haksız yere sıfırlanmasın. Çekimser (`None`) durumları: touch/pen pointer,
+`mouse_trajectory` eksik, 5'ten az örnek, bozuk veri şekli, çok kısa
+hareket (<20px -- yol şeklinin bir anlamı olmadığı durum). Aşırı büyük bir
+liste (`_MAX_TRAJECTORY_POINTS=2000`) DoS'a karşı ilk N örnekle
+sınırlanıyor, hata vermeden.
+
+Gerçek hesaplanmış değerlerle doğrulandı (Bash ile modülü import edip
+gerçek fonksiyonları çalıştırarak, tahmin değil): el yapımı insan-benzeri
+trajectory üç sezgiselde de tam 1.0'a satüre oluyor, el yapımı bot
+trajectory'si üçünde de ~0.0 (float gürültüsü dışında tam sıfır). Hafif
+kavisli bir trajectory ile graded (0 ile 1 arası) skor doğrulandı --
+ikili değil. 21 yeni test eklendi (ayrışma her üç sezgiselde; graded
+skorlama; touch/eksik/az-örnek/bozuk-veri/çok-kısa-hareket çekimser;
+200.000 örneklik payload'da çökmeden/asılmadan sınırlama; breakdown'da
+görünme; sahte bot trajectory'sinin skoru kurtarmaması; gate'e
+extra_check olarak oturma). Tüm suite yeşil (bilinen Postgres ortam hatası
+hariç), ruff+mypy temiz. Docstring'e (İngilizce, dosyanın geri kalanıyla
+tutarlı) ve `docs/OZELLIKLER.md`'ye aynı dürüst araştırma sonucu yazıldı.
+
 ## captcha: davranışsal skor + flash-tap kaldırıldı (bu oturumda)
 
 Kullanıcı flash-tap'i (yanıp-sönen nokta) "saçma" bulup kaldırmamı,

@@ -281,6 +281,31 @@ Sağlayıcı aileleri:
   tek başına gate olarak değil. (Daha basit ikili kontroller için
   `captcha.signals`'da `reject_webdriver`/`require_signal_flag`/
   `require_min_interaction_ms` de var.)
+- **Mouse kinematiği** (`signals["mouse_trajectory"]`, `[x, y, t_ms]`
+  örnekleri -- yine widget'a **yaklaşırken** toplanmaya başlanır, tıklamada
+  değil): `SignalScoreCheck`'e üç yeni sezgisel eklendi -- **eğrilik oranı**
+  (kat edilen yol / düz mesafe -- insan hareketi eğri, sabit-hızlı
+  linear-interpolation bot'u tam düz), **hız değişkenlik katsayısı** (insan
+  hareketi yavaş-hızlı-yavaş çan eğrisi izler -- motor-kontrol
+  literatüründeki "minimum-jerk" modeli, Flash & Hogan 1985; naive bot sabit
+  hızda gider), **zamanlama değişkenlik katsayısı** (gerçek tarayıcı
+  örneklemesi hiç düzenli değildir; sabit adımlarla ilerleyen bot'unki
+  düzenlidir). Sentetik insan/bot karşılaştırmasında (20 deneme) üçü de
+  temiz ayrışıyor -- insan denemeleri hep bot'un tam sıfır değerinin üstünde
+  kalıyor. Sinyal eksik/dokunmatik/çok az örnek/bozuk veri -> **çekimser**
+  (cezalandırmıyor, eski istemcilerle geriye dönük uyumlu).
+  **Dürüst araştırma sonucu (kullanıcı talebiyle hesaplandı):** "insanı
+  bot sanma ihtimalini imkansıza yakın yapmak" mümkün DEĞİL -- bunun sebebi
+  eksik ayar değil, yapısal bir sınır: bir bot gerçek, önceden kaydedilmiş
+  bir insan fare hareketini **replay** edebilir; replay edilen veri gerçek
+  insan hareketi *olduğu için* bu kontrollerin hiçbirini yanıltmaz, tersine
+  kusursuz geçer -- tek bir isteğin kinematik analizi "insan şimdi hareket
+  etti" ile "bu kaydın replay'i şimdi oynatılıyor" arasını hiçbir zaman
+  ayıramaz. Ayrıca tam bunu atlatmak için yazılmış halka açık "insan gibi
+  fare yolu" üretici araçlar zaten var. Yani: eklemeye değer (naive/düşük
+  emekli script'lerin -- ki gerçekte karşılaşılanın büyük kısmı budur --
+  maliyetini ciddi yükseltiyor) ama yine PoW + hesap-bağlama ile katmanlanan
+  şeffaf bir sezgisel, tek başına "insan kanıtı" değil.
 - **Basit görsel captcha'lar** (`MathCaptchaProvider`/`TextCaptchaProvider`)
   hâlâ duruyor ama **dürüstçe**: modern OCR/vision bunları kolay çözüyor,
   bu yüzden bunlar sadece "son çare / düşük-değerli" katman -- asıl güven

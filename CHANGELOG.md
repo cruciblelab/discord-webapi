@@ -2,6 +2,47 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: mouse kinematiği skoru (araştırma + uygulama)
+
+Kullanıcının somut sorusu: "ardışık mouse hareketleri/hızlanma-yavaşlama
+da puanlanabilir mi, insanı bot sanma ihtimali imkansıza yakın yapılabilir
+mi?" -- gerçek bir araştırma/hesaplama istendi, ChatGPT gibi tahmin değil.
+Minimum-jerk insan hareket modeli (Flash & Hogan 1985) ile naive
+sabit-hız/sabit-aralık bot modeli sentetik olarak karşılaştırıldı (20
+deneme); üç istatistikte de (eğrilik oranı, hız değişkenlik katsayısı,
+zamanlama değişkenlik katsayısı) temiz ayrışma gözlendi, örtüşme yok.
+
+### Değişenler
+
+- **`SignalScoreCheck`'e üç yeni sezgisel eklendi**
+  (`discord_webapi.captcha.scoring`): `mouse-curvature` (kat edilen
+  yol/düz mesafe oranı), `mouse-velocity-variance` (hız değişkenlik
+  katsayısı), `mouse-timing-variance` (örnekleme-aralığı değişkenlik
+  katsayısı). Yeni `signals["mouse_trajectory"]` girdisi (`[x, y, t_ms]`
+  listesi, widget'a yaklaşırken toplanmaya başlanır -- tıklama-öncesi
+  kuralı diğer sezgisellerle aynı). Sinyal eksik/dokunmatik/çok az
+  örnek/bozuk veri -> çekimser (eski istemcilerle geriye dönük uyumlu,
+  haksız cezalandırmıyor). Aşırı büyük bir trajectory listesi ilk 2000
+  örnekle sınırlanıyor (DoS'a karşı, çökme/asılma yok).
+- **Dürüst araştırma sonucu (koda ve dokümana yazıldı):** hayır, "insanı
+  bot sanma ihtimalini imkansıza yakın" yapılamaz -- bunun sebebi ayar
+  eksikliği değil, yapısal bir sınır: bir bot gerçek, kaydedilmiş bir insan
+  fare hareketini **replay** edebilir, replay edilen veri gerçek insan
+  hareketi olduğundan bu (veya başka herhangi bir) tek-istekli kinematik
+  kontrolü kusursuz geçer. Ayrıca bunu atlatmaya özel yazılmış halka açık
+  "insan gibi fare yolu" üretici araçlar zaten var. Yine de eklemeye değer:
+  naive/düşük emekli otomasyonun (gerçekte karşılaşılanın büyük kısmı)
+  maliyetini ciddi yükseltiyor -- ama PoW (gerçek maliyet) + hesap-bağlama
+  (gerçek kimlik) ile katmanlanan şeffaf bir sezgisel olarak kalıyor, tek
+  başına "insan kanıtı" değil.
+
+21 yeni test (insan/bot ayrışması her üç sezgiselde; graded/ikili-olmayan
+skor; touch/eksik/az-örnek/bozuk-veri'de çekimser; aşırı büyük payload'da
+çökmeden sınırlama; kısa hareket -> çekimser; breakdown'da görünme; bot'un
+sahte trajectory eklemesinin işe yaramaması; gate'e extra_check olarak
+oturma). Tüm captcha testleri + tüm suite yeşil (bilinen Postgres ortam
+hatası hariç), ruff+mypy temiz.
+
 ## [Unreleased] — captcha: davranışsal skor + flash-tap kaldırıldı
 
 Kullanıcı geri bildirimi: yanıp-sönen-nokta (flash-tap) modeli gerçek bir

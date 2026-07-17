@@ -1,6 +1,7 @@
 """Exercises the behavioral SignalScoreCheck -- the transparent weighted
 heuristic score over client-submitted signals."""
 
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -128,6 +129,151 @@ async def test_custom_heuristics_and_weights_are_honored() -> None:
 def test_threshold_out_of_range_raises() -> None:
     with pytest.raises(ValueError, match="threshold"):
         SignalScoreCheck(threshold=1.5)
+
+
+# -- Mouse kinematics --------------------------------------------------
+#
+# A hand-built "human" trajectory (curved path, uneven step sizes, uneven
+# timing -- the minimum-jerk-model shape) vs. a "bot" trajectory (an exact
+# straight line, constant step size, constant time interval -- what naive
+# linear-interpolation automation produces). Values confirmed empirically
+# (see NOTES.md): the human one saturates all three heuristics at the
+# maximum score, the bot one lands at exactly zero on all three.
+_HUMAN_TRAJECTORY = [
+    [0, 0, 0],
+    [15, 8, 40],
+    [35, 20, 75],
+    [70, 28, 100],
+    [110, 30, 160],
+    [140, 26, 190],
+    [165, 18, 230],
+    [185, 9, 270],
+    [196, 3, 320],
+    [200, 0, 380],
+]
+_BOT_TRAJECTORY = [[20 * i, 0, 100 * i] for i in range(10)]
+
+
+def test_mouse_curvature_separates_human_from_linear_bot() -> None:
+    from discord_webapi.captcha.scoring import _mouse_path_curvature
+
+    human = _mouse_path_curvature({"pointer_type": "mouse", "mouse_trajectory": _HUMAN_TRAJECTORY})
+    bot = _mouse_path_curvature({"pointer_type": "mouse", "mouse_trajectory": _BOT_TRAJECTORY})
+
+    assert human == 1.0
+    assert bot == pytest.approx(0.0, abs=1e-9)
+
+
+def test_mouse_velocity_variance_separates_human_from_linear_bot() -> None:
+    from discord_webapi.captcha.scoring import _mouse_velocity_variance
+
+    human = _mouse_velocity_variance(
+        {"pointer_type": "mouse", "mouse_trajectory": _HUMAN_TRAJECTORY}
+    )
+    bot = _mouse_velocity_variance({"pointer_type": "mouse", "mouse_trajectory": _BOT_TRAJECTORY})
+
+    assert human == 1.0
+    assert bot == pytest.approx(0.0, abs=1e-9)
+
+
+def test_mouse_timing_variance_separates_human_from_linear_bot() -> None:
+    from discord_webapi.captcha.scoring import _mouse_timing_variance
+
+    human = _mouse_timing_variance({"pointer_type": "mouse", "mouse_trajectory": _HUMAN_TRAJECTORY})
+    bot = _mouse_timing_variance({"pointer_type": "mouse", "mouse_trajectory": _BOT_TRAJECTORY})
+
+    assert human == 1.0
+    assert bot == pytest.approx(0.0, abs=1e-9)
+
+
+def test_kinematics_are_graded_not_binary() -> None:
+    """A path with only a slight curve scores somewhere in between -- these
+    are soft signals scaled by how pronounced the effect is, not a hard
+    pass/fail on their own."""
+    from discord_webapi.captcha.scoring import _mouse_path_curvature
+
+    slight_curve = [[10 * i, 2 * math.sin(i / 9 * math.pi), 50 * i] for i in range(10)]
+    score = _mouse_path_curvature({"pointer_type": "mouse", "mouse_trajectory": slight_curve})
+
+    assert score is not None
+    assert 0.0 < score < 1.0
+
+
+def test_kinematics_abstain_on_touch_pointer() -> None:
+    """No continuous mouse path exists on a tap -- abstain rather than
+    penalize a legitimate mobile user."""
+    from discord_webapi.captcha.scoring import _mouse_path_curvature
+
+    score = _mouse_path_curvature({"pointer_type": "touch", "mouse_trajectory": _HUMAN_TRAJECTORY})
+
+    assert score is None
+
+
+def test_kinematics_abstain_when_trajectory_missing() -> None:
+    from discord_webapi.captcha.scoring import _mouse_velocity_variance
+
+    assert _mouse_velocity_variance({"pointer_type": "mouse"}) is None
+
+
+def test_kinematics_abstain_on_too_few_points() -> None:
+    from discord_webapi.captcha.scoring import _mouse_timing_variance
+
+    score = _mouse_timing_variance(
+        {"pointer_type": "mouse", "mouse_trajectory": [[0, 0, 0], [1, 1, 10]]}
+    )
+
+    assert score is None
+
+
+def test_kinematics_abstain_on_malformed_samples() -> None:
+    from discord_webapi.captcha.scoring import _mouse_path_curvature
+
+    malformed = [[0, 0], [1, 1], [2, 2], [3, 3], [4, 4]]  # missing the t component
+    score = _mouse_path_curvature({"pointer_type": "mouse", "mouse_trajectory": malformed})
+
+    assert score is None
+
+
+def test_kinematics_cap_an_oversized_trajectory_instead_of_choking_on_it() -> None:
+    """A pathologically large payload gets truncated to the first N samples
+    rather than processed in full -- this must stay fast."""
+    from discord_webapi.captcha.scoring import _mouse_path_curvature
+
+    huge = [[i, 0, i] for i in range(200_000)]
+    score = _mouse_path_curvature({"pointer_type": "mouse", "mouse_trajectory": huge})
+
+    assert score == 0.0  # still a perfectly straight line either way
+
+
+def test_curvature_abstains_on_too_short_a_move() -> None:
+    from discord_webapi.captcha.scoring import _mouse_path_curvature
+
+    short = [[i, 0, 10 * i] for i in range(10)]  # 9px total, below the 20px floor
+    score = _mouse_path_curvature({"pointer_type": "mouse", "mouse_trajectory": short})
+
+    assert score is None
+
+
+def test_kinematics_heuristics_appear_in_the_breakdown() -> None:
+    check = SignalScoreCheck()
+    signals = dict(_HUMAN, mouse_trajectory=_HUMAN_TRAJECTORY)
+
+    score, breakdown = check.compute(signals)
+
+    assert breakdown["mouse-curvature"] == 1.0
+    assert breakdown["mouse-velocity-variance"] == 1.0
+    assert breakdown["mouse-timing-variance"] == 1.0
+    assert score == 1.0
+
+
+async def test_bot_trajectory_does_not_rescue_an_otherwise_bot_like_score() -> None:
+    """A bot that also fakes a mouse trajectory, but naively (a straight
+    line, constant speed/timing), doesn't buy it anything -- the kinematics
+    heuristics score that exactly as badly as no trajectory at all."""
+    signals = dict(_BOT, mouse_trajectory=_BOT_TRAJECTORY)
+    outcome = await SignalScoreCheck(threshold=0.6).run(_ctx(signals))
+
+    assert outcome.passed is False
 
 
 async def test_scorer_composes_into_a_gate_as_an_extra_check() -> None:
