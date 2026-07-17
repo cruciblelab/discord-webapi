@@ -2,6 +2,64 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — captcha: `AdaptiveCaptchaGate` -- IP itibarına göre otomatik escalation (Cloudflare "Under Attack Mode" deseni)
+
+Kullanıcının önceki turdaki IP itibarı hook'unu bir adım ileri taşıma
+isteği: "IP itibarı kötüyse direkt captcha testi otomatik tetiklensin,
+temizse sorulmasın, geçince bir süre tekrar sorulmasın; ayrı, isteğe bağlı
+bir modül olsun." Onay alındıktan sonra inşa edildi.
+
+### Eklenen: `discord_webapi/captcha/adaptive.py` + `reputation.py`
+
+- **`IPReputationChecker` Protocol** (`captcha/reputation.py`): "bu IP
+  şüpheli mi" sorusunun cevabı -- kütüphane kendi itibar veritabanını
+  SUNMUYOR (hangi kaynağa güveneceğine dair görüşü yok), sadece arayüzü
+  veriyor. `StaticBlocklistReputationChecker`: tek somut implementasyon,
+  bilinçli olarak dürüst isimlendirildi -- düz bir IP/CIDR blocklist'i,
+  bir reputation *servisi* değil, öyle olduğunu iddia etmiyor.
+- **`AdaptiveCaptchaGate`** (`captcha/adaptive.py`): `CaptchaGate`'e ayrı,
+  yeni bir sınıf -- `require_captcha`'yı inşa anında sabitlemek yerine
+  **dinamik olarak**, linkin ilk açıldığı anda (bağlanan IP belli
+  olduğunda) karara bağlıyor. `CaptchaGate`'i büyütmek yerine yanına yeni
+  bir parça koymayı tercih ettim -- statik davranışı zaten test edilmiş,
+  kapsanmış bir sınıfa koşullu dallanma yığmaktansa. Akış: IP itibarı
+  temizse hiç captcha yok (sadece `require_account`/`extra_checks`);
+  şüpheliyse `escalation_provider`'dan gerçek bir challenge issue edilip
+  zorunlu kılınıyor. Karar `decision_store`'da (yeni, ayrı bir store --
+  `VerificationStore`'a hiç dokunulmadı) kalıcı tutuluyor, sayfa
+  yenilemesi zarı yeniden atmıyor. `trust_store` (opsiyonel) -- geçen bir
+  hesap `trust_ttl` boyunca bir daha hiç sorulmuyor (gerçek Discord
+  hesabına bağlı, sahtelenebilir bir cihaz sinyaline değil).
+- **Bundled widget'ta HİÇBİR değişiklik gerekmedi** -- widget zaten
+  `get_info()`'nun döndürdüğü `requires_captcha`'ya göre kendi UI'sını
+  seçiyor, adaptif olduğunu bilmiyor bile.
+- **`build_captcha_router(gate=...)`** artık hem `CaptchaGate` hem
+  `AdaptiveCaptchaGate` ile çalışıyor -- yeni bir `GateLike` Protocol
+  (yapısal tip) ile, `adaptive.py`'ı zorunlu import etmeden (onu hiç
+  kullanmayanlara bağımlılık yüklemesin diye).
+- **SQL varyantları**: `SQLAdaptiveDecisionStore`, `SQLTrustStore` --
+  diğer tüm store'larla aynı Protocol + Memory/SQL desende, kendi
+  bağımsız tabloları.
+- **`examples/captcha_gate_bot`'a `/join-adaptive`**: gerçek, çalışan bir
+  demo. `GET /api/test/block-my-ip`/`unblock-my-ip` ile kendi IP'nizi
+  bloke edip escalation'ı canlı izleyebiliyorsunuz -- kozmetik değil,
+  gerçekten kontrol ediyor: doğruladım (`TestClient` ile, temiz IP'de
+  `requires_captcha: false`, blokladıktan sonra `true` + gerçek Math
+  challenge, unblock sonrası tekrar `false`).
+
+25 yeni test: `test_captcha_adaptive.py` (yeni dosya -- karar bir kez
+verilip kalıcı olması, temiz/şüpheli IP ayrımı, `require_account`/
+`extra_checks`'in IP'den bağımsız hâlâ uygulanması, trust-store'un
+tekrar sormaması ve TTL'in dolması, bilinmeyen token, idempotency,
+`on_verified` filtresi, eksik IP'nin çekimser -- cezalandırmayan --
+davranması), `test_captcha_reputation.py` (yeni dosya --
+`StaticBlocklistReputationChecker`'ın IP/CIDR eşleşmesi, bozuk IP'de
+hata vermemesi, block/unblock), SQL store testleri, ve gerçek HTTP
+üzerinden uçtan uca bir entegrasyon testi (temiz/bloke IP'ler farklı
+`TestClient(client=...)` ile simüle edilip gerçek captcha akışı
+doğrulandı). Tüm suite yeşil (bilinen Postgres ortam hatası hariç),
+ruff+mypy temiz (121 dosya).
+
 ## [Unreleased] — captcha: gerçek güvenlik araştırması + 2 ciddi bug bulunup düzeltildi + IP itibarı hook'u
 
 Kullanıcının isteği: captcha alt sistemine kapsamlı bir araştırma yap

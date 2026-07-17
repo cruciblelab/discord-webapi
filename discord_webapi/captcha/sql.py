@@ -16,6 +16,7 @@ from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Integer, String, Tex
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from discord_webapi.captcha.adaptive import AdaptiveDecision
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
 
 _TIMESTAMP = DateTime(timezone=True)
@@ -240,4 +241,104 @@ class SQLTrajectoryFingerprintStore:
                 db.add(TrajectoryFingerprintRow(fingerprint=fingerprint, expires_at=expires_at))
             else:
                 row.expires_at = expires_at
+            await db.commit()
+
+
+class AdaptiveDecisionRow(Base):
+    __tablename__ = "dwa_captcha_adaptive_decisions"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    requires_captcha: Mapped[bool] = mapped_column(Boolean)
+    challenge_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class SQLAdaptiveDecisionStore:
+    """`AdaptiveDecisionStore` backed by SQLAlchemy 2.0 async -- the
+    multi-process-safe version of `MemoryAdaptiveDecisionStore`, so every
+    web replica agrees on whether a given token already got its
+    escalation decision (and what it was)."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+        self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_all(self) -> None:
+        async with self._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def get(self, token: str) -> AdaptiveDecision | None:
+        async with self._sessionmaker() as db:
+            row = await db.get(AdaptiveDecisionRow, token)
+            if row is None:
+                return None
+            return AdaptiveDecision(
+                requires_captcha=row.requires_captcha,
+                challenge=(
+                    CaptchaChallenge.model_validate(row.challenge_json)
+                    if row.challenge_json is not None
+                    else None
+                ),
+            )
+
+    async def set(self, token: str, decision: AdaptiveDecision) -> None:
+        async with self._sessionmaker() as db:
+            db.add(
+                AdaptiveDecisionRow(
+                    token=token,
+                    requires_captcha=decision.requires_captcha,
+                    challenge_json=(
+                        decision.challenge.model_dump(mode="json")
+                        if decision.challenge is not None
+                        else None
+                    ),
+                )
+            )
+            await db.commit()
+
+    async def delete(self, token: str) -> None:
+        async with self._sessionmaker() as db:
+            row = await db.get(AdaptiveDecisionRow, token)
+            if row is not None:
+                await db.delete(row)
+                await db.commit()
+
+
+class TrustRow(Base):
+    __tablename__ = "dwa_captcha_trust"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    trusted_until: Mapped[datetime] = mapped_column(_TIMESTAMP)
+
+
+class SQLTrustStore:
+    """`TrustStore` backed by SQLAlchemy 2.0 async -- the multi-process-
+    safe version of `MemoryTrustStore`."""
+
+    def __init__(self, engine: AsyncEngine) -> None:
+        self._engine = engine
+        self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def create_all(self) -> None:
+        async with self._engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def is_trusted(self, user_id: int) -> bool:
+        async with self._sessionmaker() as db:
+            row = await db.get(TrustRow, user_id)
+            if row is None:
+                return False
+            if _as_utc(row.trusted_until) <= datetime.now(UTC):
+                await db.delete(row)
+                await db.commit()
+                return False
+            return True
+
+    async def trust(self, user_id: int, *, ttl: timedelta) -> None:
+        async with self._sessionmaker() as db:
+            row = await db.get(TrustRow, user_id)
+            trusted_until = datetime.now(UTC) + ttl
+            if row is None:
+                db.add(TrustRow(user_id=user_id, trusted_until=trusted_until))
+            else:
+                row.trusted_until = trusted_until
             await db.commit()

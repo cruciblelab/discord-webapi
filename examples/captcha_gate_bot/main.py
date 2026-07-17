@@ -57,6 +57,14 @@ general pattern for physical-testing an example bot):
                                      Path-Trace draw if it looks
                                      suspicious) and a plain original
                                      Math captcha
+    /join-adaptive               -> the real library primitive behind
+                                     the manual escalation above, but
+                                     driven by IP reputation
+                                     (`AdaptiveCaptchaGate`): a clean IP
+                                     never sees a captcha, a blocked one
+                                     always does. GET /api/test/block-my-ip
+                                     (and /unblock-my-ip) let you flip
+                                     your own connecting IP for testing.
 """
 
 from __future__ import annotations
@@ -65,13 +73,18 @@ import os
 
 import discord
 from discord.ext import commands
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse
 
 from discord_webapi import DiscordWebAPI
 from discord_webapi.auth.dependencies import get_current_user_optional
 from discord_webapi.auth.models import DiscordUser
 from discord_webapi.bot import default_intents
+from discord_webapi.captcha.adaptive import (
+    AdaptiveCaptchaGate,
+    MemoryAdaptiveDecisionStore,
+    MemoryTrustStore,
+)
 from discord_webapi.captcha.api import build_captcha_router
 from discord_webapi.captcha.events import CaptchaVerified
 from discord_webapi.captcha.gate import CaptchaGate
@@ -83,6 +96,7 @@ from discord_webapi.captcha.replay_guard import (
     MemoryTrajectoryFingerprintStore,
     RepeatedMovementCheck,
 )
+from discord_webapi.captcha.reputation import StaticBlocklistReputationChecker
 from discord_webapi.captcha.scoring import SignalScoreCheck
 from discord_webapi.captcha.signals import reject_webdriver
 from discord_webapi.captcha.widget import build_captcha_widget_router
@@ -552,3 +566,84 @@ function onWidgetVerified(result) {{
 }}
 </script>
 </body>""")
+
+
+# ---------------------------------------------------------------------
+# Real AdaptiveCaptchaGate demo -- the library primitive this whole
+# module's ad-hoc "invisible gate, then page JS reveals a second widget
+# if it fails" pattern (scenario 4, above) was standing in for, for the
+# specific case of IP reputation rather than the behavioral score.
+# `AdaptiveCaptchaGate` makes the escalation decision server-side, the
+# first time the link is opened, based on the connecting IP -- the
+# bundled widget needs no special handling for this at all, since it
+# already renders "no captcha" or "here's the challenge" from whatever
+# get_info() returns.
+#
+# `blocklist` ships empty -- nobody's IP is suspicious by default. Two
+# debug endpoints let you block/unblock *your own* connecting IP so you
+# can watch the escalation actually happen without needing a real
+# reputation service for this demo.
+# ---------------------------------------------------------------------
+
+blocklist = StaticBlocklistReputationChecker()
+adaptive_gate = AdaptiveCaptchaGate(
+    transport,
+    MemoryVerificationStore(),
+    blocklist,
+    MathCaptchaProvider(_captcha_store),
+    MemoryAdaptiveDecisionStore(),
+    require_account=True,
+    extra_checks=_behavior_checks(),
+    trust_store=MemoryTrustStore(),
+)
+app.include_router(build_captcha_router(gate=adaptive_gate), prefix="/adaptive")
+
+
+async def _on_adaptive_verified(event: CaptchaVerified) -> None:
+    user = await bot.fetch_user(event.user_id)
+    await user.send("Doğrulandı! (adaptive gate -- IP itibarına göre karar verildi)")
+
+
+adaptive_gate.on_verified(_on_adaptive_verified, purpose="adaptive_join")
+
+
+@bot.hybrid_command(
+    name="join-adaptive", description="Demo: IP itibarına göre otomatik captcha isteyen gate"
+)
+async def join_adaptive(ctx: commands.Context) -> None:
+    request = await adaptive_gate.create_verification(
+        user_id=ctx.author.id, purpose="adaptive_join"
+    )
+    url = f"{_base_url}/verify/adaptive/{request.token}"
+    await ctx.author.send(
+        f"Doğrulan: {url}\n\n"
+        "IP'n itibarımıza göre temizse hiç captcha görmeyeceksin -- sadece "
+        "hesap + görünmez katman. Şüpheliyse gerçek bir Math captcha çıkar."
+    )
+    await ctx.reply("Sana DM attım!", ephemeral=True)
+
+
+@app.get("/verify/adaptive/{token}")
+async def verify_adaptive_page(token: str) -> HTMLResponse:
+    return _verify_page(token, "/adaptive")
+
+
+@app.get("/api/test/block-my-ip")
+async def block_my_ip(request: Request) -> dict:
+    """Demo-only: lets you put your own connecting IP on the blocklist
+    so you can physically watch AdaptiveCaptchaGate escalate to a real
+    captcha, without needing an actual reputation service for this."""
+    ip = request.client.host if request.client else None
+    if ip is None:
+        return {"blocked": None}
+    blocklist.block(ip)
+    return {"blocked": ip}
+
+
+@app.get("/api/test/unblock-my-ip")
+async def unblock_my_ip(request: Request) -> dict:
+    ip = request.client.host if request.client else None
+    if ip is None:
+        return {"unblocked": None}
+    blocklist.unblock(ip)
+    return {"unblocked": ip}

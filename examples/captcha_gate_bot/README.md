@@ -107,13 +107,47 @@ no captcha at all before login.
 
 `build_captcha_router()`'s default reads a single
 `app.state.discord_webapi_captcha_gate` -- fine for one gate purpose. This
-example has five (`giveaway_gate`, `appeal_gate`, and the three test
-gates above), so each is mounted explicitly via `build_captcha_router(gate=...)`
-under its own prefix (`/giveaway`, `/appeal`, `/test-path-trace`,
-`/test-safety`, `/test-original`), and each widget's `data-api-base`
-attribute points at the matching prefix. See
-`discord_webapi/captcha/api.py`'s module docstring for the general
-pattern.
+example has six (`giveaway_gate`, `appeal_gate`, the three test gates
+above, and `adaptive_gate` below), so each is mounted explicitly via
+`build_captcha_router(gate=...)` under its own prefix (`/giveaway`,
+`/appeal`, `/test-path-trace`, `/test-safety`, `/test-original`,
+`/adaptive`), and each widget's `data-api-base` attribute points at the
+matching prefix. See `discord_webapi/captcha/api.py`'s module docstring
+for the general pattern.
+
+## Scenario 5 -- IP-reputation-driven escalation (`/join-adaptive`)
+
+```
+/join-adaptive             -- DMs a verify link
+GET /api/test/block-my-ip   -- demo-only: put your own connecting IP on the blocklist
+GET /api/test/unblock-my-ip
+```
+
+The real library primitive behind Scenario 4's manual "invisible gate,
+then reveal a Path-Trace widget if it fails" JS composition -- but driven
+by IP reputation instead of the behavior score, and decided **server-side**
+rather than by page JS: `discord_webapi.captcha.adaptive.AdaptiveCaptchaGate`.
+`create_verification()` mints a token with no captcha decided yet; the
+first time the link is opened (`get_info()`/`verify()`), the connecting
+IP is checked against `blocklist` (a `StaticBlocklistReputationChecker`
+here -- a plain IP/CIDR list, not a real reputation service) and the
+decision (captcha or not) is made and persisted right there. A clean IP
+never sees a captcha at all -- just the invisible layer
+(`require_account=True` + behavior score, same as the other gates); a
+blocked one gets a real Math challenge. Once verified, `trust_store`
+remembers the user for 24h so they aren't asked again on a repeat visit.
+
+**No widget changes needed for any of this** -- the bundled widget
+already renders "no captcha" or "here's the challenge" from whatever
+`get_info()` returns; it has no idea the gate behind it is adaptive.
+
+Verified via `TestClient` without a live Discord connection: a clean IP's
+`get_info()` reports `requires_captcha: false` and `verify()` passes with
+no captcha response; hitting `/api/test/block-my-ip` (which blocks the
+caller's own connecting IP) and minting a fresh token then shows
+`requires_captcha: true` with a real Math challenge, and unblocking flips
+it back -- the debug endpoints genuinely control the escalation, not just
+cosmetically.
 
 ## Running it
 

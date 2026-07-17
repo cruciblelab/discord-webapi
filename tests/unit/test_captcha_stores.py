@@ -8,11 +8,14 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from discord_webapi.captcha.adaptive import AdaptiveDecision
 from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
 from discord_webapi.captcha.models import CaptchaChallenge, PendingCaptcha, VerificationRequest
 from discord_webapi.captcha.sql import (
+    SQLAdaptiveDecisionStore,
     SQLCaptchaStore,
     SQLTrajectoryFingerprintStore,
+    SQLTrustStore,
     SQLVerificationStore,
 )
 
@@ -276,3 +279,70 @@ async def test_sql_trajectory_fingerprint_store_expires(engine: AsyncEngine) -> 
     await store.record("fp1", timedelta(seconds=-1))  # already expired
 
     assert await store.seen_recently("fp1") is False
+
+
+# -- SQLAdaptiveDecisionStore --
+
+
+async def test_sql_adaptive_decision_store_records_and_reads(engine: AsyncEngine) -> None:
+    store = SQLAdaptiveDecisionStore(engine)
+    await store.create_all()
+
+    assert await store.get("t1") is None
+
+    decision = AdaptiveDecision(
+        requires_captcha=True,
+        challenge=CaptchaChallenge(challenge_id="c1", kind="math", prompt="1 + 1 = ?"),
+    )
+    await store.set("t1", decision)
+
+    fetched = await store.get("t1")
+    assert fetched is not None
+    assert fetched.requires_captcha is True
+    assert fetched.challenge is not None
+    assert fetched.challenge.challenge_id == "c1"
+
+
+async def test_sql_adaptive_decision_store_round_trips_no_challenge(engine: AsyncEngine) -> None:
+    store = SQLAdaptiveDecisionStore(engine)
+    await store.create_all()
+
+    await store.set("t1", AdaptiveDecision(requires_captcha=False, challenge=None))
+
+    fetched = await store.get("t1")
+    assert fetched is not None
+    assert fetched.requires_captcha is False
+    assert fetched.challenge is None
+
+
+async def test_sql_adaptive_decision_store_delete(engine: AsyncEngine) -> None:
+    store = SQLAdaptiveDecisionStore(engine)
+    await store.create_all()
+    await store.set("t1", AdaptiveDecision(requires_captcha=False))
+
+    await store.delete("t1")
+
+    assert await store.get("t1") is None
+
+
+# -- SQLTrustStore --
+
+
+async def test_sql_trust_store_records_and_checks(engine: AsyncEngine) -> None:
+    store = SQLTrustStore(engine)
+    await store.create_all()
+
+    assert await store.is_trusted(100) is False
+
+    await store.trust(100, ttl=timedelta(hours=1))
+
+    assert await store.is_trusted(100) is True
+
+
+async def test_sql_trust_store_expires(engine: AsyncEngine) -> None:
+    store = SQLTrustStore(engine)
+    await store.create_all()
+
+    await store.trust(100, ttl=timedelta(seconds=-1))  # already expired
+
+    assert await store.is_trusted(100) is False

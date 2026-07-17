@@ -521,6 +521,43 @@ sahtelenemeyen IP'yi check'lerinize ulaştırıyor, siz istediğiniz kaynakla
 (kendi blocklist'iniz, bir 3.taraf reputation API'si, kendi
 rate-limit/abuse geçmişiniz) birleştirebilirsiniz.
 
+**`AdaptiveCaptchaGate` -- Cloudflare "Under Attack Mode" deseni
+(`discord_webapi.captcha.adaptive`, opt-in):** yukarıdaki IP itibarı
+hook'unun bir adım ötesi -- "IP itibarı kötüyse otomatik olarak captcha
+tetiklensin, temizse hiç sorulmasın, geçince bir süre tekrar sorulmasın"
+isteği için hazır, dinamik bir gate. `CaptchaGate`'in aksine `require_captcha`
+inşa anında sabit değil -- karar, linkin ilk açıldığı anda (bağlanan IP
+belli olduğunda) veriliyor:
+
+```python
+from discord_webapi.captcha.adaptive import (
+    AdaptiveCaptchaGate, MemoryAdaptiveDecisionStore, MemoryTrustStore,
+)
+from discord_webapi.captcha.reputation import StaticBlocklistReputationChecker
+
+gate = AdaptiveCaptchaGate(
+    transport, MemoryVerificationStore(),
+    StaticBlocklistReputationChecker(blocked_ips={"1.2.3.4"}),  # ya da kendi kontrolünüz
+    escalation_provider=math_provider,       # IP şüpheliyse gösterilecek captcha
+    decision_store=MemoryAdaptiveDecisionStore(),
+    require_account=True,                    # + görünmez katman istiyorsanız extra_checks=...
+    trust_store=MemoryTrustStore(),          # geçeni bir süre tekrar sormasın
+    trust_ttl=timedelta(hours=24),
+)
+app.include_router(build_captcha_router(gate=gate))
+```
+
+Bundled widget'ta HİÇBİR değişiklik gerekmiyor -- widget zaten
+`get_info()`'nun döndürdüğü `requires_captcha`'ya göre kendi UI'sını
+seçiyor, adaptif olduğunu bile bilmiyor. `StaticBlocklistReputationChecker`
+sadece düz bir IP/CIDR blocklist'i -- gerçek bir reputation *servisi*
+değil (öyle olduğunu iddia etmiyor); `IPReputationChecker` Protocol'ünü
+kendi mantığınızla (3.taraf bir reputation API'si, kendi abuse
+geçmişiniz) de implemente edebilirsiniz. Somut, çalışan bir örnek:
+`examples/captcha_gate_bot`'taki `/join-adaptive` -- `GET
+/api/test/block-my-ip` ile kendi IP'nizi engelleyip escalation'ı canlı
+izleyebiliyorsunuz.
+
 **Katman içi granülerlik -- tek tek özellik açıp kapatmak da mümkün, sadece
 kat seviyesinde değil.** Yukarıdaki "bir check'i tamamen kullan/kullanma"
 seçiminin bir seviye altında: her katmanın kendi içinde de neyi

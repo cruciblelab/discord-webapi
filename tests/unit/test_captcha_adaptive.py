@@ -1,0 +1,206 @@
+"""Exercises `AdaptiveCaptchaGate` -- the IP-reputation-driven escalation
+gate. Same overall shape as test_captcha_gate.py's coverage of
+`CaptchaGate`, but for the dynamic decision instead of a static one."""
+
+import asyncio
+from datetime import timedelta
+
+from discord_webapi.captcha.adaptive import (
+    AdaptiveCaptchaGate,
+    MemoryAdaptiveDecisionStore,
+    MemoryTrustStore,
+)
+from discord_webapi.captcha.checks import PredicateCheck, VerificationContext
+from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
+from discord_webapi.captcha.providers.math_captcha import MathCaptchaProvider
+from discord_webapi.captcha.reputation import StaticBlocklistReputationChecker
+from discord_webapi.transport import InProcessTransport
+
+
+def _make_gate(**kwargs: object) -> AdaptiveCaptchaGate:
+    return AdaptiveCaptchaGate(
+        InProcessTransport(),
+        MemoryVerificationStore(),
+        StaticBlocklistReputationChecker(blocked_ips={"1.2.3.4"}),
+        MathCaptchaProvider(MemoryCaptchaStore()),
+        MemoryAdaptiveDecisionStore(),
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+async def test_create_verification_has_no_challenge_yet() -> None:
+    """Nothing is decided at mint time -- only when the link is opened."""
+    gate = _make_gate()
+
+    request = await gate.create_verification(user_id=100, purpose="signup")
+
+    assert request.challenge is None
+    assert request.token
+
+
+async def test_clean_ip_gets_no_captcha() -> None:
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="signup")
+
+    info = await gate.get_info(request.token, client_ip="9.9.9.9")
+
+    assert info is not None
+    assert info["requires_captcha"] is False
+    assert info["challenge"] is None
+
+
+async def test_suspicious_ip_gets_a_real_captcha_challenge() -> None:
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="signup")
+
+    info = await gate.get_info(request.token, client_ip="1.2.3.4")
+
+    assert info is not None
+    assert info["requires_captcha"] is True
+    assert info["challenge"] is not None
+    assert info["challenge"].kind == "math"
+
+
+async def test_decision_is_made_once_and_persists_across_calls() -> None:
+    """A second get_info() call (a page reload) must not re-roll the
+    decision or re-issue a new challenge."""
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="signup")
+
+    first = await gate.get_info(request.token, client_ip="1.2.3.4")
+    second = await gate.get_info(request.token, client_ip="1.2.3.4")
+
+    assert first is not None and second is not None
+    assert first["challenge"].challenge_id == second["challenge"].challenge_id
+
+
+async def test_clean_ip_verification_passes_without_any_captcha_response() -> None:
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="signup")
+    await gate.get_info(request.token, client_ip="9.9.9.9")
+
+    result = await gate.verify(request.token, client_ip="9.9.9.9")
+
+    assert result.verified is True
+    assert result.passed == []
+
+
+async def test_suspicious_ip_verification_requires_solving_the_captcha() -> None:
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="signup")
+    info = await gate.get_info(request.token, client_ip="1.2.3.4")
+    assert info is not None
+    store: MemoryCaptchaStore = gate.escalation_provider.store  # type: ignore[union-attr]
+    pending = await store.get(info["challenge"].challenge_id)
+    assert pending is not None
+
+    wrong = await gate.verify(request.token, "not-the-answer", client_ip="1.2.3.4")
+    assert wrong.verified is False
+    assert wrong.failed_check == "captcha"
+
+    right = await gate.verify(request.token, pending.answer, client_ip="1.2.3.4")
+    assert right.verified is True
+    assert right.passed == ["captcha"]
+
+
+async def test_require_account_and_extra_checks_still_apply_regardless_of_ip() -> None:
+    """The IP-driven captcha requirement is additive, not a replacement
+    for require_account/extra_checks -- both still run either way."""
+    seen_signals = []
+
+    async def custom_check(ctx: VerificationContext) -> bool:
+        seen_signals.append(ctx.signals)
+        return ctx.signals.get("ok") is True
+
+    gate = _make_gate(extra_checks=[PredicateCheck("custom", custom_check)])
+    request = await gate.create_verification(user_id=100, purpose="signup")
+    await gate.get_info(request.token, client_ip="9.9.9.9")  # clean IP, no captcha
+
+    blocked = await gate.verify(request.token, client_ip="9.9.9.9", signals={})
+    assert blocked.verified is False
+    assert blocked.failed_check == "custom"
+
+    ok = await gate.verify(request.token, client_ip="9.9.9.9", signals={"ok": True})
+    assert ok.verified is True
+
+
+async def test_trust_store_skips_reputation_check_for_recently_verified_users() -> None:
+    trust_store = MemoryTrustStore()
+    gate = _make_gate(trust_store=trust_store)
+
+    # first verification from a suspicious IP -- must solve the captcha
+    request1 = await gate.create_verification(user_id=100, purpose="signup")
+    info1 = await gate.get_info(request1.token, client_ip="1.2.3.4")
+    assert info1 is not None and info1["requires_captcha"] is True
+    store: MemoryCaptchaStore = gate.escalation_provider.store  # type: ignore[union-attr]
+    pending1 = await store.get(info1["challenge"].challenge_id)
+    assert pending1 is not None
+    await gate.verify(request1.token, pending1.answer, client_ip="1.2.3.4")
+
+    # second verification, same user, still a suspicious IP -- but now trusted
+    request2 = await gate.create_verification(user_id=100, purpose="signup")
+    info2 = await gate.get_info(request2.token, client_ip="1.2.3.4")
+    assert info2 is not None
+    assert info2["requires_captcha"] is False
+
+
+async def test_trust_expires_after_ttl() -> None:
+    trust_store = MemoryTrustStore()
+    await trust_store.trust(100, ttl=timedelta(seconds=-1))  # already expired
+
+    assert await trust_store.is_trusted(100) is False
+
+
+async def test_verify_of_unknown_token_fails_gracefully() -> None:
+    gate = _make_gate()
+
+    result = await gate.verify("does-not-exist", client_ip="9.9.9.9")
+
+    assert result.verified is False
+
+
+async def test_get_info_of_unknown_token_is_none() -> None:
+    gate = _make_gate()
+
+    assert await gate.get_info("does-not-exist", client_ip="9.9.9.9") is None
+
+
+async def test_verify_is_idempotent_once_already_solved() -> None:
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="signup")
+    await gate.get_info(request.token, client_ip="9.9.9.9")
+    first = await gate.verify(request.token, client_ip="9.9.9.9")
+    assert first.verified is True
+
+    second = await gate.verify(request.token, client_ip="9.9.9.9")
+    assert second.verified is True
+
+
+async def test_on_verified_fires_with_purpose_filter() -> None:
+    from discord_webapi.captcha.events import CaptchaVerified
+
+    gate = _make_gate()
+    notified: list[CaptchaVerified] = []
+    gate.on_verified(lambda event: notified.append(event), purpose="signup")  # type: ignore[arg-type,return-value]
+
+    request = await gate.create_verification(user_id=100, purpose="signup")
+    await gate.get_info(request.token, client_ip="9.9.9.9")
+    await gate.verify(request.token, client_ip="9.9.9.9")
+    await asyncio.sleep(0.05)
+
+    assert len(notified) == 1
+    assert notified[0].purpose == "signup"
+
+
+async def test_missing_client_ip_is_treated_as_not_suspicious() -> None:
+    """No IP known (e.g. a bot-side call with no HTTP request at all) ->
+    fail open on the reputation check specifically -- it simply has
+    nothing to evaluate, same "abstain rather than penalize" principle as
+    the signal-based heuristics elsewhere in this package."""
+    gate = _make_gate()
+    request = await gate.create_verification(user_id=100, purpose="signup")
+
+    info = await gate.get_info(request.token, client_ip=None)
+
+    assert info is not None
+    assert info["requires_captcha"] is False

@@ -43,7 +43,7 @@ unprefixed copy of those for direct site usage.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -51,11 +51,33 @@ from pydantic import BaseModel
 from discord_webapi.auth.dependencies import get_current_user_optional
 from discord_webapi.auth.models import DiscordUser
 from discord_webapi.captcha.base import CaptchaProvider
-from discord_webapi.captcha.gate import CaptchaGate
+from discord_webapi.captcha.gate import CheckResult
 from discord_webapi.captcha.models import CaptchaChallenge
 from discord_webapi.dashboard_ratelimit import TokenBucketLimiter
 
 _DEFAULT_VERIFY_LIMITER = TokenBucketLimiter(max_calls=20, per_seconds=60.0)
+
+
+class GateLike(Protocol):
+    """Structural shape both `CaptchaGate` and `AdaptiveCaptchaGate`
+    satisfy -- lets this router work with either without importing
+    `AdaptiveCaptchaGate` here (which would otherwise force
+    `discord_webapi.captcha.adaptive`'s dependencies onto every consumer
+    of this module, even ones who never touch adaptive gates)."""
+
+    async def get_info(
+        self, token: str, *, client_ip: str | None = None
+    ) -> dict[str, Any] | None: ...
+
+    async def verify(
+        self,
+        token: str,
+        response: str | None = None,
+        *,
+        authenticated_user_id: int | None = None,
+        signals: dict[str, Any] | None = None,
+        client_ip: str | None = None,
+    ) -> CheckResult: ...
 
 
 class CaptchaVerifyRequest(BaseModel):
@@ -111,7 +133,7 @@ def _get_provider(request: Request, kind: str) -> CaptchaProvider:
     return provider
 
 
-def _get_gate(request: Request, gate: CaptchaGate | None) -> CaptchaGate:
+def _get_gate(request: Request, gate: GateLike | None) -> GateLike:
     resolved = gate or getattr(request.app.state, "discord_webapi_captcha_gate", None)
     if resolved is None:
         raise HTTPException(
@@ -124,7 +146,7 @@ def _get_gate(request: Request, gate: CaptchaGate | None) -> CaptchaGate:
 
 def build_captcha_router(
     *,
-    gate: CaptchaGate | None = None,
+    gate: GateLike | None = None,
     verify_rate_limiter: TokenBucketLimiter | None = None,
 ) -> APIRouter:
     """`gate=None` (the default) reads `app.state.discord_webapi_captcha_gate`
@@ -132,7 +154,8 @@ def build_captcha_router(
     bind this particular router mount to one gate regardless of app
     state, so you can mount the router more than once (each under its own
     `prefix=`) for more than one gate purpose at once -- see the module
-    docstring."""
+    docstring. Works with either `CaptchaGate` or
+    `discord_webapi.captcha.adaptive.AdaptiveCaptchaGate`."""
     limiter = verify_rate_limiter or _DEFAULT_VERIFY_LIMITER
     router = APIRouter(prefix="/api/captcha", tags=["captcha"])
 
@@ -159,7 +182,9 @@ def build_captcha_router(
     @router.get("/gate/{token}")
     async def get_gate_info(token: str, request: Request) -> GateInfo:
         resolved_gate = _get_gate(request, gate)
-        info = await resolved_gate.get_info(token)
+        info = await resolved_gate.get_info(
+            token, client_ip=request.client.host if request.client else None
+        )
         if info is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "This verification link has expired or was already used"

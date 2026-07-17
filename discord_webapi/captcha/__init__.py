@@ -19,6 +19,14 @@ own" pattern as every Store in this library.
 
 from typing import TYPE_CHECKING
 
+from discord_webapi.captcha.adaptive import (
+    AdaptiveCaptchaGate,
+    AdaptiveDecision,
+    AdaptiveDecisionStore,
+    MemoryAdaptiveDecisionStore,
+    MemoryTrustStore,
+    TrustStore,
+)
 from discord_webapi.captcha.api import build_captcha_router
 from discord_webapi.captcha.base import CaptchaProvider, CaptchaStore, VerificationStore
 from discord_webapi.captcha.checks import (
@@ -45,6 +53,7 @@ from discord_webapi.captcha.replay_guard import (
     TrajectoryFingerprintStore,
     fingerprint_trajectory,
 )
+from discord_webapi.captcha.reputation import IPReputationChecker, StaticBlocklistReputationChecker
 from discord_webapi.captcha.scoring import (
     ScoringHeuristic,
     SignalScoreCheck,
@@ -59,8 +68,10 @@ from discord_webapi.captcha.widget import DEFAULT_WIDGET_MOUNT_PATH, build_captc
 
 if TYPE_CHECKING:
     from discord_webapi.captcha.sql import (
+        SQLAdaptiveDecisionStore,
         SQLCaptchaStore,
         SQLTrajectoryFingerprintStore,
+        SQLTrustStore,
         SQLVerificationStore,
     )
 
@@ -68,6 +79,9 @@ __all__ = [
     "DEFAULT_WIDGET_MOUNT_PATH",
     "EVENT_TYPE_CAPTCHA_VERIFIED",
     "AccountMatchCheck",
+    "AdaptiveCaptchaGate",
+    "AdaptiveDecision",
+    "AdaptiveDecisionStore",
     "CaptchaChallenge",
     "CaptchaCheck",
     "CaptchaGate",
@@ -77,9 +91,12 @@ __all__ = [
     "CheckOutcome",
     "CheckResult",
     "HCaptchaProvider",
+    "IPReputationChecker",
     "MathCaptchaProvider",
+    "MemoryAdaptiveDecisionStore",
     "MemoryCaptchaStore",
     "MemoryTrajectoryFingerprintStore",
+    "MemoryTrustStore",
     "MemoryVerificationStore",
     "PathTraceProvider",
     "PendingCaptcha",
@@ -87,13 +104,17 @@ __all__ = [
     "ProofOfWorkProvider",
     "ReCaptchaProvider",
     "RepeatedMovementCheck",
+    "SQLAdaptiveDecisionStore",
     "SQLCaptchaStore",
     "SQLTrajectoryFingerprintStore",
+    "SQLTrustStore",
     "SQLVerificationStore",
     "ScoringHeuristic",
     "SignalScoreCheck",
+    "StaticBlocklistReputationChecker",
     "TextCaptchaProvider",
     "TrajectoryFingerprintStore",
+    "TrustStore",
     "VerificationCheck",
     "VerificationContext",
     "VerificationRequest",
@@ -111,7 +132,13 @@ __all__ = [
 def __getattr__(name: str) -> object:
     # SQL* stores need the optional `sql` extra (`discord-webapi[sql]`) --
     # imported lazily so the base package never requires SQLAlchemy.
-    if name in ("SQLCaptchaStore", "SQLVerificationStore", "SQLTrajectoryFingerprintStore"):
+    if name in (
+        "SQLCaptchaStore",
+        "SQLVerificationStore",
+        "SQLTrajectoryFingerprintStore",
+        "SQLAdaptiveDecisionStore",
+        "SQLTrustStore",
+    ):
         from discord_webapi.captcha import sql
 
         return getattr(sql, name)

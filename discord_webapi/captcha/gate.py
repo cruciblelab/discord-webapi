@@ -136,10 +136,14 @@ class CaptchaGate:
             return None
         return request.challenge
 
-    async def get_info(self, token: str) -> dict[str, Any] | None:
+    async def get_info(self, token: str, *, client_ip: str | None = None) -> dict[str, Any] | None:
         """Everything the frontend needs to render the right thing: the
         captcha image (if any), plus whether the user must be signed in.
-        `None` if the token is gone/expired/already used."""
+        `None` if the token is gone/expired/already used. `client_ip` is
+        accepted (and ignored) purely so `build_captcha_router()` can call
+        `get_info()` the same way for `CaptchaGate` and
+        `AdaptiveCaptchaGate` alike -- this gate's requirement is static,
+        set at construction, so it has no use for the connecting IP."""
         request = await self._get_live(token)
         if request is None or request.verified:
             return None

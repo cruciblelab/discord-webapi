@@ -1,5 +1,87 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## captcha: AdaptiveCaptchaGate -- Cloudflare "Under Attack Mode" deseni (bu oturumda, devam)
+
+Kullanıcının isteği (bir önceki turdaki IP itibarı hook'unun doğal
+devamı): "IP itibarı kötüyse otomatik olarak captcha testi tetiklensin,
+temizse hiç sorulmasın (rahatsız edici olmasın), geçince bir süre
+kaydedilip tekrar sorulmasın; bu ayrı, isteğe bağlı bir modül olsun, dahili
+captcha'ları veya reCAPTCHA/hCaptcha'yı da kullanabilsin, hiç
+kullanmayabilsin de." Bunu inşa etmeden önce mimari bir tercih sunup onay
+istedim (`CaptchaGate`'i büyütmek mi, yanına yeni bir sınıf mı) --
+kullanıcı onayladı.
+
+**Mimari karar**: `CaptchaGate.require_captcha` inşa anında sabit --
+bunu dinamikleştirmek ya o sınıfa büyük bir koşullu-dallanma yükü
+bindirir ya da mevcut, iyi test edilmiş davranışı riske atar. Bunun
+yerine `AdaptiveCaptchaGate` diye YENİ, ayrı bir sınıf yazdım --
+kütüphanenin her yerindeki "büyütmek yerine yanına küçük bir parça koy"
+ilkesinin aynısı.
+
+**Nasıl çalışıyor**:
+- `create_verification()` hiçbir şey karar vermeden bir token basıyor.
+- Linkin ilk açıldığı an (`get_info()`/`verify()`, bağlanan IP artık
+  belli) -- önce `trust_store`'a bakılıyor (hesap zaten güvenilir mi),
+  değilse `reputation.is_suspicious(ip)` soruluyor. Şüpheliyse
+  `escalation_provider`'dan gerçek bir challenge issue edilip zorunlu
+  kılınıyor; değilse hiç captcha yok.
+- Karar `decision_store`'da (YENİ, ayrı bir store) kalıcı tutuluyor --
+  `VerificationRequest`/`VerificationStore`'a HİÇ dokunmadım (invaziv bir
+  protokol değişikliği yerine küçük, bağımsız bir store daha ekledim,
+  `TrajectoryFingerprintStore`'la aynı desen).
+- Başarılı doğrulamada `trust_store` varsa kullanıcı `trust_ttl` boyunca
+  işaretleniyor -- gerçek Discord hesabına (`user_id`) bağlı, sahtelenebilir
+  bir cihaz sinyaline değil (bilinçli tercih -- `AccountMatchCheck`'in
+  kullandığı aynı güven çapası).
+- `CaptchaCheck`'in `ctx.request.challenge`'a ihtiyacı var ama
+  `AdaptiveDecision` ayrı store'da tutulduğu için, `verify()` içinde
+  fetch edilen `VerificationRequest` nesnesine `challenge`'ı SADECE o
+  çağrı için (bellekte, kalıcı olmadan) atıyorum -- bu sayede
+  `VerificationStore` Protocol'ünü hiç genişletmeden çalışıyor.
+
+**Bundled widget'a HİÇBİR dokunuş gerekmedi** -- zaten `get_info()`'nun
+döndürdüğü `requires_captcha`'ya bakıp kendi UI'sını seçiyordu, adaptif
+bir gate'in arkasında olduğunu bilmesi gerekmiyor. Bu, önceki tasarımın
+(widget'ın sunucudan gelen bilgiye göre kendi kendine karar vermesi) ne
+kadar isabetli olduğunun kanıtı.
+
+**`build_captcha_router()`'ı hem `CaptchaGate` hem `AdaptiveCaptchaGate`
+ile çalıştırmak için**: `api.py`'de yeni bir `GateLike` Protocol (yapısal
+tip) tanımladım -- `adaptive.py`'ı `api.py`'ye import ETMEDEN, sadece
+`get_info`/`verify` imzalarını eşleştirerek. Böylece adaptive gate'i hiç
+kullanmayan biri onun bağımlılıklarını (yok zaten, ama prensip olarak)
+hiç görmüyor. `CaptchaGate.get_info()`'ya da kullanılmayan bir
+`client_ip` parametresi eklendim -- router'ın iki tipi de aynı şekilde
+çağırabilmesi için (arayüz simetrisi).
+
+**SQL tarafı**: `SQLAdaptiveDecisionStore`, `SQLTrustStore` -- diğer her
+store'la aynı Protocol + Memory/SQL desende, kendi bağımsız tabloları
+(`dwa_captcha_adaptive_decisions`, `dwa_captcha_trust`).
+
+**`examples/captcha_gate_bot`'a gerçek bir demo eklendi** (`/join-adaptive`):
+Scenario 4'teki elle-yazılmış "görünmez gate + JS zinciriyle ikinci
+widget'ı açığa çıkar" deseninin (davranış-skoru tabanlı) IP-itibarı
+versiyonu, ama şimdi gerçek kütüphane primitifiyle, sunucu tarafında
+karar veren. `GET /api/test/block-my-ip`/`unblock-my-ip` debug
+endpoint'leri kendi IP'nizi bloke/serbest bırakıp escalation'ı canlı
+izlemenizi sağlıyor -- kozmetik olmadığını `TestClient` ile doğruladım:
+temiz IP'de `requires_captcha: false`, blokladıktan sonra fresh bir
+token'da `true` + gerçek bir Math challenge, unblock sonrası tekrar
+`false`.
+
+25 yeni test: `test_captcha_adaptive.py` (yeni dosya -- karar bir kez
+verilip kalıcı kalması, temiz/şüpheli IP ayrımı, `require_account`/
+`extra_checks`'in IP kararından bağımsız hâlâ zorunlu olması,
+trust-store'un tekrar sormaması ve TTL dolunca sormaya dönmesi, bilinmeyen
+token, idempotency, `on_verified`'ın `purpose` filtresiyle çalışması,
+IP bilinmiyorsa çekimser -- cezalandırmayan -- davranış), yeni
+`test_captcha_reputation.py` (`StaticBlocklistReputationChecker`'ın
+IP/CIDR eşleşmesi, bozuk IP girdisinde hata fırlatmaması, canlı
+block/unblock), yeni SQL store testleri, ve gerçek HTTP üzerinden bir
+entegrasyon testi (`TestClient(client=(ip, port))` ile iki farklı "IP"
+simüle edilip gerçek uçtan uca akış doğrulandı). Tüm suite yeşil (bilinen
+Postgres ortam hatası hariç), ruff+mypy temiz.
+
 ## captcha: gerçek güvenlik araştırması -- 2 gerçek bug + IP itibarı hook'u (bu oturumda, devam)
 
 Kullanıcının isteği üç parçalıydı: (1) captcha'ya kapsamlı bir araştırma

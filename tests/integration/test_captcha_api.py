@@ -307,6 +307,46 @@ def test_captcha_router_without_a_gate_configured_returns_404_for_gate_routes() 
         assert resp.status_code == 404
 
 
+def test_adaptive_gate_escalates_to_a_real_captcha_only_for_a_blocked_ip() -> None:
+    """End-to-end through real HTTP requests (not calling the gate
+    directly): a clean IP never sees a captcha at all; a blocked IP gets
+    a real one and must solve it."""
+    from discord_webapi.captcha.adaptive import AdaptiveCaptchaGate, MemoryAdaptiveDecisionStore
+    from discord_webapi.captcha.reputation import StaticBlocklistReputationChecker
+
+    app = FastAPI()
+    transport = InProcessTransport()
+    gate = AdaptiveCaptchaGate(
+        transport,
+        MemoryVerificationStore(),
+        StaticBlocklistReputationChecker(blocked_ips={"6.6.6.6"}),
+        MathCaptchaProvider(MemoryCaptchaStore()),
+        MemoryAdaptiveDecisionStore(),
+    )
+    app.include_router(build_captcha_router(gate=gate))
+
+    clean_client = TestClient(app, client=("9.9.9.9", 12345))
+    with clean_client:
+        req = asyncio.run(gate.create_verification(user_id=1, purpose="signup"))
+        info = clean_client.get(f"/api/captcha/gate/{req.token}").json()
+        assert info["requires_captcha"] is False
+        result = clean_client.post(f"/api/captcha/gate/{req.token}/verify", json={})
+        assert result.json()["verified"] is True
+
+    blocked_client = TestClient(app, client=("6.6.6.6", 12345))
+    with blocked_client:
+        req2 = asyncio.run(gate.create_verification(user_id=2, purpose="signup"))
+        info2 = blocked_client.get(f"/api/captcha/gate/{req2.token}").json()
+        assert info2["requires_captcha"] is True
+        assert info2["challenge"]["kind"] == "math"
+
+        wrong = blocked_client.post(
+            f"/api/captcha/gate/{req2.token}/verify", json={"captcha_response": "nope"}
+        )
+        assert wrong.json()["verified"] is False
+        assert wrong.json()["failed_check"] == "captcha"
+
+
 def test_verify_gate_passes_the_real_client_ip_through_to_checks() -> None:
     """The HTTP layer must actually capture request.client.host and hand
     it to CaptchaGate.verify() as client_ip -- otherwise a custom
