@@ -2,6 +2,31 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — /appeal doğrulaması da artık DM ile onaylıyor (aynı sınıftan bir bug daha)
+
+Kullanıcı sıralı test planını takip ederken bildirdi: `/simulate-ban`'ı
+3 kez çalıştırıp `/appeal` denedi, gerçek bir doğrulama linki geldi,
+web'de widget'ı çözdü ("Doğrulandı" gördü) ama Discord tarafında
+**hiçbir onay/DM gelmedi** -- geri dönüp `/appeal`'i tekrar çalıştırınca
+bu sefer doğrulama istemeden "kaydedildi" dedi (ki BU KISIM doğru
+davranış -- bir kez doğrulanan kullanıcı bu demo boyunca muaf).
+
+Kök neden: `_on_appeal_verified` handler'ı `_appeal_verified_users`
+setine ekliyordu ama Scenario 4'te (`/giveaway-test`) daha önce
+düzeltilen AYNI bug -- hiçbir kullanıcıya-görünür geri bildirim yoktu.
+`giveaway_test`'in DM-onayı deseni buraya da uygulandı: doğrulama
+başarılı olunca artık "Doğrulandın! Artık `/appeal` komutunu tekrar
+çalıştırıp itirazını gönderebilirsin." DM'i gidiyor (bu demo orijinal
+`reason`'ı doğrulama round-trip'i boyunca hatırlamadığından itirazı
+otomatik yeniden göndermiyor, kullanıcının `/appeal`'i tekrar
+çalıştırması gerekiyor -- gerçek bir bot bunu kuyruğa alıp otomatik
+tekrar gönderebilir).
+
+Doğrudan doğrulandı: gerçek bir Proof-of-Work çözülüp (`_solve_pow`
+yardımcı fonksiyonuyla, sahte bir cevap değil) `appeal_gate.verify()`
+çağrıldı, `bot.fetch_user`/`user.send` mock'lanarak DM'in gerçekten
+gönderildiği ve doğru içeriği taşıdığı kanıtlandı.
+
 ## [Unreleased] — 4 gerçek bug daha: login zorunlu gate'lerde captcha login öncesi gösterilmiyor, giveaway-test artık DM ile onaylıyor, /test-join yeniden adlandırıldı
 
 Kullanıcının fiziksel test geri bildirimi, tek tek incelenip ayrıştırıldı:

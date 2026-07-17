@@ -33,6 +33,14 @@ for your own moderation history -- swap `_ban_count_for` for a real
 for this demo's lifetime (a real bot would persist that, not use an
 in-memory `set`).
 
+Solving the verification widget DMs a confirmation ("Doğrulandın! Artık
+`/appeal` komutunu tekrar çalıştırıp itirazını gönderebilirsin.") -- a
+real bug reported from testing was this handler doing nothing user-facing
+at all, so solving the captcha looked like "nothing happened" even though
+it had actually cleared the user (this demo doesn't remember the original
+`reason` across the verification round-trip, so you do have to resend
+`/appeal` yourself; a real bot might queue and auto-resubmit it instead).
+
 ## Scenario 3 -- side-by-side captcha comparison (`/test-compare-captchas`, `/test-participants`)
 
 ```

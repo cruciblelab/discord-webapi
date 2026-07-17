@@ -1,5 +1,39 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
+## /appeal'da da aynı "DM onayı yok" bug'ı bulundu (bu oturum, devam)
+
+Sıralı test planının 1. adımını takip ederken kullanıcı bildirdi:
+`/simulate-ban` 3 kez, `/appeal` doğrulama linki verdi, web'de widget'ı
+çözdü, ama Discord'a hiç DM gelmedi; geri dönüp `/appeal`'i tekrar
+çalıştırınca doğrulama istemeden "kaydedildi" dedi. Bu ikinci kısım
+DOĞRU davranış (bir kez doğrulanan kullanıcı muaf) -- eksik olan
+sadece ilk doğrulamadan sonraki geri bildirimdi.
+
+Bu, bir önceki turda `/giveaway-test`'te bulduğum bug'ın BİREBİR
+AYNISI: `_on_appeal_verified` handler'ı sadece `_appeal_verified_users`
+setine ekliyordu, hiçbir DM yoktu. Aynı düzeltmeyi buraya da uyguladım:
+doğrulama başarılı olunca "Doğrulandın! Artık `/appeal` komutunu tekrar
+çalıştırıp itirazını gönderebilirsin." DM'i gidiyor
+(`bot.fetch_user`/`user.send`, `discord.Forbidden`'a karşı
+`contextlib.suppress` ile korunmuş -- aynı desen).
+
+**Ders**: bu üçüncü kez aynı kategori bug (giveaway-test, appeal, ve
+muhtemelen ileride farkedilecek başka handler'lar) -- `on_verified()`
+handler'ı ekleyen her yeni senaryoda "kullanıcıya bir geri bildirim
+gönderiyor mu" kontrolünü baştan bir checklist maddesi yapmalıyım,
+tek tek kullanıcı raporu bekleyerek değil.
+
+**Test zorluğu**: appeal_gate `ProofOfWorkProvider` kullanıyor (Math
+değil), bu yüzden test scriptimde ilk denemede `_captcha_store`'dan
+ham `pending.answer`'ı cevap olarak yollamaya çalıştım -- bu PoW için
+anlamsız (PoW'un "answer"ı gerçek bir nonce, saklanan challenge verisi
+değil), test `verified: False` döndü. `providers/proof_of_work.py`'nin
+kendi test dosyasındaki `_solve_pow` desenini (gerçek hashcash arama)
+kullanınca doğru şekilde geçti ve DM'in gönderildiği kanıtlandı --
+bir CaptchaGate'in hangi provider'ı kullandığını (Math/PoW/PathTrace)
+kontrol etmeden "cevap" uydurmanın yanlış test sonucuna yol açabileceği
+küçük ama somut bir hatırlatma.
+
 ## dörtlü fiziksel test raporu -- ayrıştırma + 2 gerçek bug + 2 netleştirme (bu oturum, devam)
 
 Kullanıcının tek mesajda bildirdiği dört ayrı gözlem, tek tek incelenip

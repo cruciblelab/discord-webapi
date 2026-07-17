@@ -210,7 +210,22 @@ _appeal_verified_users: set[int] = set()
 
 
 async def _on_appeal_verified(event: CaptchaVerified) -> None:
+    """Same real bug as Scenario 4's `_on_giveaway_test_joined`: this used
+    to only update the in-memory `_appeal_verified_users` set with no
+    feedback to the user at all -- solving the web widget looked like
+    "nothing happened" (a real testing report: "doğruladım otomatik
+    birşey olmadı"). The user has to know they're cleared to go back to
+    Discord and resend `/appeal` (this demo doesn't remember the appeal
+    `reason` across the verification round-trip, so it can't be
+    auto-resubmitted for them -- a real bot might queue and replay it
+    instead, but that's a bigger change than this fix)."""
     _appeal_verified_users.add(event.user_id)
+    user = await bot.fetch_user(event.user_id)
+    with contextlib.suppress(discord.Forbidden):
+        await user.send(
+            "Doğrulandın! Artık `/appeal` komutunu tekrar çalıştırıp "
+            "itirazını gönderebilirsin."
+        )
 
 
 appeal_gate.on_verified(_on_appeal_verified, purpose="appeal_gate")
