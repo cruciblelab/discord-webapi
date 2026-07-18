@@ -4,7 +4,7 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 import discord
 from discord.ext import commands
@@ -83,6 +83,8 @@ from discord_webapi.web import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
     from discord_webapi.escalation.sql import SQLEscalationRuleStore, SQLViolationStore
     from discord_webapi.jobs.redis import RedisJobQueue
     from discord_webapi.storage.sql import (
@@ -216,6 +218,60 @@ async def _with_job_queue(
     finally:
         if started:
             await job_queue.stop()
+
+
+def _quickstart_engine(*, database_url: str | None, db_path: str | Path | None) -> AsyncEngine:
+    """Resolves `quickstart()`'s storage target -- explicit `database_url`,
+    else `DATABASE_URL` env var, else a local SQLite file at `db_path`
+    (default `dashboard.sqlite3`) -- and creates the engine for it."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    database_url = database_url or os.environ.get("DATABASE_URL")
+    if not database_url:
+        sqlite_path = Path(db_path) if db_path else Path("dashboard.sqlite3")
+        database_url = f"sqlite+aiosqlite:///{sqlite_path}"
+    return create_async_engine(database_url)
+
+
+class _QuickstartStores(NamedTuple):
+    """Every SQL-backed store `quickstart()` wires up, plus the two
+    (`escalation_rule_store`/`violation_store`) it also needs a
+    `create_all()` call for in its own lifespan."""
+
+    session_store: SQLSessionStore
+    command_store: SQLCommandConfigStore
+    authz_store: SQLAuthzStore
+    audit_store: SQLAuditStore
+    consent_store: SQLConsentStore
+    rate_limit_store: SQLRateLimitStore
+    escalation_rule_store: SQLEscalationRuleStore
+    violation_store: SQLViolationStore
+
+
+def _quickstart_sql_stores(engine: AsyncEngine) -> _QuickstartStores:
+    """Constructs quickstart()'s full set of SQL-backed stores against one
+    shared engine -- split out from quickstart() purely for readability,
+    no behavior change."""
+    from discord_webapi.escalation.sql import SQLEscalationRuleStore, SQLViolationStore
+    from discord_webapi.storage.sql import (
+        SQLAuditStore,
+        SQLAuthzStore,
+        SQLCommandConfigStore,
+        SQLConsentStore,
+        SQLRateLimitStore,
+        SQLSessionStore,
+    )
+
+    return _QuickstartStores(
+        session_store=SQLSessionStore(engine),
+        command_store=SQLCommandConfigStore(engine),
+        authz_store=SQLAuthzStore(engine),
+        audit_store=SQLAuditStore(engine),
+        consent_store=SQLConsentStore(engine),
+        rate_limit_store=SQLRateLimitStore(engine),
+        escalation_rule_store=SQLEscalationRuleStore(engine),
+        violation_store=SQLViolationStore(engine),
+    )
 
 
 class DiscordWebAPI:
@@ -615,20 +671,7 @@ class DiscordWebAPI:
         guild ID as `sync_guild_id` while developing for near-instant
         propagation to just that one guild instead.
         """
-        from sqlalchemy.ext.asyncio import create_async_engine
-
-        from discord_webapi.escalation.sql import SQLEscalationRuleStore, SQLViolationStore
-        from discord_webapi.storage.sql import (
-            SQLAuditStore,
-            SQLAuthzStore,
-            SQLCommandConfigStore,
-            SQLConsentStore,
-            SQLRateLimitStore,
-            SQLSessionStore,
-        )
-        from discord_webapi.storage.sql import (
-            create_all as create_all_tables,
-        )
+        from discord_webapi.storage.sql import create_all as create_all_tables
 
         bot_token = bot_token or os.environ["DISCORD_BOT_TOKEN"]
         client_id = client_id or os.environ["DISCORD_CLIENT_ID"]
@@ -639,33 +682,28 @@ class DiscordWebAPI:
         if isinstance(key, str):
             key = key.encode()
 
-        database_url = database_url or os.environ.get("DATABASE_URL")
-        if not database_url:
-            sqlite_path = Path(db_path) if db_path else Path("dashboard.sqlite3")
-            database_url = f"sqlite+aiosqlite:///{sqlite_path}"
-        engine = create_async_engine(database_url)
-        escalation_rule_store = SQLEscalationRuleStore(engine)
-        violation_store = SQLViolationStore(engine)
+        engine = _quickstart_engine(database_url=database_url, db_path=db_path)
+        stores = _quickstart_sql_stores(engine)
         auth = DiscordAuth(
             client_id=client_id,
             client_secret=client_secret,
             redirect_uri=redirect_uri,
             encryption_keys=key,
             cookie_secure=base_url.startswith("https://"),
-            session_store=SQLSessionStore(engine),
+            session_store=stores.session_store,
             mobile_redirect_uri=mobile_redirect_uri,
         )
         api = cls(
             bot=bot,
             transport=InProcessTransport(),
             auth=auth,
-            command_store=SQLCommandConfigStore(engine),
-            authz_store=SQLAuthzStore(engine),
-            audit_store=SQLAuditStore(engine),
-            consent_store=SQLConsentStore(engine),
-            rate_limit_store=SQLRateLimitStore(engine),
-            escalation_rule_store=escalation_rule_store,
-            violation_store=violation_store,
+            command_store=stores.command_store,
+            authz_store=stores.authz_store,
+            audit_store=stores.audit_store,
+            consent_store=stores.consent_store,
+            rate_limit_store=stores.rate_limit_store,
+            escalation_rule_store=stores.escalation_rule_store,
+            violation_store=stores.violation_store,
             sync_commands=sync_commands,
             sync_guild_id=sync_guild_id,
         )
@@ -673,8 +711,8 @@ class DiscordWebAPI:
         @asynccontextmanager
         async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             await create_all_tables(engine)
-            await escalation_rule_store.create_all()
-            await violation_store.create_all()
+            await stores.escalation_rule_store.create_all()
+            await stores.violation_store.create_all()
             async with api.lifespan(bot_token):
                 yield
 

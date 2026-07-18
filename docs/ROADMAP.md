@@ -122,13 +122,19 @@ isteyene `PrometheusMetricsSink` / OpenTelemetry adaptörü. "Kaç job
 default kapalı, çekirdeğe bağımlılık eklemez.**
 
 ### P2 — Teknik borç
-**P2.1 — `DiscordWebAPI.__init__` (179 satır) ve `quickstart` refactor.**
-Store kurulumunu (`_build_stores`), engine kurulumunu (`_create_engine`)
-yardımcı metodlara böl. Davranış değişmez, sadece okunabilirlik.
+**P2.1 — `DiscordWebAPI.__init__` ve `quickstart` refactor.** ✅ **TAMAMLANDI.**
+`quickstart`'ın engine kurulumu `_quickstart_engine()`'e, 8 SQL store'un
+kurulumu (`_QuickstartStores` NamedTuple döndüren) `_quickstart_sql_stores()`'a
+çıkarıldı -- `quickstart`'ın gövdesi artık sadece env var okuma + bu iki
+yardımcıyı çağırma. `DiscordWebAPI.__init__`'in kendisi zaten makul
+uzunluktaydı (iyi yorumlanmış, tek bir mantıksal akış), ek bölme
+gerektirmedi. Davranış değişmedi -- tam test suite (529 test) ve
+tam mypy/ruff yeşil.
 
-**P2.2 — `SimpleNamespace` fake'lemesini prod kodundan ayıkla.**
-Çoğu zaten test'te (kabul edilebilir); prod kodunda kalan varsa gerçek
-tiplerle değiştir.
+**P2.2 — `SimpleNamespace` fake'lemesini prod kodundan ayıkla.** ✅ **TAMAMLANDI (kontrol edildi, aksiyon gerekmedi).**
+`SimpleNamespace` sadece `tests/`'te (18 dosya) ve
+`extensions/scaffold.py`'nin ürettiği test şablonunda kullanılıyor --
+gerçek prod kodunda (test dışı) hiç yok, zaten konvansiyona uygundu.
 
 **P2.3 — Sürüm numarasını gerçek olgunlukla senkronla.**
 `pyproject.toml` hâlâ `0.1.0` ama CHANGELOG "v0.6" vizyonunda. Bir `v1.0`
