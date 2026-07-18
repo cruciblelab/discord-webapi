@@ -322,7 +322,7 @@ Sağlayıcı aileleri:
 - **Üçüncü-taraf widget'lar** -- `ReCaptchaProvider`, `HCaptchaProvider`
   (kendi site_key/secret_key'iniz). Sadece `httpx` (zaten çekirdek).
 - **Tekrarlanan-hareket / replay tespiti** (`RepeatedMovementCheck`,
-  `discord_webapi.captcha.replay_guard`) -- yukarıdaki kinematik
+  `webapi_captcha.replay_guard`) -- yukarıdaki kinematik
   sezgisellerin **tek gerçek çözemediği** sorunu (bir bot gerçek bir insan
   hareketini kaydedip replay ederse tek-istekli hiçbir analiz bunu
   yakalayamaz) için: bu, tek istekli değil **geçmişe bakan** bir kontrol.
@@ -340,7 +340,7 @@ Sağlayıcı aileleri:
   düşünce yakalanmayabilir). Varsayılan olarak hiçbir gate'e bağlı değil --
   `extra_checks=[RepeatedMovementCheck(store)]` ile isteyen ekler.
 
-**Hazır widget (`discord_webapi.captcha.widget`, opt-in)**: alt yapının
+**Hazır widget (`webapi_captcha.widget`, opt-in)**: alt yapının
 üstüne "hızlı kullanmak isteyenler için" bir katman -- kendi frontend'ini
 sıfırdan yazmak istemeyenler için tek `<div>` + tek `<script>` ile gömülen,
 gerçek bir Cloudflare-Turnstile-tarzı checkbox widget:
@@ -349,8 +349,8 @@ gerçek bir Cloudflare-Turnstile-tarzı checkbox widget:
 app.include_router(build_captcha_widget_router())
 ```
 ```html
-<div class="dwa-captcha-widget" data-token="{token}"></div>
-<script src="/static/discord-webapi-captcha-widget.js" data-callback="onVerified"></script>
+<div class="wac-captcha-widget" data-token="{token}"></div>
+<script src="/static/webapi-captcha-widget.js" data-callback="onVerified"></script>
 <script>function onVerified(result) { /* result.verified, result.failed_check */ }</script>
 ```
 
@@ -362,13 +362,13 @@ Path-trace ise gömülü bir `<canvas>`; reCAPTCHA/hCaptcha ise onların kendi
 widget'ını gömer. Mouse/dokunma sinyallerini (kinematik dahil) sayfa
 yüklendiği andan itibaren kendisi toplar -- ayrıca bir şey yazmanıza
 gerek yok. Her adım (yaklaşma, tam tıklanan piksel, animasyon, sunucu
-sonucu) `document` üzerinde bir `dwa-captcha-widget-log` CustomEvent'i
+sonucu) `document` üzerinde bir `wac-captcha-widget-log` CustomEvent'i
 olarak da yayınlanır -- kendi görünür zaman çizelgenizi istiyorsanız
 onu dinleyin (`examples/captcha_playground` tam olarak bunu yapıyor).
 
 **Birden fazla gate amacı aynı anda** (örn. bir çekiliş gate'i + ayrı bir
 "çok ban yemişse itiraz komutundan önce doğrula" gate'i): `build_captcha_router()`
-varsayılan olarak tek bir `app.state.discord_webapi_captcha_gate`'i okur --
+varsayılan olarak tek bir `app.state.webapi_captcha_gate`'i okur --
 tek bir entegrasyonu olan gerçek bir deploy için doğru tasarım budur. Birden
 fazla gate'iniz varsa `gate=` parametresini açıkça verip router'ı her gate
 için ayrı bir prefix altında mount edin:
@@ -420,7 +420,7 @@ anahtarları -- sağlıklı bir varsayılan yok) -- kendiniz oluşturup
 
 ```python
 provider = MathCaptchaProvider(MemoryCaptchaStore())
-app.state.discord_webapi_captcha_providers = {"math": provider}
+app.state.webapi_captcha_providers = {"math": provider}
 app.include_router(build_captcha_router())
 ```
 
@@ -437,7 +437,7 @@ olsa bile çalışıyor:
 
 ```python
 gate = CaptchaGate(transport, MemoryVerificationStore(), provider)
-app.state.discord_webapi_captcha_gate = gate
+app.state.webapi_captcha_gate = gate
 app.include_router(build_captcha_router())
 
 async def handle_verified(event):
@@ -531,7 +531,7 @@ sahtelenemeyen IP'yi check'lerinize ulaştırıyor, siz istediğiniz kaynakla
 rate-limit/abuse geçmişiniz) birleştirebilirsiniz.
 
 **`AdaptiveCaptchaGate` -- Cloudflare "Under Attack Mode" deseni
-(`discord_webapi.captcha.adaptive`, opt-in):** yukarıdaki IP itibarı
+(`webapi_captcha.adaptive`, opt-in):** yukarıdaki IP itibarı
 hook'unun bir adım ötesi -- "IP itibarı kötüyse otomatik olarak captcha
 tetiklensin, temizse hiç sorulmasın, geçince bir süre tekrar sorulmasın"
 isteği için hazır, dinamik bir gate. `CaptchaGate`'in aksine `require_captcha`
@@ -539,10 +539,10 @@ inşa anında sabit değil -- karar, linkin ilk açıldığı anda (bağlanan IP
 belli olduğunda) veriliyor:
 
 ```python
-from discord_webapi.captcha.adaptive import (
+from webapi_captcha.adaptive import (
     AdaptiveCaptchaGate, MemoryAdaptiveDecisionStore, MemoryTrustStore,
 )
-from discord_webapi.captcha.reputation import StaticBlocklistReputationChecker
+from webapi_captcha.reputation import StaticBlocklistReputationChecker
 
 gate = AdaptiveCaptchaGate(
     transport, MemoryVerificationStore(),
@@ -568,7 +568,7 @@ geçmişiniz) de implemente edebilirsiniz. Somut, çalışan bir örnek:
 izleyebiliyorsunuz.
 
 **`PageGuard` -- aynı Cloudflare deseni ama TEK BİR link için değil,
-HERHANGİ bir sayfa için (`discord_webapi.captcha.pageguard`, opt-in):**
+HERHANGİ bir sayfa için (`webapi_captcha.pageguard`, opt-in):**
 `AdaptiveCaptchaGate` tek bir doğrulama linkini koruyor; `PageGuard` bunu
 sayfa-yükleme anında, keyfi bir route'un önüne koyabilecek şekilde
 genelleştiriyor -- "cloudflare gibi tam kapasite geniş bir altyapı,
@@ -576,7 +576,7 @@ Discord yetkilendirmesinden önce de captcha ekleyebilelim" isteğinin
 karşılığı:
 
 ```python
-from discord_webapi.captcha.pageguard import PageGuard, PageGuardRedirect, missing_accept_language
+from webapi_captcha.pageguard import PageGuard, PageGuardRedirect, missing_accept_language
 
 guard = PageGuard(
     adaptive_gate,  # bir AdaptiveCaptchaGate -- bind_trust_to_ip=True ile IP değişince tekrar sorar
@@ -621,7 +621,7 @@ kullanacağınızı seçebiliyorsunuz --
 # Davranışsal skorun İÇİNDE hangi sezgisellerin çalışacağını seçin --
 # örn. mouse-kinematiğini istemiyorsanız listeden çıkarın, kendi
 # sezgiselinizi ekleyin, ağırlıkları değiştirin:
-from discord_webapi.captcha.scoring import ScoringHeuristic, default_behavior_heuristics
+from webapi_captcha.scoring import ScoringHeuristic, default_behavior_heuristics
 
 heuristics = [
     h for h in default_behavior_heuristics()

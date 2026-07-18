@@ -30,13 +30,13 @@
 <section>
   <h2>0) Hazır widget (kütüphanenin kendi bundled UI'sı)</h2>
   <p class="muted">
-    Bu, elle yazılmış bir mock değil -- <code>discord_webapi.captcha.widget</code>'ın
+    Bu, elle yazılmış bir mock değil -- <code>webapi_captcha.widget</code>'ın
     bizzat sunduğu, tek &lt;div&gt; + tek &lt;script&gt; ile gömülen gerçek
     widget. Aşağıdaki listeden bir <code>CaptchaGate</code> konfigürasyonu
     seçin -- widget kendi UI'sını o gate'in verdiği challenge'a göre
     (görsel/PoW/çizgi/3.taraf/hiçbiri) otomatik uyarlıyor. Her adım
     (yaklaşma, tam tıklanan piksel, animasyon, sunucu sonucu) aşağıdaki
-    log'a widget'ın kendi <code>dwa-captcha-widget-log</code> event'leri
+    log'a widget'ın kendi <code>wac-captcha-widget-log</code> event'leri
     üzerinden yazılıyor -- playground bu event'leri dinlemekten başka bir
     şey yapmıyor.
   </p>
@@ -110,10 +110,10 @@
 <div id="log"></div>
 
 <!-- the bundled widget script -- loaded here (before the page's own
-     script below) so window.dwaCaptchaWidgetInit exists by the time
+     script below) so window.wacCaptchaWidgetInit exists by the time
      this page calls it. data-callback names the function the widget
      calls once a verification finishes. -->
-<script src="/static/discord-webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
+<script src="/static/webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
 
 <script>
 'use strict';
@@ -234,13 +234,13 @@ document.getElementById('btn-behavior-replay').addEventListener('click', async (
   await runBehaviorCheck(signals, 'replay testi (aynı hareket ikinci kez)');
 });
 
-// ---- 0) the bundled widget (discord_webapi.captcha.widget) ----
+// ---- 0) the bundled widget (webapi_captcha.widget) ----
 // This section doesn't reimplement anything -- it just renders the
-// real <div class="dwa-captcha-widget" data-token="..."> the library
+// real <div class="wac-captcha-widget" data-token="..."> the library
 // ships, and listens for the widget's own diagnostic events to display
 // them here. Everything you see in the log for this section is the
 // widget's own doing, not playground-specific code.
-document.addEventListener('dwa-captcha-widget-log', (e) => {
+document.addEventListener('wac-captcha-widget-log', (e) => {
   const d = e.detail;
   log(d.message, d.ok, d.detail);
 });
@@ -257,8 +257,8 @@ async function reloadWidget() {
   const resp = await fetch(`/api/playground/widget-token?kind=${kind}`);
   const { token } = await resp.json();
   document.getElementById('widget-holder').innerHTML =
-    `<div class="dwa-captcha-widget" data-token="${token}"></div>`;
-  if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+    `<div class="wac-captcha-widget" data-token="${token}"></div>`;
+  if (window.wacCaptchaWidgetInit) window.wacCaptchaWidgetInit();
   log('widget: yeni token alındı', null, `gate=${kind}, token=${token}`);
 }
 

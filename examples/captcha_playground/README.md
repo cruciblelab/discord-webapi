@@ -7,7 +7,7 @@ değil); sonuç ekrandaki log paneline PASS/FAIL olarak yazılır.
 
 ## Ne test edilebiliyor
 
-0. **Hazır widget** (`discord_webapi.captcha.widget`) -- kütüphanenin
+0. **Hazır widget** (`webapi_captcha.widget`) -- kütüphanenin
    kendi sunduğu, tek `<div>` + tek `<script>` ile gömülen gerçek
    bundled widget (elle yazılmış bir mock değil). Bir `CaptchaGate`
    konfigürasyonu seçin (hiçbiri/Math/Text/PoW/Path-trace/varsa
@@ -16,7 +16,7 @@ değil); sonuç ekrandaki log paneline PASS/FAIL olarak yazılır.
    itibaren her adım (ilk hareket/dokunuş, kutuya yaklaşma, tam tıklanan
    piksel + merkezden sapma -- tam ortaya tıklarsanız bunu açıkça
    "şüpheli" diye işaretliyor --, kontrol animasyonu, sunucunun verdiği
-   sonuç) widget'ın kendi `dwa-captcha-widget-log` event'leri üzerinden
+   sonuç) widget'ın kendi `wac-captcha-widget-log` event'leri üzerinden
    loglanıyor; playground bu event'leri dinlemekten başka bir şey
    yapmıyor. ~2.5sn sonra kendini sıfırlayıp tekrar denemenize izin
    veriyor -- fiziksel testin ana noktası burası.

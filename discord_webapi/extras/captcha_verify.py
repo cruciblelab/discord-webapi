@@ -1,7 +1,8 @@
 """A ready-made "get me a verification link" command -- the quick-usage
-front door to `discord_webapi.captcha`'s `CaptchaGate`/`AdaptiveCaptchaGate`,
-same convention as every other builtin in this package (`warn.py`,
-`ban.py`, ...): `setup(bot, **kwargs)`, nothing auto-registered.
+front door to `webapi_captcha`'s `CaptchaGate`/`AdaptiveCaptchaGate` (the
+standalone captcha library discord-webapi's own `discord_webapi.captcha`
+re-exports), same convention as every other builtin in this package
+(`warn.py`, `ban.py`, ...): `setup(bot, **kwargs)`, nothing auto-registered.
 
 This is deliberately thin. The actual verification *policy* -- which
 captcha kind, account-binding, IP-adaptive escalation, trust duration,
@@ -23,7 +24,7 @@ import discord
 from discord.ext import commands
 
 if TYPE_CHECKING:
-    from discord_webapi.captcha.models import VerificationRequest
+    from webapi_captcha.models import VerificationRequest
 
 
 class _VerificationGate(Protocol):

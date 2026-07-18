@@ -1,6 +1,119 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Captcha sağlamlaştırma + hızlı kullanım ekstraları (bu oturum)
+## Captcha, ayrı bir kütüphaneye taşındı: `webapi-captcha` (bu oturum)
+
+Kullanıcının kendi kelimeleriyle talebi: "Overengineering oldu capcthayı
+ayrı bir kütüphane yapalım public hem onu hem bunu geliştiririz ... bu
+APIden çok toola dönüyor hissiyatı verdi." Cevap vermeden önce somut bir
+ölçüm yapıldı (grep ile): `discord_webapi/captcha/` (~4300 satır Python +
+502 satır JS) ile geri kalan kütüphane arasında SADECE 3 gerçek bağımlılık
+vardı (`Transport`/`Event`, `TokenBucketLimiter`,
+`DiscordUser`/`get_current_user_optional`) ve TERS yönde (kütüphanenin
+geri kalanının captcha'ya bağımlılığı) neredeyse sıfırdı (sadece kendi
+yazdığım `extras/captcha_verify.py`, ve o da sadece `TYPE_CHECKING`
+altında). Bu ölçüm "düşük risk, şimdi yapılabilir" önerisini doğrudan
+destekledi.
+
+Kullanıcının netleştirdiği bağlayıcı koşullar (iki ayrı mesajda, ilk
+AskUserQuestion iptal edilip düz metinle cevaplandı):
+- Ayrı repo: `cruciblelab/web-api-captcha` (kullanıcı boş repoyu + Apache
+  2.0 LICENSE dosyasını önceden eklemişti).
+- discord-webapi tarafında GitHub'dan doğrudan, güncel kurulum.
+- `discord_webapi/captcha/` klasöründe birkaç gerekli dosya kalsın --
+  paket kurulmadan kodda kullanılmaya çalışılırsa direkt "bunu yüklemeniz
+  lazım" diyen açık bir hata versin; kurmak istemezse sorun değil, kendi
+  çözümünü yazar ya da üçüncü-taraf birini kullanır, "bizi ilgilendirmez."
+- Paket adı: `webapi-captcha` (pip adı, tire ile; import adı
+  `webapi_captcha`, alt çizgiyle -- Python zorunluluğu).
+
+Ayrıca ayrı bir ürün kararı ortaya çıktı ve tek taraflı karar verilmedi:
+bundled `widget.js`'nin TÜM kullanıcıya görünen metinleri (buton/hata/
+durum yazıları, ~30 string) Türkçe hardcoded'di. AskUserQuestion ile
+soruldu ("Public/Apache-2.0 paket için ne yapalım?"), kullanıcı
+"İngilizce'ye çevir, varsayılan yap (Recommended)" seçeneğini seçti --
+tamamen uygulandı, hiçbir konfigürasyon mekanizması eklenmedi (istenmedi).
+
+### Yapılanlar (hepsi commit'lenip push edildi, her iki repo da yeşil)
+
+**`web-api-captcha` (yeni repo, `/workspace/web-api-captcha`):**
+1. `pyproject.toml` sıfırdan yazıldı (`name = "webapi-captcha"`, Apache-2.0,
+   `sql-sqlite`/`sql-postgres`/`sql-mysql`/`sql`/`render`/`all`/`dev`
+   extra'ları, discord-webapi ile birebir aynı ruff/mypy strict config).
+2. Kendi `webapi_captcha/transport.py`'si yazıldı -- `Transport` Protocol
+   (sadece publish+subscribe, captcha kodunun gerçekten kullandığı alt
+   küme -- grep ile doğrulandı: `.start()/.stop()/.register_handler()/
+   .request()` hiç çağrılmıyor) + tam bağımsız `InProcessTransport`.
+   discord-webapi'nin kendi `InProcessTransport`/`RedisTransport`'u bu
+   Protocol'ü yapısal olarak (duck typing) zaten karşılıyor, hiçbir
+   `isinstance` kontrolü yok -- adaptörsüz interop.
+3. Tüm `discord_webapi/captcha/*.py` dosyaları `webapi_captcha/`'a
+   taşındı; her dosyadaki Discord'a özgü referanslar (docstring'ler,
+   yorumlar, gömülü Türkçe alıntılar) genel/İngilizce hale getirildi;
+   `dwa_`/`dwa-` önekleri `wac_`/`wac-`'a çevrildi (SQL tablo adları,
+   cookie adı `wac_visitor_id`, CSS sınıfları, JS event'leri, script
+   dosya adı `webapi-captcha-widget.js`).
+4. `api.py`'ye `CurrentUserIdResolver` type alias + `_no_current_user()`
+   varsayılanı + `build_captcha_router(current_user_id_resolver=...)`
+   parametresi eklendi; `verify_gate` artık `DiscordUser` yerine bu
+   resolver'dan gelen `user_id: int | None`'ı kullanıyor.
+5. Test paketi taşındı (17 dosya -- `test_captcha_verify.py` Discord'a
+   özgü olduğu için discord-webapi'de kaldı): `test_captcha_api.py`'nin
+   hesap-bağlama testleri artık gerçek `DiscordAuth`+OAuth mock yerine
+   basit bir `app.state.signed_in_user_id` bayrağı + `current_user_id_
+   resolver` kullanıyor -- eski/yeni test sayısı birebir eşleşiyor (241).
+   `checks.py`'nin "signed in as a different Discord account" string'i
+   "different account"a genericize edildiğinde ilgili test de güncellendi.
+6. Gerçek bir README.md yazıldı (İngilizce -- widget çevirisi kararıyla
+   tutarlı): kurulum, iki quickstart deseni (düz web kullanımı + gated
+   verification), sağlayıcı ailesi özeti (dürüst notlarla), adaptive
+   escalation/PageGuard, widget, storage, discord-webapi entegrasyon notu.
+   README'deki kod örnekleri gerçekten çalıştırılıp doğrulandı.
+
+**`discord-webapi` (bu repo):**
+1. `discord_webapi/captcha/`'daki TÜM eski implementasyon dosyaları
+   silindi, sadece tek bir `__init__.py` kaldı -- ince bir re-export
+   şimi: `webapi_captcha` kuruluysa aynı eski `__all__` listesini
+   (65 isim) re-export ediyor, kurulu değilse kurulum talimatlarını
+   içeren açık bir `ImportError` fırlatıyor (bare `ModuleNotFoundError`
+   değil).
+2. İki yeni, Discord'a özgü kolaylık eklendi (webapi_captcha'nın kendisi
+   bunları sağlayamaz, Discord'u hiç bilmiyor): `resolve_discord_user_id`
+   (discord-webapi'nin OAuth session'ına bağlı hazır bir
+   `current_user_id_resolver`) ve `build_discord_captcha_router()`
+   (`webapi_captcha.build_captcha_router`'ın bunu önceden bağlanmış
+   hali) -- hesap-bağlı bir gate discord-webapi girişine artık sıfır
+   elle kablo ile bağlanıyor.
+3. `pyproject.toml`'daki `captcha` extra'sı `Pillow>=10.1`'den
+   `webapi-captcha[render] @ git+https://github.com/cruciblelab/web-api-captcha`'a
+   değişti.
+4. `extras/captcha_verify.py`'nin `TYPE_CHECKING` importu
+   `discord_webapi.captcha.models`'tan `webapi_captcha.models`'a
+   değiştirildi (doğrudan gerçeği yansıtıyor, ekstra dolaylama yok).
+5. İki örnek dosya (`examples/captcha_playground/main.py`,
+   `examples/captcha_gate_bot/main.py`) yeni pakete göre güncellendi --
+   derin alt-modül import'ları (`discord_webapi.captcha.gate` vb.)
+   `webapi_captcha.gate` vb.'ye çevrildi, `app.state.discord_webapi_
+   captcha_*` anahtarları `app.state.webapi_captcha_*`'a, `dwa-captcha-
+   widget`/`discord-webapi-captcha-widget.js`/`dwaCaptchaWidgetInit`
+   `wac-captcha-widget`/`webapi-captcha-widget.js`/`wacCaptchaWidgetInit`'e.
+   `captcha_gate_bot`'taki `require_account=True` gate'lerin router mount'ları
+   (`giveaway_gate`, `appeal_gate`, `giveaway_test_*_gate`, `adaptive_gate`)
+   `build_discord_captcha_router()`'a geçirildi; hesap gerektirmeyenler
+   (`test_path_trace_gate` vb.) düz `webapi_captcha.build_captcha_router`'da
+   kaldı -- her iki örnek de gerçek env var'larla import edilip test edildi.
+6. Eski 17 captcha test dosyası (unit+integration) silindi -- aynı
+   testler artık web-api-captcha'da yaşıyor. Yeni bir
+   `tests/integration/test_captcha_shim.py` eklendi: re-export
+   yüzeyinin `webapi_captcha`'nınkiyle birebir eşleştiğini, ve
+   `build_discord_captcha_router()`'ın hiçbir elle `current_user_id_
+   resolver` verilmeden gerçek bir `DiscordAuth`/OAuth mock login'i
+   üzerinden doğru hesabı bağladığını (yanlış hesap reddediliyor, doğru
+   hesap geçiyor) uçtan uca doğruluyor.
+7. Doğrulama: `discord_webapi/` + `examples/` ruff/mypy --strict temiz,
+   529 test yeşil + 40 skip, sadece 2 test (Postgres/Redis reachability)
+   bu ortamda altyapı eksikliğinden başarısız -- ilgisiz, ortam kaynaklı.
+
+## Captcha sağlamlaştırma + hızlı kullanım ekstraları (önceki oturum)
 
 Kütüphane denetiminden hemen sonra kullanıcının verdiği talimat: "Şimdi
 capctha sistemine sağlamlaştırma ve capctha sistemi için ekstralara hızlı

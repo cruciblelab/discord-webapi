@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 from discord.ext import commands as dpy_commands
 
-from discord_webapi.captcha.models import VerificationRequest
 from discord_webapi.extras.captcha_verify import setup as setup_captcha_verify
+from webapi_captcha.models import VerificationRequest
 
 GUILD_ID = 999
 

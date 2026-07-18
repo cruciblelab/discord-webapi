@@ -16,14 +16,16 @@ OAuth login.
 
 Both gates share one thing: `require_account=True`, which is what turns
 "someone solved a captcha" into "this exact Discord account solved a
-captcha" -- see `discord_webapi.captcha.gate`'s docstring for why a bare
+captcha" -- see `webapi_captcha.gate`'s docstring for why a bare
 captcha can't give you that on its own.
 
 Because there are *two* independent gate purposes here, each is mounted
-under its own URL prefix via `build_captcha_router(gate=...)` (see that
-module's docstring) rather than the single-gate
-`app.state.discord_webapi_captcha_gate` shortcut -- and the bundled
-widget's `data-api-base` attribute is pointed at the matching prefix.
+under its own URL prefix via `build_discord_captcha_router(gate=...)`
+(discord_webapi.captcha's account-aware wrapper around
+`webapi_captcha.build_captcha_router` -- see that module's docstring)
+rather than the single-gate `app.state.webapi_captcha_gate` shortcut --
+and the bundled widget's `data-api-base` attribute is pointed at the
+matching prefix.
 
 Run:
     pip install -e "."                            # PoW needs no extras
@@ -86,7 +88,7 @@ general pattern for physical-testing an example bot):
                                      real Math captcha -- exactly the two
                                      tiers AdaptiveCaptchaGate does on its
                                      own, no extra chaining
-    /test-full-guard              -> discord_webapi.captcha.pageguard.
+    /test-full-guard              -> webapi_captcha.pageguard.
                                      PageGuard -- the real, reusable
                                      "put this in front of ANY page"
                                      infrastructure (not one minted
@@ -114,32 +116,33 @@ import discord
 from discord.ext import commands
 from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from webapi_captcha.adaptive import (
+    AdaptiveCaptchaGate,
+    MemoryAdaptiveDecisionStore,
+    MemoryTrustStore,
+)
+from webapi_captcha.api import build_captcha_router
+from webapi_captcha.events import CaptchaVerified
+from webapi_captcha.gate import CaptchaGate
+from webapi_captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
+from webapi_captcha.pageguard import PageGuard, PageGuardRedirect, missing_accept_language
+from webapi_captcha.providers.math_captcha import MathCaptchaProvider
+from webapi_captcha.providers.path_trace import PathTraceProvider
+from webapi_captcha.providers.proof_of_work import ProofOfWorkProvider
+from webapi_captcha.replay_guard import (
+    MemoryTrajectoryFingerprintStore,
+    RepeatedMovementCheck,
+)
+from webapi_captcha.reputation import StaticBlocklistReputationChecker
+from webapi_captcha.scoring import SignalScoreCheck
+from webapi_captcha.signals import reject_webdriver
+from webapi_captcha.widget import build_captcha_widget_router
 
 from discord_webapi import DiscordWebAPI
 from discord_webapi.auth.dependencies import get_current_user_optional
 from discord_webapi.auth.models import DiscordUser
 from discord_webapi.bot import default_intents
-from discord_webapi.captcha.adaptive import (
-    AdaptiveCaptchaGate,
-    MemoryAdaptiveDecisionStore,
-    MemoryTrustStore,
-)
-from discord_webapi.captcha.api import build_captcha_router
-from discord_webapi.captcha.events import CaptchaVerified
-from discord_webapi.captcha.gate import CaptchaGate
-from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
-from discord_webapi.captcha.pageguard import PageGuard, PageGuardRedirect, missing_accept_language
-from discord_webapi.captcha.providers.math_captcha import MathCaptchaProvider
-from discord_webapi.captcha.providers.path_trace import PathTraceProvider
-from discord_webapi.captcha.providers.proof_of_work import ProofOfWorkProvider
-from discord_webapi.captcha.replay_guard import (
-    MemoryTrajectoryFingerprintStore,
-    RepeatedMovementCheck,
-)
-from discord_webapi.captcha.reputation import StaticBlocklistReputationChecker
-from discord_webapi.captcha.scoring import SignalScoreCheck
-from discord_webapi.captcha.signals import reject_webdriver
-from discord_webapi.captcha.widget import build_captcha_widget_router
+from discord_webapi.captcha import build_discord_captcha_router
 
 bot = commands.Bot(command_prefix="!", intents=default_intents(), help_command=None)
 
@@ -283,8 +286,8 @@ async def appeal(ctx: commands.Context, reason: str) -> None:
 
 
 # -- the web side: each gate purpose gets its own prefix + widget page --
-app.include_router(build_captcha_router(gate=giveaway_gate), prefix="/giveaway")
-app.include_router(build_captcha_router(gate=appeal_gate), prefix="/appeal")
+app.include_router(build_discord_captcha_router(gate=giveaway_gate), prefix="/giveaway")
+app.include_router(build_discord_captcha_router(gate=appeal_gate), prefix="/appeal")
 app.include_router(build_captcha_widget_router())
 
 
@@ -377,8 +380,8 @@ async def _verify_page(
 <body style="font-family:system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 16px">
 <h2>Doğrulama</h2>
 {who}
-<div class="dwa-captcha-widget" data-token="{token}" data-api-base="{api_base}"></div>
-<script src="/static/discord-webapi-captcha-widget.js" data-callback="onVerified"></script>
+<div class="wac-captcha-widget" data-token="{token}" data-api-base="{api_base}"></div>
+<script src="/static/webapi-captcha-widget.js" data-callback="onVerified"></script>
 <script>
 function onVerified(result) {{
   var msg = result.verified
@@ -542,19 +545,19 @@ async def test_widgets_page(path_trace: str, safety: str, original: str) -> HTML
 <h2>Üç captcha türünü karşılaştır</h2>
 
 <h3>1) Çizgi-takip -- sadece görsel, görünmez katman yok</h3>
-<div class="dwa-captcha-widget" data-token="{path_trace}" data-api-base="/test-path-trace"></div>
+<div class="wac-captcha-widget" data-token="{path_trace}" data-api-base="/test-path-trace"></div>
 
 <h3>2) Safety mode -- görünür captcha VE görünmez davranış katmanı ikisi de şart</h3>
 <p style="font-size:.85rem;color:#666">
 Davranış skoru geçse bile görsel captcha'yı da çözmen gerekiyor -- biri
 diğerinin yerine geçmiyor.
 </p>
-<div class="dwa-captcha-widget" data-token="{safety}" data-api-base="/test-safety"></div>
+<div class="wac-captcha-widget" data-token="{safety}" data-api-base="/test-safety"></div>
 
 <h3>3) Orijinal -- sade, tek başına bir Math captcha</h3>
-<div class="dwa-captcha-widget" data-token="{original}" data-api-base="/test-original"></div>
+<div class="wac-captcha-widget" data-token="{original}" data-api-base="/test-original"></div>
 
-<script src="/static/discord-webapi-captcha-widget.js"></script>
+<script src="/static/webapi-captcha-widget.js"></script>
 </body>""")
 
 
@@ -600,13 +603,15 @@ giveaway_test_original_gate = CaptchaGate(
 )
 
 app.include_router(
-    build_captcha_router(gate=giveaway_test_invisible_gate), prefix="/giveaway-test-invisible"
+    build_discord_captcha_router(gate=giveaway_test_invisible_gate),
+    prefix="/giveaway-test-invisible",
 )
 app.include_router(
-    build_captcha_router(gate=giveaway_test_pathtrace_gate), prefix="/giveaway-test-pathtrace"
+    build_discord_captcha_router(gate=giveaway_test_pathtrace_gate),
+    prefix="/giveaway-test-pathtrace",
 )
 app.include_router(
-    build_captcha_router(gate=giveaway_test_original_gate), prefix="/giveaway-test-original"
+    build_discord_captcha_router(gate=giveaway_test_original_gate), prefix="/giveaway-test-original"
 )
 
 # Real participation bookkeeping -- keyed by giveaway_id (one per
@@ -791,15 +796,15 @@ dener -- davranış sinyalleri istemci tarafından gönderildiği için tek
 başına sahtelenebilir, PoW'un maliyeti sahtelenemez. Şüpheli görünürse
 aşağıda ikinci bir widget belirip çizgiyi çizmeni ister.
 </p>
-<div id="invisible-widget" class="dwa-captcha-widget" data-token="{invisible}"
+<div id="invisible-widget" class="wac-captcha-widget" data-token="{invisible}"
      data-api-base="/giveaway-test-invisible"></div>
 <div id="pathtrace-widget-holder"></div>
 
 <h3>2) Orijinal -- sade, tek başına bir Math captcha</h3>
-<div class="dwa-captcha-widget" data-token="{original}"
+<div class="wac-captcha-widget" data-token="{original}"
      data-api-base="/giveaway-test-original"></div>
 
-<script src="/static/discord-webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
+<script src="/static/webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
 <script>
 var INVISIBLE_TOKEN = {invisible!r};
 var PATHTRACE_TOKEN = {pathtrace!r};
@@ -818,9 +823,9 @@ function onWidgetVerified(result) {{
   }}
   document.getElementById("pathtrace-widget-holder").innerHTML =
     "<p>Robot gibi göründün -- lütfen aşağıdaki çizgiyi çiz.</p>" +
-    "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + PATHTRACE_TOKEN +
+    "<div class=\\"wac-captcha-widget\\" data-token=\\"" + PATHTRACE_TOKEN +
     "\\" data-api-base=\\"/giveaway-test-pathtrace\\"></div>";
-  if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+  if (window.wacCaptchaWidgetInit) window.wacCaptchaWidgetInit();
 }}
 </script>
 </body>""")
@@ -854,7 +859,7 @@ adaptive_gate = AdaptiveCaptchaGate(
     extra_checks=_behavior_checks(),
     trust_store=MemoryTrustStore(),
 )
-app.include_router(build_captcha_router(gate=adaptive_gate), prefix="/adaptive")
+app.include_router(build_discord_captcha_router(gate=adaptive_gate), prefix="/adaptive")
 
 
 async def _on_adaptive_verified(event: CaptchaVerified) -> None:
@@ -975,11 +980,11 @@ def _escalation_page(
 <body style="font-family:system-ui,sans-serif;max-width:420px;margin:40px auto;padding:0 16px">
 <h2>{title}</h2>
 {intro_html}
-<div id="first-widget" class="dwa-captcha-widget" data-token="{first_token}"
+<div id="first-widget" class="wac-captcha-widget" data-token="{first_token}"
      data-api-base="{first_prefix}"></div>
 <div id="second-widget-holder"></div>
 {extra_body}
-<script src="/static/discord-webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
+<script src="/static/webapi-captcha-widget.js" data-callback="onWidgetVerified"></script>
 <script>
 var FIRST_TOKEN = {first_token!r};
 var SECOND_TOKEN = {second_token!r};
@@ -994,9 +999,9 @@ function onWidgetVerified(result) {{
   }}
   document.getElementById("second-widget-holder").innerHTML =
     "<p>Robot gibi göründün -- lütfen aşağıdaki çizgiyi çiz.</p>" +
-    "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + SECOND_TOKEN +
+    "<div class=\\"wac-captcha-widget\\" data-token=\\"" + SECOND_TOKEN +
     "\\" data-api-base=\\"{second_prefix}\\"></div>";
-  if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+  if (window.wacCaptchaWidgetInit) window.wacCaptchaWidgetInit();
 }}
 </script>
 </body>""")
@@ -1056,7 +1061,7 @@ olmadığını göstermek.</p>
 <pre id="result" style="white-space:pre-wrap;background:#f4f4f4;padding:8px"></pre>
 <div id="second-widget-holder"></div>
 
-<script src="/static/discord-webapi-captcha-widget.js"></script>
+<script src="/static/webapi-captcha-widget.js"></script>
 <script>
 var TOKEN = {behavior_req.token!r};
 var PATHTRACE_TOKEN = {pathtrace_req.token!r};
@@ -1085,9 +1090,9 @@ async function sendBad() {{
   if (!body.verified) {{
     document.getElementById("second-widget-holder").innerHTML =
       "<p>Beklendiği gibi şüpheli sayıldı -- ek test: aşağıdaki çizgiyi çiz.</p>" +
-      "<div class=\\"dwa-captcha-widget\\" data-token=\\"" + PATHTRACE_TOKEN +
+      "<div class=\\"wac-captcha-widget\\" data-token=\\"" + PATHTRACE_TOKEN +
       "\\" data-api-base=\\"/test1-pathtrace\\"></div>";
-    if (window.dwaCaptchaWidgetInit) window.dwaCaptchaWidgetInit();
+    if (window.wacCaptchaWidgetInit) window.wacCaptchaWidgetInit();
   }}
 }}
 </script>
@@ -1147,14 +1152,14 @@ IP itibarına göre karar veriliyor -- kara listeye kendi IP'ni eklemek için
 temizse bu kutu hiç captcha göstermeden geçer; kara listedeysen gerçek
 bir Math sorusu çıkar.
 </p>
-<div class="dwa-captcha-widget" data-token="{adaptive_req.token}"
+<div class="wac-captcha-widget" data-token="{adaptive_req.token}"
      data-api-base="/test4-adaptive"></div>
-<script src="/static/discord-webapi-captcha-widget.js"></script>
+<script src="/static/webapi-captcha-widget.js"></script>
 </body>""")
 
 
 # ---------------------------------------------------------------------
-# Test 5 -- discord_webapi.captcha.pageguard.PageGuard: the real,
+# Test 5 -- webapi_captcha.pageguard.PageGuard: the real,
 # reusable INFRASTRUCTURE version of Test 4. Test 4 protects one single
 # minted verification link; PageGuard protects an ARBITRARY route --
 # "put this in front of whichever pages you (or your own admin panel)
@@ -1229,8 +1234,8 @@ async def verify_full_guard_page(token: str, return_to: str = "/test-full-guard"
 <h2>Doğrulanıyor: bir insan mısın?</h2>
 <p style="font-size:.85rem;color:#666">Şüpheli bulundun -- lütfen aşağıdaki
 çizgiyi çiz. Geçince otomatik olarak geldiğin sayfaya geri döneceksin.</p>
-<div class="dwa-captcha-widget" data-token="{token}" data-api-base="/full-guard"></div>
-<script src="/static/discord-webapi-captcha-widget.js" data-callback="onVerified"></script>
+<div class="wac-captcha-widget" data-token="{token}" data-api-base="/full-guard"></div>
+<script src="/static/webapi-captcha-widget.js" data-callback="onVerified"></script>
 <script>
 function onVerified(result) {{
   if (result.verified) {{

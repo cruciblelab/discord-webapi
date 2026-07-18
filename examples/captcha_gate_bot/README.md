@@ -1,6 +1,6 @@
 # captcha_gate_bot
 
-The two concrete bot-command scenarios `discord_webapi.captcha.gate.CaptchaGate`
+The two concrete bot-command scenarios `webapi_captcha.gate.CaptchaGate`
 was built for, wired up against a **real** discord.py bot with **real**
 Discord OAuth account-binding -- not the `captcha_playground` example's
 fake `user_id=0`.
@@ -12,7 +12,7 @@ fake `user_id=0`.
 ```
 
 The bot DMs a one-time verification link. The linked page shows the
-bundled widget (`discord_webapi.captcha.widget`) running in "safety mode":
+bundled widget (`webapi_captcha.widget`) running in "safety mode":
 invisible Proof-of-Work + the behavioral score + `RepeatedMovementCheck`,
 **and** you must be signed in as the exact Discord account the link was
 issued for (`require_account=True`) -- this is what makes it "this account
@@ -123,7 +123,7 @@ no captcha at all before login.
 ## Why multiple gates need multiple URL prefixes
 
 `build_captcha_router()`'s default reads a single
-`app.state.discord_webapi_captcha_gate` -- fine for one gate purpose. This
+`app.state.webapi_captcha_gate` -- fine for one gate purpose. This
 example has six (`giveaway_gate`, `appeal_gate`, the three test gates
 above, and `adaptive_gate` below), so each is mounted explicitly via
 `build_captcha_router(gate=...)` under its own prefix (`/giveaway`,
@@ -143,7 +143,7 @@ GET /api/test/unblock-my-ip
 The real library primitive behind Scenario 4's manual "invisible gate,
 then reveal a Path-Trace widget if it fails" JS composition -- but driven
 by IP reputation instead of the behavior score, and decided **server-side**
-rather than by page JS: `discord_webapi.captcha.adaptive.AdaptiveCaptchaGate`.
+rather than by page JS: `webapi_captcha.adaptive.AdaptiveCaptchaGate`.
 `create_verification()` mints a token with no captcha decided yet; the
 first time the link is opened (`get_info()`/`verify()`), the connecting
 IP is checked against `blocklist` (a `StaticBlocklistReputationChecker`
@@ -206,7 +206,7 @@ linking all of them.
    nothing new, it's not a real additional defense, just an extra
    pointless step for a genuine user.
 5. **`/test-full-guard`** and **`/test-secure-login`** -- see
-   `discord_webapi.captcha.pageguard.PageGuard` below, the real
+   `webapi_captcha.pageguard.PageGuard` below, the real
    reusable infrastructure version of `/test-cloudflare`.
 6. **`/test-index`** -- links all of the above (plus the Discord-side
    commands) with a one-line description of each.
@@ -222,7 +222,7 @@ for `/join-adaptive`.
 ## `PageGuard` -- Cloudflare in front of a whole page, not one link (`/test-full-guard`, `/test-secure-login`)
 
 `AdaptiveCaptchaGate` (Scenario 5 above, `/test-cloudflare`) protects one
-already-minted verification link. `discord_webapi.captcha.pageguard.
+already-minted verification link. `webapi_captcha.pageguard.
 PageGuard` is the same IP-reputation-driven escalation applied at
 PAGE-LOAD time instead -- put it in front of *any* route (whatever your
 own admin panel decides needs it), including a page that comes *before*

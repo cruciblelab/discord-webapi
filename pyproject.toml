@@ -42,11 +42,13 @@ redis = ["redis>=5.0"]
 # the extension system still works -- the compatibility check just reports
 # "not checked" instead of blocking an incompatible extension.
 extensions = ["packaging>=23.0"]
-# Only needed for the self-hosted captcha providers (MathCaptchaProvider/
-# TextCaptchaProvider) to render a distorted PNG. The third-party captcha
-# providers (ReCaptchaProvider/HCaptchaProvider) need only httpx, already
-# a core dependency -- no extra required for those.
-captcha = ["Pillow>=10.1"]
+# discord_webapi.captcha is a thin re-export of the standalone
+# `webapi-captcha` package (https://github.com/cruciblelab/web-api-captcha,
+# Apache-2.0) -- captcha/human-verification was split out into its own
+# library so it can be developed and used independently of discord-webapi.
+# Installed straight from GitHub for now (not yet on PyPI); pin to a tag or
+# commit yourself if you need reproducible installs.
+captcha = ["webapi-captcha[render] @ git+https://github.com/cruciblelab/web-api-captcha"]
 all = ["discord-webapi[sql,redis,extensions,captcha]"]
 dev = [
   "discord-webapi[all]",

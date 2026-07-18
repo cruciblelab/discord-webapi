@@ -1,10 +1,11 @@
-"""A standalone, clickable test page for every `discord_webapi.captcha`
-piece -- no Discord bot, no OAuth, nothing but this library's captcha
-subsystem. Point a browser at it, click through every provider and the
-invisible/behavioral layer, and read the pass/fail log on screen.
+"""A standalone, clickable test page for every `webapi_captcha` piece --
+no Discord bot, no OAuth, nothing but the standalone captcha library
+discord-webapi's own `discord_webapi.captcha` re-exports. Point a browser
+at it, click through every provider and the invisible/behavioral layer,
+and read the pass/fail log on screen.
 
 What's on the page (`/playground`):
-    - The bundled, ready-made widget (`discord_webapi.captcha.widget`) --
+    - The bundled, ready-made widget (`webapi_captcha.widget`) --
       the "fast path" for consumers who just want a drop-in checkbox
       rather than building their own frontend against the raw endpoints.
       A dropdown picks which `CaptchaGate` configuration it talks to
@@ -49,24 +50,24 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-
-from discord_webapi.captcha.api import build_captcha_router
-from discord_webapi.captcha.base import CaptchaProvider
-from discord_webapi.captcha.checks import VerificationCheck, VerificationContext
-from discord_webapi.captcha.gate import CaptchaGate
-from discord_webapi.captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
-from discord_webapi.captcha.models import VerificationRequest
-from discord_webapi.captcha.providers.math_captcha import MathCaptchaProvider
-from discord_webapi.captcha.providers.path_trace import PathTraceProvider
-from discord_webapi.captcha.providers.proof_of_work import ProofOfWorkProvider
-from discord_webapi.captcha.providers.text_captcha import TextCaptchaProvider
-from discord_webapi.captcha.replay_guard import (
+from webapi_captcha.api import build_captcha_router
+from webapi_captcha.base import CaptchaProvider
+from webapi_captcha.checks import VerificationCheck, VerificationContext
+from webapi_captcha.gate import CaptchaGate
+from webapi_captcha.memory import MemoryCaptchaStore, MemoryVerificationStore
+from webapi_captcha.models import VerificationRequest
+from webapi_captcha.providers.math_captcha import MathCaptchaProvider
+from webapi_captcha.providers.path_trace import PathTraceProvider
+from webapi_captcha.providers.proof_of_work import ProofOfWorkProvider
+from webapi_captcha.providers.text_captcha import TextCaptchaProvider
+from webapi_captcha.replay_guard import (
     MemoryTrajectoryFingerprintStore,
     RepeatedMovementCheck,
 )
-from discord_webapi.captcha.scoring import SignalScoreCheck
-from discord_webapi.captcha.signals import reject_webdriver, require_min_interaction_ms
-from discord_webapi.captcha.widget import build_captcha_widget_router
+from webapi_captcha.scoring import SignalScoreCheck
+from webapi_captcha.signals import reject_webdriver, require_min_interaction_ms
+from webapi_captcha.widget import build_captcha_widget_router
+
 from discord_webapi.transport import InProcessTransport
 
 app = FastAPI(title="discord-webapi captcha playground")
@@ -88,7 +89,7 @@ providers: dict[str, CaptchaProvider] = {
 _recaptcha_site_key = os.environ.get("RECAPTCHA_SITE_KEY")
 _recaptcha_secret_key = os.environ.get("RECAPTCHA_SECRET_KEY")
 if _recaptcha_site_key and _recaptcha_secret_key:
-    from discord_webapi.captcha.providers.recaptcha import ReCaptchaProvider
+    from webapi_captcha.providers.recaptcha import ReCaptchaProvider
 
     providers["recaptcha"] = ReCaptchaProvider(
         site_key=_recaptcha_site_key, secret_key=_recaptcha_secret_key
@@ -97,13 +98,13 @@ if _recaptcha_site_key and _recaptcha_secret_key:
 _hcaptcha_site_key = os.environ.get("HCAPTCHA_SITE_KEY")
 _hcaptcha_secret_key = os.environ.get("HCAPTCHA_SECRET_KEY")
 if _hcaptcha_site_key and _hcaptcha_secret_key:
-    from discord_webapi.captcha.providers.hcaptcha import HCaptchaProvider
+    from webapi_captcha.providers.hcaptcha import HCaptchaProvider
 
     providers["hcaptcha"] = HCaptchaProvider(
         site_key=_hcaptcha_site_key, secret_key=_hcaptcha_secret_key
     )
 
-app.state.discord_webapi_captcha_providers = providers
+app.state.webapi_captcha_providers = providers
 app.include_router(build_captcha_router())
 
 # -- the invisible/behavioral layer, run directly (no CaptchaGate/token
@@ -201,7 +202,7 @@ async def widget_token(kind: str = "none") -> WidgetTokenResponse:
     has no real Discord user to bind one to.
 
     `build_captcha_router()`'s `/api/captcha/gate/{token}` endpoints read a
-    single `app.state.discord_webapi_captcha_gate` -- a real deployment
+    single `app.state.webapi_captcha_gate` -- a real deployment
     has exactly one gate for its one integration, so that's the right
     design there. This demo instead lets you switch between several gate
     configurations from one page, so it swaps which gate is "active" at
@@ -211,7 +212,7 @@ async def widget_token(kind: str = "none") -> WidgetTokenResponse:
     gate = _gates.get(kind)
     if gate is None:
         raise HTTPException(404, f"no demo gate configured for kind={kind!r}")
-    app.state.discord_webapi_captcha_gate = gate
+    app.state.webapi_captcha_gate = gate
     request = await gate.create_verification(user_id=0, purpose="playground-widget-demo")
     return WidgetTokenResponse(token=request.token)
 
