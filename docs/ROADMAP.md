@@ -102,13 +102,15 @@ Hepsi tam opt-in (`audit_logger` verilmezse no-op, gizli bağımlılık yok).
 `AuditLogger`'ınla bağlanır (quickstart'ta engine gizli); escalation
 audit'i quickstart'ta bile `enable_audit_log` ile çalışıyor.
 
-**P1.5 — Dokümantasyon netleştirmeleri (kod değişikliği yok).**
-- `docs/GUVENLIK.md`: Redis namespace "namespacing ≠ authentication;
-  gerçek mutually-untrusted-tenant izolasyonu için ayrı Redis DB/ACL şart"
-  uyarısını belirginleştir.
-- `docs/DAGITIM.md`: MySQL/MariaDB'nin `_commit_upsert` garantisinin
-  Postgres ile aynı olduğunu ve `DATETIME(fsp=6)` mikrosaniye çözümünü
-  vurgula.
+**P1.5 — Dokümantasyon netleştirmeleri (kod değişikliği yok).** ✅ **TAMAMLANDI.**
+- `docs/GUVENLIK.md`: Redis namespace uyarısı zaten mevcuttu ("Bu bir
+  kimlik doğrulama değil, sadece isim-alanı izolasyonu... gerçek
+  izolasyon için ayrı Redis veritabanı/ACL kullanıcısı kullanın") --
+  ek değişiklik gerekmedi.
+- `docs/DAGITIM.md`: "Veritabanı taşıma" bölümüne MySQL/MariaDB'nin
+  `_commit_upsert` garantisinin Postgres'le birebir aynı olduğunu ve
+  `DATETIME(fsp=6)` mikrosaniye çözümünün neden gerektiğini açıklayan
+  yeni bir paragraf eklendi.
 
 ### P1.5 — Observability (opt-in, üretim için)
 Transport RPC'leri, job execution, escalation tetiklenmeleri, komut

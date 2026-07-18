@@ -87,6 +87,23 @@ dinlediği kuyruk listesi `start()` anında sabitleniyor.
 
 ## 4. Veritabanı taşıma (ör. SQLite → MariaDB/Postgres)
 
+**MySQL/MariaDB, Postgres ile birebir aynı garantilere sahip** —
+ikinci sınıf bir arka uç değil:
+- `_commit_upsert` (get-or-create yazma yolundaki concurrent-insert
+  korumasi, `discord_webapi/storage/sql.py` ve `escalation/sql.py`) her
+  ikisinde de aynı şekilde çalışır — SQLAlchemy'nin driver-agnostik
+  `IntegrityError`'ını yakalayıp kaybeden isteği "sanki diğerinin
+  yazdığı satırı güncelliyormuş gibi" devam ettirir, hangi veritabanı
+  olduğuna bakmaz.
+- MySQL/MariaDB'nin varsayılan `DATETIME` sütunu mikrosaniyeyi
+  **kesiyor** (Postgres'in `timestamptz`'ı kesmez) — bu, `_TIMESTAMP`
+  tipinin (`storage/sql.py`) `DateTime(timezone=True).with_variant(
+  mysql.DATETIME(fsp=6), "mysql")` ile MySQL'e özel olarak
+  mikrosaniye hassasiyetini (`fsp=6`) açıkça istemesiyle çözüldü —
+  aksi halde iki hızlı ardışık yazma aynı saniyeye denk gelip sıralama/
+  TTL karşılaştırmalarını bozabilirdi. Bu düzeltme zaten mevcut,
+  ekstra bir yapılandırma gerektirmiyor.
+
 `discord-webapi-migrate` (`discord_webapi.tools.migrate`) — geliştirme
 sırasında kullandığın SQLite dosyasından üretim veritabanına (MariaDB,
 MySQL, Postgres) tek seferlik veri taşıması için. Şema/tablo bilgisini
