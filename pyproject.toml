@@ -76,6 +76,12 @@ discord-webapi-healthcheck = "discord_webapi.tools.healthcheck:main"
 [project.urls]
 Repository = "https://github.com/cruciblelab/discord-webapi"
 
+[tool.hatch.metadata]
+# The `captcha` extra points at webapi-captcha via a direct git URL
+# (not yet on PyPI) -- hatchling refuses direct references in
+# optional-dependencies unless this is explicitly opted into.
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["discord_webapi"]
 
