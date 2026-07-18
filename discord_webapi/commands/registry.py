@@ -9,6 +9,7 @@ from discord.ext import commands
 from discord.ext.commands import BucketType, Cooldown, CooldownMapping
 
 from discord_webapi.authz.app_roles import AppRoleCache
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.commands.bridge import extract_command_specs
 from discord_webapi.commands.events import EVENT_TYPE_COMMAND_CONFIG_CHANGED, CommandConfigChanged
 from discord_webapi.commands.models import CommandOverride, CommandSpec, CommandStatus
@@ -52,7 +53,7 @@ class CommandRegistry:
 
     def __init__(
         self,
-        bot: commands.Bot,
+        bot: AnyBot,
         *,
         transport: Transport,
         store: CommandConfigStore,
@@ -122,7 +123,7 @@ class CommandRegistry:
     def _wrap_interaction_check(self) -> None:
         original_check = self.bot.tree.interaction_check
 
-        async def _interaction_check(interaction: discord.Interaction[commands.Bot]) -> bool:
+        async def _interaction_check(interaction: discord.Interaction[Any]) -> bool:
             if not await original_check(interaction):
                 return False
             if interaction.guild_id is None or interaction.command is None:

@@ -28,11 +28,11 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 import discord
-from discord.ext import commands
 
 if TYPE_CHECKING:
     from discord_webapi.audit.logger import AuditLogger
 
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.extras.automod import (
     banned_words,
     caps_spam,
@@ -61,7 +61,7 @@ DEFAULT_VIOLATION_MESSAGE = "{mention}, your message was removed: {reason}."
 
 
 def setup(
-    bot: commands.Bot,
+    bot: AnyBot,
     *,
     # banned_words.py
     banned_words_list: list[str] | None = None,

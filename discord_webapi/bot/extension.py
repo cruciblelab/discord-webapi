@@ -7,13 +7,13 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import discord
-from discord.ext import commands
 
 from discord_webapi.authz.cache import (
     COMMAND_GET_CHANNEL_PERMISSIONS,
     COMMAND_GET_MEMBER,
     EVENT_TYPE_MEMBER_UPDATED,
 )
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.commands.bridge import (
     get_channel_permissions,
     get_member_permissions,
@@ -44,7 +44,7 @@ def default_intents() -> discord.Intents:
     return intents
 
 
-def install_member_lookup(bot: commands.Bot, transport: Transport) -> None:
+def install_member_lookup(bot: AnyBot, transport: Transport) -> None:
     """Bot-process wiring for `authz.GuildMemberCache`: answers `get_member`
     RPC requests from the bot's own warm Gateway cache (never a REST call),
     and publishes `member_updated` whenever that cache changes so the
@@ -87,7 +87,7 @@ def install_member_lookup(bot: commands.Bot, transport: Transport) -> None:
     bot.add_listener(on_member_remove, name="on_member_remove")
 
 
-def install_channel_permission_lookup(bot: commands.Bot, transport: Transport) -> None:
+def install_channel_permission_lookup(bot: AnyBot, transport: Transport) -> None:
     """Bot-process wiring for `authz.ChannelPermissionCache`: answers
     `get_channel_permissions` RPC requests from the bot's own warm Gateway
     cache (never a REST call) -- see `commands.bridge.get_channel_permissions`
@@ -109,7 +109,7 @@ def install_channel_permission_lookup(bot: commands.Bot, transport: Transport) -
     transport.register_handler(COMMAND_GET_CHANNEL_PERMISSIONS, handle_get_channel_permissions)
 
 
-def install_guild_listing(bot: commands.Bot, transport: Transport) -> None:
+def install_guild_listing(bot: AnyBot, transport: Transport) -> None:
     """Bot-process wiring for `GET /api/guilds`: answers
     `list_manageable_guilds` RPC requests from the bot's own warm Gateway
     cache -- see `commands.bridge.list_manageable_guilds`.
@@ -124,7 +124,7 @@ def install_guild_listing(bot: commands.Bot, transport: Transport) -> None:
 
 @asynccontextmanager
 async def single_process_lifespan(
-    bot: commands.Bot, transport: Transport, token: str
+    bot: AnyBot, transport: Transport, token: str
 ) -> AsyncIterator[None]:
     """FastAPI lifespan context for the v0.1 default deployment shape: bot
     and web share one process and one asyncio event loop. Starts the bot as
@@ -176,7 +176,7 @@ async def web_only_lifespan(transport: Transport) -> AsyncIterator[None]:
         await transport.stop()
 
 
-async def run_bot_process(bot: commands.Bot, transport: Transport, token: str) -> None:
+async def run_bot_process(bot: AnyBot, transport: Transport, token: str) -> None:
     """Entry point for a standalone bot-only process in a split bot/web
     deployment: connects to Discord and to the shared Transport (typically
     `RedisTransport`, so it can be reached by any number of separate

@@ -248,14 +248,29 @@ maliyeti değeri aşıyor.
 
 ## 4. Uzun vade / bilinçli olarak ertelenen
 
+**Not (bu oturumda netleştirildi): tek-process auto-sharding zaten tam
+destekleniyor, sıfır kod değişikliği gerekmedi.** ✅ Kütüphanenin her
+yeri (`CommandRegistry`, `commands.bridge`, `members.py`, guild lookup'ları)
+zaten sadece `bot.guilds`/`bot.get_guild()`/`bot.tree.walk_commands()`
+gibi discord.py'nin kendi birleşik cache'ine bakıyor -- botun 1 shard mı
+50 shard mı çalıştırdığından tamamen bağımsız. Tek gerçek eksik, `bot:
+commands.Bot` type hint'inin `commands.AutoShardedBot`'u (kardeş sınıf,
+`Bot`'un alt sınıfı değil) kabul etmemesiydi -- bu, yeni bir `AnyBot`
+type alias'ı (`discord_webapi.bot.types`) ile 14 dosyada düzeltildi
+(`tests/unit/test_sharded_bot.py` ile gerçek bir `AutoShardedBot`
+nesnesiyle uçtan uca doğrulandı). Yani "büyük botların ezici çoğunluğu"
+(binlerce/on binlerce sunucu, tek makinede tüm shard'lar) zaten
+destekleniyor -- aşağıdaki satır sadece çok daha nadir, ekstrem ölçekli
+(yüzbinlerce sunucu, shard'ların birden fazla process/makineye
+bölünmesi gereken) senaryo için geçerli.
+
 | Madde | Durum | Gerekçe |
 |---|---|---|
 | **Gömülü dashboard UI** (enable/disable + cooldown paneli) | Ertelendi (belki hiç) | Backend odak; UI ekstra bakım yükü, amaçtan sapma. |
 | **İngilizce dokümantasyon** | Ertelendi | Adoption yok; proje dışa açılınca yapılır. |
 | **Tam plugin/manifest VM** | Reddedildi | Güvenlik + karmaşıklık yüksek; §3'teki hafif konvansiyon yeterli. |
-| **Multi-bot routing** (tek dashboard'dan N farklı bot) | Ertelendi | Ayrı tasarım turu (guild_id→bot routing) gerektirir; gerçek talep yok. |
-| **Discord sharding** (`AutoShardedClient`) | Ertelendi | Henüz talep yok. |
-| **RedisTransport → Streams** (competing-consumer) | Ertelendi | Mevcut pub/sub yeterli; gerçek çoklu-instance ihtiyacı doğunca. |
+| **Multi-bot routing** (tek dashboard'dan N farklı bot) / **çoklu-process shard cluster'ları** | Ertelendi | Aynı temel problem: `guild_id`→hangi process routing'i (RedisTransport'un "bir komuta tek handler" kısıtlaması burada gerçek bir engel). Sadece devasa ölçekte (yüzbinlerce sunucu, tek process'e sığmayan shard sayısı) gerekiyor -- somut talep yok, şimdi inşa etmek spekülatif genişleme olur. |
+| **RedisTransport → Streams** (competing-consumer) | Ertelendi | Yukarıdakiyle aynı kapsamda; mevcut pub/sub yeterli, gerçek çoklu-instance ihtiyacı doğunca ele alınır. |
 | **JWT/stateless bearer** (mobil/3rd-party) | Opsiyonel ek | Mevcut opak-session tek yol; talep olursa `auth/jwt.py`. |
 
 ---

@@ -14,6 +14,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.extras._shared import (
     build_audit_reason,
     check_role_hierarchy,
@@ -28,7 +29,7 @@ MAX_DURATION_DAYS = 28  # Discord's own timeout ceiling
 
 
 def setup(
-    bot: commands.Bot,
+    bot: AnyBot,
     *,
     command_name: str = "timeout",
     require_reason: bool = True,
@@ -47,7 +48,7 @@ def setup(
     `audit_logger` convention as `extras.warn`.
     """
 
-    @bot.hybrid_command(  # type: ignore[arg-type]
+    @bot.hybrid_command(  # type: ignore[arg-type, untyped-decorator]
         name=command_name, description="Time out (mute) a member for a duration"
     )
     @app_commands.describe(

@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.extras._shared import build_audit_reason, check_role_assignable
 
 if TYPE_CHECKING:
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 
 def setup(
-    bot: commands.Bot,
+    bot: AnyBot,
     *,
     add_command_name: str = "role-add",
     remove_command_name: str = "role-remove",
@@ -36,7 +37,7 @@ def setup(
     convention as `extras.warn`/`ban`/`kick`/`timeout`.
     """
 
-    @bot.hybrid_command(  # type: ignore[arg-type]
+    @bot.hybrid_command(  # type: ignore[arg-type, untyped-decorator]
         name=add_command_name, description="Give a member a role"
     )
     @app_commands.describe(
@@ -86,7 +87,7 @@ def setup(
 
         await ctx.reply(f"Gave **{role.name}** to {member}.")
 
-    @bot.hybrid_command(  # type: ignore[arg-type]
+    @bot.hybrid_command(  # type: ignore[arg-type, untyped-decorator]
         name=remove_command_name, description="Remove a role from a member"
     )
     @app_commands.describe(

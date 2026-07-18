@@ -1,6 +1,93 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Roadmap kapanışı: CI, P1.5, P2, observability (bu oturum)
+## Roadmap'in §4'ü (uzun vade/ertelenen) gözden geçirildi, AutoShardedBot desteği eklendi (bu oturum)
+
+Önceki turda roadmap'in tamamı (P0-P2, v0.7) bittiği için kullanıcıya
+"plandan devam edelim mi" diye soruldu. Yanıt: planda gerçekten aktif
+madde kalmamış, sadece §4'teki 7 uzun-vade/ertelenen madde var. Her
+birini teker teker AskUserQuestion ile sorduk:
+- Dashboard UI, İngilizce docs, multi-bot routing: hepsi "ertelenmiş
+  kalsın" (kullanıcı onayı).
+- Discord sharding / RedisTransport→Streams: kullanıcı net karar
+  veremedi -- "bunu eklemezsek hobiciler için kütüphane olacak,
+  profesyonel olmalı tam kapasite" diye gerçek bir endişe belirtti.
+  Tek taraflı karar vermek yerine önce bir Explore agent'ıyla kodu
+  araştırdık (bkz. `docs/ROADMAP.md`'nin §4 notundaki bulgu özeti).
+
+**Bulgu**: "sharding desteği" iki çok farklı seviye:
+1. Tek-process auto-sharding (discord.py'nin `commands.Bot(shard_count=
+   N)`/`AutoShardedBot`'u tek process'te N Gateway shard'ı şeffaf
+   şekilde yönetmesi) -- kütüphanenin HİÇBİR yerinde shard sayısına bağlı
+   bir varsayım yok (her yer `bot.guilds`/`bot.get_guild()`/`bot.tree.
+   walk_commands()` gibi discord.py'nin zaten birleştirdiği cache'e
+   bakıyor), yani bu zaten baştan beri çalışıyordu. Tek gerçek eksik:
+   `AutoShardedBot`, `Bot`'un ALT SINIFI DEĞİL (kardeş sınıf, ikisi de
+   `BotBase`'den türüyor) -- yani `bot: commands.Bot` type hint'i
+   mypy'de `AutoShardedBot` geçirmeyi reddediyordu, çalışma zamanında
+   hiçbir sorun yokken.
+2. Çoklu-process shard cluster'ları (sadece devasa ölçekte, tek makineye
+   sığmayacak kadar shard -- Dyno/MEE6 tier) -- BU gerçek bir eksik:
+   `RedisTransport`'un "bir komuta tek handler" kısıtlaması (zaten
+   bilinçli bir v0.2 tasarım kararı olarak dokümante edilmiş) burada
+   gerçekten engel, çünkü iki bot process'i (farklı shard aralıkları)
+   aynı `get_member` komutunu register ederse guild sahipliğine göre
+   routing yok, "ilk cevap kazanır" oluyor. Bu, zaten ayrı ayrı
+   ertelenmiş **multi-bot routing ile birebir aynı temel problem**
+   (CHANGELOG/NOTES'ta zaten "multi-bot/shard routing" olarak birlikte
+   anılmış).
+
+Kullanıcıya bu ayrımı net bir şekilde raporladık ("hobiciler için
+kütüphane" endişesi aslında yersiz -- gerçek büyük botların ezici
+çoğunluğu zaten destekleniyor). Sonuç: kullanıcı 1. maddenin (type-hint
+fix) ucuz/düşük riskli olduğu için yapılmasını, 2. maddenin (gerçek
+mimari genişleme) somut talep olmadan ertelenmiş kalmasını onayladı.
+
+**Yapılan (1. madde -- type-hint fix)**:
+- Yeni `discord_webapi/bot/types.py`: `AnyBot: TypeAlias = commands.Bot |
+  commands.AutoShardedBot`. Bilinçli olarak KENDİ BAŞINA bir "leaf"
+  modül -- hiçbir `discord_webapi` içe aktarması yok. Bunun nedeni: ilk
+  denemede `AnyBot`'u `bot/extension.py`'de tanımlamıştım, ama
+  `bot/extension.py` zaten `commands/bridge.py`'yi import ediyor, ve
+  `commands/bridge.py`'nin de `AnyBot`'a ihtiyacı var -- yani
+  `commands/bridge.py`'nin `bot/extension.py`'den (ya da `discord_webapi.
+  bot` paketinden, ki bir alt modülü import etmek her zaman önce paketin
+  kendi `__init__.py`'sini çalıştırır) `AnyBot`'u geri import etmesi
+  klasik bir döngüsel import olurdu. Sıfır-bağımlılıklı bir leaf modül
+  bu döngüyü tamamen ortadan kaldırıyor -- hangi yoldan ilk tetiklenirse
+  tetiklensin, `bot/types.py` her zaman anında (başka hiçbir şeye
+  ihtiyaç duymadan) tam yükleniyor, sys.modules'a giriyor, sonraki her
+  import onu zaten yüklü buluyor. (Gerçekten test ettim: `python -c
+  "import discord_webapi.commands.bridge"` gibi izole importlarla, hata
+  yok.)
+- 14 dosyada `bot: commands.Bot` → `bot: AnyBot` (24 yer): `__init__.py`,
+  `commands/registry.py`, `commands/bridge.py`, `members.py`,
+  `extras/{ban,kick,timeout,warn,welcome,role_assign,captcha_verify}.py`,
+  `extras/automod/__init__.py`, `extensions/{sdk,scaffold}.py`,
+  `bot/extension.py`. `sdk.py`'ye de eklendi (üçüncü-taraf extension
+  yazarları da `AnyBot` kullanabilsin diye, stabilite-garantili yüzeyin
+  parçası).
+- mypy iki gerçek yan etki çıkardı (kozmetik değil, `AnyBot`'un bir
+  Union olmasından kaynaklanan gerçek generic-variance sorunları):
+  - `@bot.hybrid_command(...)` dekoratörü artık "untyped decorator"
+    hatası veriyordu (6 dosyada) -- zaten var olan `# type: ignore[arg-
+    type]` yorumlarına `untyped-decorator` eklendi.
+  - `commands/registry.py`'nin `_wrap_interaction_check`'i,
+    `discord.Interaction[commands.Bot]` yerine `discord.Interaction[Any]`
+    kullanacak şekilde değiştirildi (fonksiyon interaction'ın generic bot
+    tipini hiç kullanmıyor, sadece `.guild_id`/`.command`/`.user`/`.type`
+    okuyor -- bu yüzden `Any` güvenli ve basit).
+- Yeni `tests/unit/test_sharded_bot.py`: gerçek bir
+  `commands.AutoShardedBot(shard_count=2)` nesnesiyle
+  `CommandRegistry`/`register_all()`/`extras.{ban,kick,timeout,warn,
+  welcome}.setup()`'ın uçtan uca çalıştığını doğruluyor -- sadece
+  mypy'yi susturmak değil, gerçekten çalıştığını kanıtlamak için.
+- Davranış değişmedi, sadece type-hint doğruluğu. Tam suite: 543 test
+  (3 yeni), ruff+mypy temiz.
+
+`docs/ROADMAP.md`'nin §4'üne bu bulgu özeti + tabloya güncellenmiş
+multi-bot/shard-cluster satırı eklendi.
+
+## Roadmap kapanışı: CI, P1.5, P2, observability (önceki oturum)
 
 Captcha ayrımından sonra kullanıcıya "şu an yol haritamızda ne var, ne
 önerirsin" diye soruldu. `docs/ROADMAP.md` okunup güncel durum çıkarıldı

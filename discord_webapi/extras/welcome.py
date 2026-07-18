@@ -6,13 +6,14 @@ extends to Gateway event listeners, not just commands.
 from __future__ import annotations
 
 import discord
-from discord.ext import commands
+
+from discord_webapi.bot.types import AnyBot
 
 DEFAULT_MESSAGE_TEMPLATE = "Welcome {mention} to **{guild}**! We're glad you're here."
 
 
 def setup(
-    bot: commands.Bot,
+    bot: AnyBot,
     *,
     channel_id: int | None = None,
     message_template: str = DEFAULT_MESSAGE_TEMPLATE,

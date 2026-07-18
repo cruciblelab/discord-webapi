@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.extras._shared import (
     build_audit_reason,
     check_role_hierarchy,
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 
 def setup(
-    bot: commands.Bot,
+    bot: AnyBot,
     *,
     command_name: str = "kick",
     require_reason: bool = True,
@@ -38,7 +39,7 @@ def setup(
     an opt-in `audit_logger` (same convention as `extras.warn`).
     """
 
-    @bot.hybrid_command(  # type: ignore[arg-type]
+    @bot.hybrid_command(  # type: ignore[arg-type, untyped-decorator]
         name=command_name, description="Kick a member from the server"
     )
     @app_commands.describe(

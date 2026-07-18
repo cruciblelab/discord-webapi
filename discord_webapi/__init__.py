@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import discord
-from discord.ext import commands
 from fastapi import FastAPI
 
 from discord_webapi.audit import AuditLogger, build_audit_log_router
@@ -33,6 +32,7 @@ from discord_webapi.bot.extension import (
     single_process_lifespan,
     web_only_lifespan,
 )
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.commands import (
     CommandOverride,
     CommandRegistry,
@@ -104,6 +104,7 @@ __version__ = "0.6.0"
 
 __all__ = [
     "__version__",
+    "AnyBot",
     "AppRole",
     "AppRoleCache",
     "AppRolePatch",
@@ -312,7 +313,7 @@ class DiscordWebAPI:
         self,
         *,
         transport: Transport,
-        bot: commands.Bot | None = None,
+        bot: AnyBot | None = None,
         auth: DiscordAuth | None = None,
         command_store: CommandConfigStore | None = None,
         authz_store: AuthzStore | None = None,
@@ -419,7 +420,7 @@ class DiscordWebAPI:
     def for_bot_process(
         cls,
         *,
-        bot: commands.Bot,
+        bot: AnyBot,
         transport: Transport,
         command_store: CommandConfigStore | None = None,
         rate_limit_store: RateLimitStore | None = None,
@@ -619,7 +620,7 @@ class DiscordWebAPI:
     def quickstart(
         cls,
         *,
-        bot: commands.Bot,
+        bot: AnyBot,
         bot_token: str | None = None,
         client_id: str | None = None,
         client_secret: str | None = None,

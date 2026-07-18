@@ -24,6 +24,7 @@ from discord import app_commands
 from discord.ext import commands
 from pydantic import BaseModel
 
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.extras._shared import check_role_hierarchy, notify_member_best_effort
 
 if TYPE_CHECKING:
@@ -64,7 +65,7 @@ class MemoryWarnStore:
 
 
 def setup(
-    bot: commands.Bot,
+    bot: AnyBot,
     *,
     store: WarnStore | None = None,
     command_name: str = "warn",
@@ -109,7 +110,7 @@ def setup(
     # Per (guild_id, user_id) lock -- see the comment at its use below.
     warn_locks: dict[tuple[int, int], asyncio.Lock] = {}
 
-    @bot.hybrid_command(  # type: ignore[arg-type]
+    @bot.hybrid_command(  # type: ignore[arg-type, untyped-decorator]
         name=command_name, description="Warn a member"
     )
     @app_commands.describe(member="The member to warn", reason="Why this member is being warned")

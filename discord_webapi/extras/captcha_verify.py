@@ -23,6 +23,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 import discord
 from discord.ext import commands
 
+from discord_webapi.bot.types import AnyBot
+
 if TYPE_CHECKING:
     from webapi_captcha.models import VerificationRequest
 
@@ -45,7 +47,7 @@ class _VerificationGate(Protocol):
 
 
 def setup(
-    bot: commands.Bot,
+    bot: AnyBot,
     *,
     gate: _VerificationGate,
     verify_url: Callable[[str], str],
@@ -79,7 +81,9 @@ def setup(
     other builtin here.
     """
 
-    @bot.hybrid_command(name=command_name, description="Verify you're human")
+    @bot.hybrid_command(  # type: ignore[untyped-decorator]
+        name=command_name, description="Verify you're human"
+    )
     async def verify(ctx: commands.Context[commands.Bot]) -> None:
         guild_id = ctx.guild.id if ctx.guild is not None else None
         request = await gate.create_verification(

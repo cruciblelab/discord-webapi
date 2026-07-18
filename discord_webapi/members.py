@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from discord.ext import commands as dpy_commands
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from discord_webapi.authz.dependencies import GuildContext, require_guild_permission
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.transport.base import Transport
 
 COMMAND_LIST_MEMBERS = "list_members"
@@ -30,7 +30,7 @@ class MemberInfo(BaseModel):
     joined_at: str | None
 
 
-def install_member_listing(bot: dpy_commands.Bot, transport: Transport) -> None:
+def install_member_listing(bot: AnyBot, transport: Transport) -> None:
     """Bot-process wiring: answers `list_members` RPC requests from the
     bot's warm Gateway cache (never a REST call) — mirrors
     `bot.extension.install_member_lookup`'s single-member lookup, but for

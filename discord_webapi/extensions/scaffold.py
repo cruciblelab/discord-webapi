@@ -76,10 +76,10 @@ from typing import Any
 
 from discord.ext import commands
 
-from discord_webapi.extensions.sdk import GuildRateLimiter, rate_limited
+from discord_webapi.extensions.sdk import AnyBot, GuildRateLimiter, rate_limited
 
 
-def setup(bot: commands.Bot, *, rate_limiter: GuildRateLimiter | None = None) -> Any:
+def setup(bot: AnyBot, *, rate_limiter: GuildRateLimiter | None = None) -> Any:
     """Registers a `/roll` command on `bot`.
 
     Pass the host application's `api.rate_limiter` as `rate_limiter` to make

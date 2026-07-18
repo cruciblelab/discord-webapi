@@ -19,6 +19,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.extras._shared import (
     build_audit_reason,
     check_role_hierarchy,
@@ -33,7 +34,7 @@ MAX_DELETE_MESSAGE_SECONDS = 7 * 24 * 3600  # Discord's own API ceiling
 
 
 def setup(
-    bot: commands.Bot,
+    bot: AnyBot,
     *,
     command_name: str = "ban",
     require_reason: bool = True,
@@ -64,7 +65,7 @@ def setup(
       it and nothing is audited.
     """
 
-    @bot.hybrid_command(  # type: ignore[arg-type]
+    @bot.hybrid_command(  # type: ignore[arg-type, untyped-decorator]
         name=command_name, description="Ban a member from the server"
     )
     @app_commands.describe(

@@ -2,7 +2,45 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
-## [Unreleased] — Roadmap kapanışı: CI (web-api-captcha), P1.5 docs, P2 refactor, opsiyonel observability
+## [Unreleased] — `AutoShardedBot` desteği (type-hint fix) + roadmap'in uzun-vade maddeleri gözden geçirildi
+
+Roadmap'in tamamı bittikten sonra §4'teki (uzun vade/bilinçli ertelenen)
+7 maddeyi tek tek kullanıcıyla gözden geçirdik: dashboard UI, İngilizce
+docs, multi-bot routing hepsi ertelenmiş kalması onaylandı. Discord
+sharding/RedisTransport→Streams sorusunda kullanıcı net karar veremedi
+("hobiciler için kütüphane olur, profesyonel olmalı" endişesiyle) --
+önce gerçekten neyin eksik olduğunu bir alt-agent'la araştırdık.
+
+**Bulgu**: "sharding desteği" iki çok farklı şey:
+1. **Tek-process auto-sharding** (gerçek büyük botların ezici
+   çoğunluğunun ihtiyacı, binlerce/on binlerce sunucu) -- zaten tam
+   çalışıyordu, sıfır kod değişikliği gerekmedi. Kütüphanenin her yeri
+   zaten sadece discord.py'nin birleşik `bot.guilds` cache'ine bakıyor,
+   shard sayısından bağımsız. Tek gerçek eksik: `bot: commands.Bot` type
+   hint'i `commands.AutoShardedBot`'u (kardeş sınıf, alt sınıfı değil)
+   kabul etmiyordu.
+2. **Çoklu-process shard cluster'ları** (sadece devasa ölçekte, Dyno/MEE6
+   tier, yüzbinlerce sunucu) -- gerçek bir eksik, ama multi-bot routing
+   ile aynı temel problem (RedisTransport'un "bir komuta tek handler"
+   kısıtlaması). Somut talep olmadan ertelenmiş kalması onaylandı.
+
+**Yapılan**: 1. maddeyi kapatan `AnyBot` type alias'ı
+(`discord_webapi.bot.types`, `commands.Bot | commands.AutoShardedBot`) --
+14 dosyada (`__init__.py`, `commands/registry.py`, `commands/bridge.py`,
+`members.py`, `extras/{ban,kick,timeout,warn,welcome,role_assign,
+captcha_verify}.py`, `extras/automod/__init__.py`,
+`extensions/{sdk,scaffold}.py`, `bot/extension.py`) `commands.Bot` yerine
+kullanıldı. Döngüsel import riskini önlemek için `AnyBot` kendi başına,
+hiçbir `discord_webapi` içe aktarması olmayan bir "leaf" modülde
+(`bot/types.py`) tanımlandı -- `bot/extension.py` bunu import ediyor,
+ama `bot/extension.py`'nin kendisi de `commands/bridge.py`'yi import
+ettiği için `AnyBot`'un orada tanımlanması `commands/bridge.py`'nin
+`AnyBot`'u geri import etmesiyle döngü oluştururdu. Yeni
+`tests/unit/test_sharded_bot.py`, gerçek bir `commands.AutoShardedBot`
+nesnesiyle `CommandRegistry`/`register_all()`/`extras.{ban,kick,timeout,
+warn}.setup()`'ın uçtan uca çalıştığını doğruluyor (sadece mypy'yi
+susturmuyor). Davranış değişmedi, sadece type-hint doğruluğu -- tam test
+suite (543 test, 3 yeni) + ruff + mypy temiz.
 
 `docs/ROADMAP.md`'nin kalan tüm maddeleri bu turda kapatıldı (P2.3 hariç,
 kullanıcının ayrı ele alacağı PyPI/versiyon kararına bağlı olarak bilinçli

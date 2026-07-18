@@ -34,6 +34,7 @@ own instance; the *convention* is that the host injects its own.
 from __future__ import annotations
 
 # --- declaring your extension ---
+from discord_webapi.bot.types import AnyBot
 from discord_webapi.escalation import (
     EscalationAction,
     EscalationEngine,
@@ -69,6 +70,7 @@ from discord_webapi.storage.base import (
 from discord_webapi.transport.base import Event, Transport
 
 __all__ = [
+    "AnyBot",
     "AuditStore",
     "EscalationAction",
     "EscalationEngine",
