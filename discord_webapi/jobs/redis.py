@@ -14,6 +14,7 @@ from typing import Any
 from redis.asyncio import Redis
 
 from discord_webapi.jobs.base import JobHandler, JobState, JobStatus
+from discord_webapi.observability import NOOP_METRICS, MetricsSink
 
 logger = logging.getLogger("discord_webapi.jobs.redis")
 
@@ -59,6 +60,7 @@ class RedisJobQueue:
         concurrency: int = 4,
         poll_timeout_seconds: float = 1.0,
         result_ttl_seconds: int = 86400,
+        metrics: MetricsSink = NOOP_METRICS,
         **redis_kwargs: Any,
     ) -> None:
         self._redis_url = redis_url
@@ -70,6 +72,7 @@ class RedisJobQueue:
         self._concurrency = concurrency
         self._poll_timeout_seconds = poll_timeout_seconds
         self._result_ttl_seconds = result_ttl_seconds
+        self._metrics = metrics
         self._redis: Redis | None = None
         self._handlers: dict[str, JobHandler] = {}
         self._workers: list[asyncio.Task[None]] = []
@@ -209,8 +212,16 @@ class RedisJobQueue:
         except Exception as exc:
             logger.exception("Job %s (%s) failed", job_id, status.job_type)
             await self._save(self._with_state(status, state="failed", error=str(exc)))
+            self._metrics.increment(
+                "discord_webapi.jobs.executed",
+                tags={"job_type": status.job_type, "state": "failed"},
+            )
         else:
             await self._save(self._with_state(status, state="succeeded", result=result))
+            self._metrics.increment(
+                "discord_webapi.jobs.executed",
+                tags={"job_type": status.job_type, "state": "succeeded"},
+            )
         finally:
             await redis.srem(self._running_set_key, job_id)
 

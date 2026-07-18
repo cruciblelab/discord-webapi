@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Any
 
 from discord_webapi.exceptions import TransportError, TransportTimeoutError
+from discord_webapi.observability import NOOP_METRICS, MetricsSink
 from discord_webapi.transport.base import (
     CATCH_ALL_EVENT_TYPE,
     Event,
@@ -39,10 +41,13 @@ class InProcessTransport:
     subscriber can never break the publisher or other subscribers.
     """
 
-    def __init__(self, *, strict_serialization: bool = True) -> None:
+    def __init__(
+        self, *, strict_serialization: bool = True, metrics: MetricsSink = NOOP_METRICS
+    ) -> None:
         self._subscribers: dict[str, list[EventHandler]] = {}
         self._handlers: dict[str, RequestHandler] = {}
         self._strict_serialization = strict_serialization
+        self._metrics = metrics
 
     async def start(self) -> None:
         return None
@@ -91,14 +96,27 @@ class InProcessTransport:
 
         handler = self._handlers.get(command)
         if handler is None:
+            self._metrics.increment(
+                "discord_webapi.transport.request_errors", tags={"command": command}
+            )
             raise TransportError(f"No handler registered for command {command!r}")
 
+        started_at = time.monotonic()
         try:
             response = await asyncio.wait_for(handler(payload), timeout=timeout)
         except TimeoutError as exc:
+            self._metrics.increment(
+                "discord_webapi.transport.request_errors", tags={"command": command}
+            )
             raise TransportTimeoutError(
                 f"Request {command!r} timed out after {timeout}s"
             ) from exc
+        finally:
+            self._metrics.observe(
+                "discord_webapi.transport.request_seconds",
+                time.monotonic() - started_at,
+                tags={"command": command},
+            )
 
         if self._strict_serialization:
             _assert_json_serializable(response, context=f"Response({command!r})")

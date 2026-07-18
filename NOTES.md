@@ -1,6 +1,81 @@
 # Geliştirici Notları (oturumlar arası kalıcı hafıza)
 
-## Captcha, ayrı bir kütüphaneye taşındı: `webapi-captcha` (bu oturum)
+## Roadmap kapanışı: CI, P1.5, P2, observability (bu oturum)
+
+Captcha ayrımından sonra kullanıcıya "şu an yol haritamızda ne var, ne
+önerirsin" diye soruldu. `docs/ROADMAP.md` okunup güncel durum çıkarıldı
+(P1.1-P1.4 zaten tamamlanmıştı), iki yeni boşluk fark edildi:
+web-api-captcha'nın kendi CI'ı ve CHANGELOG.md'si yoktu (yeni, bağımsız
+bir repo olduğuna göre bunlar gerekiyordu). Kullanıcı CI ile başlamayı
+onayladı, sonra "her türlü yapacağımız için en mantıklı sırayla, ekstra
+sıkıntı çıkarmayacak şekilde" talimatıyla kalan her şeyin yapılmasını
+istedi -- risk/karmaşıklık sırasına göre ilerlendi: önce ucuz/davranış-
+değiştirmeyen işler (CI, docs, refactor), en son daha büyük yeni özellik
+olan observability.
+
+**Teslim edilenler (hepsi ayrı commit, her turda tam test+ruff+mypy):**
+
+1. **web-api-captcha CI + CHANGELOG.md**: `.github/workflows/ci.yml`
+   (Python 3.11/3.12, discord-webapi'ninkinden esinlenildi ama DB service
+   container'ları/discord.py matrisi yok -- gerekmiyor). İlk çalıştırma
+   `mcp__github__actions_list`/`actions_get` ile doğrulandı, ikisi de
+   yeşil. `CHANGELOG.md` de eklendi (İngilizce -- paketin public README'siyle
+   tutarlı, discord-webapi'nin Türkçe konvansiyonundan farklı, bilinçli).
+
+2. **Gerçek bir bug bulundu (bu turun en önemli bulgusu)**: CI'ı
+   doğrularken/roadmap işlerine geçmeden önce "ayrım işlemini garantiye
+   alalım" isteğiyle taze klonlardan gerçek `pip install -e ".[captcha]"`
+   denendi -- hatchling, `captcha` extra'sının git URL'ine doğrudan
+   referansını `tool.hatch.metadata.allow-direct-references = true`
+   olmadan reddediyordu. Yani bir önceki oturumda push edilen captcha
+   ayrımı, gerçekte HİÇ kurulamıyordu (`pip install -e ".[captcha]"` /
+   `.[all]` / `.[dev]` metadata üretiminde patlıyordu) -- sadece editable
+   local kurulumla (`--no-deps` ya da önceden kurulu `webapi_captcha` ile)
+   test edildiği için bu, ilk doğrulama turunda kaçmıştı. `pyproject.toml`'a
+   tek satır ekleyip düzeltildi, taze klondan gerçek GitHub kurulumu
+   (github.com/cruciblelab/web-api-captcha) ile doğrulandı. **Ders**: bir
+   extra/optional-dependency değişikliğini asla editable/önceden-kurulu
+   bir ortamda değil, her zaman taze bir klon + gerçek `pip install`
+   ile doğrula -- paketleme metadata hataları sadece o yolda ortaya çıkıyor.
+
+3. **P1.5 (docs)**: `docs/DAGITIM.md`'ye MySQL/MariaDB parity notu
+   eklendi (`_commit_upsert` + `DATETIME(fsp=6)`); `docs/GUVENLIK.md`'nin
+   Redis namespace uyarısı zaten yeterliydi, dokunulmadı.
+
+4. **P2.1**: `quickstart()`'ın engine + 8 SQL store kurulumu
+   `_quickstart_engine()`/`_quickstart_sql_stores()`'a (yeni
+   `_QuickstartStores` NamedTuple) çıkarıldı. `DiscordWebAPI.__init__`'in
+   kendisi zaten makuldü, dokunulmadı.
+
+5. **P2.2**: `SimpleNamespace` kontrol edildi, sadece testlerde/scaffold
+   şablonunda kullanılıyor -- aksiyon gerekmedi.
+
+6. **P1.5-obs (en büyük parça)**: yeni `discord_webapi/observability/`
+   paketi -- `MetricsSink` Protocol'ü (`increment`/`observe`, tags dict),
+   `NoOpMetricsSink` (tek paylaşılan `NOOP_METRICS` singleton), ve
+   `PrometheusMetricsSink` (`discord_webapi.observability.prometheus`,
+   `prometheus_client`'ı sadece bu modül import ediyor -- metrik adlarındaki
+   noktalar `_sanitize()` ile Prometheus'un izin verdiği karaktere
+   çevriliyor). 4 noktaya kancalandı: `InProcessTransport`/`RedisTransport.
+   request()` (latency `observe` + hata `increment`, `time.monotonic()`
+   ile), `InProcessJobQueue`/`RedisJobQueue`'nun `_run_job` başarı/
+   başarısızlık dallarına, `EscalationEngine.record_violation`'ın rung
+   tetiklenme dalına (`key`/`action`/`applied` etiketleriyle),
+   `CommandRegistry._count_invocation`'a. `DiscordWebAPI.__init__`/
+   `for_bot_process`/`for_web_process`/`quickstart()`'a yeni `metrics=`
+   parametresi -- kendi kurduğu `EscalationEngine`/`CommandRegistry`'ye
+   (ve `quickstart`'ın kendi kurduğu `InProcessTransport`'a) otomatik
+   geçiyor; `Transport`/`JobQueue`'yu kendiniz kuruyorsanız `metrics=`'i
+   kendiniz geçmeniz gerekiyor (aynı "compose it yourself" felsefesi).
+   11 yeni test (`tests/unit/test_observability.py`) -- spy sink ile her
+   4 kanca noktası + NoOp/Prometheus primitiflerinin kendisi. Tam suite
+   540 test (11 yeni), ruff+mypy temiz.
+
+`docs/ROADMAP.md` güncellendi: P1.1-P2 (P2.3 hariç) ve v0.7 artık hepsi
+✅. Kalan tek şey P2.3 (versiyon disiplini, kullanıcının PyPI kararına
+bağlı, bilinçli ertelendi) ve §3'ün opsiyonel "topluluk index'i" maddesi.
+
+## Captcha, ayrı bir kütüphaneye taşındı: `webapi-captcha` (önceki oturum)
 
 Kullanıcının kendi kelimeleriyle talebi: "Overengineering oldu capcthayı
 ayrı bir kütüphane yapalım public hem onu hem bunu geliştiririz ... bu

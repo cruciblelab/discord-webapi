@@ -49,7 +49,11 @@ extensions = ["packaging>=23.0"]
 # Installed straight from GitHub for now (not yet on PyPI); pin to a tag or
 # commit yourself if you need reproducible installs.
 captcha = ["webapi-captcha[render] @ git+https://github.com/cruciblelab/web-api-captcha"]
-all = ["discord-webapi[sql,redis,extensions,captcha]"]
+# discord_webapi.observability.prometheus.PrometheusMetricsSink -- optional,
+# opt-in production metrics (transport RPC latency, job/escalation/command
+# counters). Nothing else in the library imports prometheus_client.
+metrics = ["prometheus-client>=0.20"]
+all = ["discord-webapi[sql,redis,extensions,captcha,metrics]"]
 dev = [
   "discord-webapi[all]",
   "pytest>=8.0",

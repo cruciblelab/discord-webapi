@@ -61,6 +61,7 @@ from discord_webapi.jobs import (
     run_worker,
 )
 from discord_webapi.members import MemberInfo, build_members_router, install_member_listing
+from discord_webapi.observability import NOOP_METRICS, MetricsSink
 from discord_webapi.ratelimits import GuildRateLimiter, RateLimitRule, build_ratelimits_router
 from discord_webapi.storage import (
     AuditStore,
@@ -327,11 +328,13 @@ class DiscordWebAPI:
         default_rate_limit_per_seconds: float = 10.0,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
+        metrics: MetricsSink = NOOP_METRICS,
     ) -> None:
         self.bot = bot
         self.transport = transport
         self.auth = auth
         self.job_queue = job_queue
+        self.metrics = metrics
         self._sync_commands = sync_commands
         self._sync_guild_id = sync_guild_id
         self._commands_synced = False
@@ -368,7 +371,7 @@ class DiscordWebAPI:
         # constructed too -- enable_escalation_api only gates the
         # dashboard CRUD endpoints, not the object itself.
         self.escalation_engine = EscalationEngine(
-            transport, self.escalation_rule_store, self.violation_store
+            transport, self.escalation_rule_store, self.violation_store, metrics=metrics
         )
 
         # One TokenBucketLimiter per dashboard write-endpoint group,
@@ -403,6 +406,7 @@ class DiscordWebAPI:
                 transport=transport,
                 store=self.command_store,
                 app_role_cache=self.app_role_cache,
+                metrics=metrics,
             )
             install_command_registry_bridge(self.registry, transport)
             install_member_lookup(bot, transport)
@@ -424,6 +428,7 @@ class DiscordWebAPI:
         job_queue: JobQueue | None = None,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
+        metrics: MetricsSink = NOOP_METRICS,
     ) -> DiscordWebAPI:
         """Construct the bot-side half of a split bot/web deployment: owns
         the live `CommandRegistry` and answers every bot-process RPC
@@ -450,6 +455,7 @@ class DiscordWebAPI:
             job_queue=job_queue,
             sync_commands=sync_commands,
             sync_guild_id=sync_guild_id,
+            metrics=metrics,
         )
 
     @classmethod
@@ -467,6 +473,7 @@ class DiscordWebAPI:
         job_queue: JobQueue | None = None,
         member_cache_ttl_seconds: float = 45.0,
         channel_permission_cache_ttl_seconds: float = 30.0,
+        metrics: MetricsSink = NOOP_METRICS,
     ) -> DiscordWebAPI:
         """Construct the web-side half of a split bot/web deployment: no
         `discord.Bot` object at all — every dashboard route already talks
@@ -488,6 +495,7 @@ class DiscordWebAPI:
             job_queue=job_queue,
             member_cache_ttl_seconds=member_cache_ttl_seconds,
             channel_permission_cache_ttl_seconds=channel_permission_cache_ttl_seconds,
+            metrics=metrics,
         )
 
     async def _on_ready(self) -> None:
@@ -632,6 +640,7 @@ class DiscordWebAPI:
         enable_escalation_api: bool = False,
         sync_commands: bool = True,
         sync_guild_id: int | None = None,
+        metrics: MetricsSink = NOOP_METRICS,
     ) -> FastAPI:
         """One-call setup for the single-process case: reads
         `DISCORD_BOT_TOKEN`/`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`/
@@ -670,6 +679,14 @@ class DiscordWebAPI:
         up to an hour to propagate everywhere; pass your test server's
         guild ID as `sync_guild_id` while developing for near-instant
         propagation to just that one guild instead.
+
+        `metrics=`: an optional `discord_webapi.observability.MetricsSink`
+        (default: a no-op) wired into the transport, command registry, and
+        escalation engine this call constructs -- transport RPC latency,
+        command invocation counts, and escalation triggers all get
+        reported through it. See `discord_webapi.observability.prometheus.
+        PrometheusMetricsSink` for a ready Prometheus-backed one
+        (`discord-webapi[metrics]`).
         """
         from discord_webapi.storage.sql import create_all as create_all_tables
 
@@ -695,7 +712,7 @@ class DiscordWebAPI:
         )
         api = cls(
             bot=bot,
-            transport=InProcessTransport(),
+            transport=InProcessTransport(metrics=metrics),
             auth=auth,
             command_store=stores.command_store,
             authz_store=stores.authz_store,
@@ -706,6 +723,7 @@ class DiscordWebAPI:
             violation_store=stores.violation_store,
             sync_commands=sync_commands,
             sync_guild_id=sync_guild_id,
+            metrics=metrics,
         )
 
         @asynccontextmanager

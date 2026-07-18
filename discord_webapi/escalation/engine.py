@@ -30,6 +30,7 @@ from discord_webapi.escalation.models import (
     EscalationRule,
     ViolationRecord,
 )
+from discord_webapi.observability import NOOP_METRICS, MetricsSink
 from discord_webapi.transport.base import Event, Transport
 
 if TYPE_CHECKING:
@@ -53,6 +54,7 @@ class EscalationEngine:
         violation_store: ViolationStore,
         *,
         audit_logger: AuditLogger | None = None,
+        metrics: MetricsSink = NOOP_METRICS,
     ) -> None:
         self.transport = transport
         self.rule_store = rule_store
@@ -61,6 +63,7 @@ class EscalationEngine:
         # enable_audit_log=True), a fired rung is recorded to the audit log.
         # None -> no audit writes, same as every other opt-in in the library.
         self.audit_logger = audit_logger
+        self.metrics = metrics
         self._rules: dict[tuple[int, str], list[EscalationRule]] = {}
         self._loaded: set[tuple[int, str]] = set()
         # Per (guild_id, user_id, key) lock -- see record_violation.
@@ -122,6 +125,10 @@ class EscalationEngine:
 
                 applied = await self._apply_action(member, triggered)
                 await self._audit_trigger(member, key, count, triggered, applied=applied)
+                self.metrics.increment(
+                    "discord_webapi.escalation.triggered",
+                    tags={"key": key, "action": triggered.action, "applied": str(applied)},
+                )
                 return EscalationOutcome(count=count, triggered_rule=triggered)
         finally:
             self._violation_locks.pop(lock_key, None)

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 from collections.abc import Coroutine
 from typing import Any
@@ -13,6 +14,7 @@ from redis.asyncio.client import PubSub
 from redis.exceptions import RedisError
 
 from discord_webapi.exceptions import TransportError, TransportTimeoutError
+from discord_webapi.observability import NOOP_METRICS, MetricsSink
 from discord_webapi.transport.base import (
     CATCH_ALL_EVENT_TYPE,
     Event,
@@ -86,11 +88,13 @@ class RedisTransport:
         redis_url: str = "redis://localhost:6379",
         *,
         namespace: str = DEFAULT_NAMESPACE,
+        metrics: MetricsSink = NOOP_METRICS,
         **redis_kwargs: Any,
     ) -> None:
         self._redis_url = redis_url
         self._redis_kwargs = redis_kwargs
         self._namespace = namespace
+        self._metrics = metrics
         self._events_channel = f"{namespace}:events"
         # Sibling prefixes (neither a prefix of the other) on purpose --
         # `rpc:` used to be a prefix of `rpc:reply:`, so a command literally
@@ -347,6 +351,7 @@ class RedisTransport:
         # Subscribe before publish: avoids the race where a reply arrives
         # before we're listening for it.
         await self._pubsub.subscribe(reply_channel)
+        started_at = time.monotonic()
         try:
             await redis.publish(
                 self._rpc_request_channel(command),
@@ -355,10 +360,18 @@ class RedisTransport:
             try:
                 envelope = await asyncio.wait_for(future, timeout=timeout)
             except TimeoutError as exc:
+                self._metrics.increment(
+                    "discord_webapi.transport.request_errors", tags={"command": command}
+                )
                 raise TransportTimeoutError(
                     f"Request {command!r} timed out after {timeout}s"
                 ) from exc
         finally:
+            self._metrics.observe(
+                "discord_webapi.transport.request_seconds",
+                time.monotonic() - started_at,
+                tags={"command": command},
+            )
             self._pending_replies.pop(reply_channel, None)
             await self._pubsub.unsubscribe(reply_channel)
 

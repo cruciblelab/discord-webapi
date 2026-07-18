@@ -2,6 +2,46 @@
 
 Formatı [Keep a Changelog](https://keepachangelog.com/) temel alıyor.
 
+## [Unreleased] — Roadmap kapanışı: CI (web-api-captcha), P1.5 docs, P2 refactor, opsiyonel observability
+
+`docs/ROADMAP.md`'nin kalan tüm maddeleri bu turda kapatıldı (P2.3 hariç,
+kullanıcının ayrı ele alacağı PyPI/versiyon kararına bağlı olarak bilinçli
+ertelendi):
+
+- **web-api-captcha'ya CI + CHANGELOG.md eklendi.** Python 3.11/3.12'de
+  ruff/mypy/pytest -- discord-webapi'nin kendi `ci.yml`'sinden esinlenildi,
+  discord.py sürüm matrisi ve DB service container'ları olmadan (SQL store
+  testleri sadece sqlite'a karşı çalışıyor). İlk çalıştırma yeşil.
+- **Gerçek bir paketleme bug'ı bulunup düzeltildi**: `pyproject.toml`'daki
+  `captcha` extra'sının git URL'ine doğrudan referansı, hatchling'in
+  `tool.hatch.metadata.allow-direct-references = true` olmadan kabul
+  etmediği bir şeydi -- `pip install -e ".[captcha]"` (ve `.[all]`,
+  `.[dev]`) metadata üretiminde tamamen patlıyordu. Taze bir klondan
+  gerçek GitHub kurulumu denenince ortaya çıktı, düzeltildi ve doğrulandı.
+- **P1.5 (docs netleştirmeleri)**: `docs/DAGITIM.md`'ye MySQL/MariaDB'nin
+  `_commit_upsert` ve `DATETIME(fsp=6)` garantilerinin Postgres'le birebir
+  aynı olduğunu açıklayan bir bölüm eklendi (Redis namespace uyarısı zaten
+  `docs/GUVENLIK.md`'de vardı).
+- **P2.1**: `DiscordWebAPI.quickstart()`'ın engine kurulumu
+  `_quickstart_engine()`'e, 8 SQL store'un kurulumu `_quickstart_sql_stores()`'a
+  (bir `_QuickstartStores` NamedTuple döndürür) çıkarıldı -- davranış
+  değişmedi, sadece okunabilirlik.
+- **P2.2**: `SimpleNamespace` fake'lemesi kontrol edildi -- sadece
+  `tests/`'te ve scaffold'ın ürettiği test şablonunda kullanılıyor,
+  prod kodunda hiç yok, ek işlem gerekmedi.
+- **P1.5-obs — opsiyonel observability/metrics**: yeni
+  `discord_webapi.observability` -- `MetricsSink` Protocol'ü (`increment`/
+  `observe`, varsayılan `NoOpMetricsSink`) + `PrometheusMetricsSink`
+  (`discord-webapi[metrics]` extra'sı). Dört noktaya kancalandı: transport
+  RPC latency + hata sayacı (`InProcessTransport`/`RedisTransport`), job
+  başarı/başarısızlık sayacı (`InProcessJobQueue`/`RedisJobQueue`),
+  escalation rung tetiklenme sayacı (`EscalationEngine`), komut çağrı
+  sayacı (`CommandRegistry`). `DiscordWebAPI`/`quickstart()`'a yeni
+  `metrics=` parametresi -- tek bir sink geçmek transport/registry/
+  escalation'ın hepsine otomatik ulaşıyor. Varsayılan tamamen no-op,
+  çekirdeğe yeni bağımlılık eklenmedi. 11 yeni test, tam suite (540 test)
+  + ruff + mypy temiz.
+
 ## [Unreleased] — Captcha, ayrı bir kütüphaneye taşındı: `webapi-captcha`
 
 Kullanıcının talebi (özet): captcha modülü "overengineering" olmuş, bir

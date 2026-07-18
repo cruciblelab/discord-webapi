@@ -112,14 +112,22 @@ audit'i quickstart'ta bile `enable_audit_log` ile çalışıyor.
   `DATETIME(fsp=6)` mikrosaniye çözümünün neden gerektiğini açıklayan
   yeni bir paragraf eklendi.
 
-### P1.5 — Observability (opt-in, üretim için)
-Transport RPC'leri, job execution, escalation tetiklenmeleri, komut
-invocation'ları için **opsiyonel** metrik/tracing kancaları. Ağır bir
-bağımlılık dayatmadan: basit bir `MetricsSink` Protocol'ü (no-op default),
-isteyene `PrometheusMetricsSink` / OpenTelemetry adaptörü. "Kaç job
-çalıştı, kaç escalation tetiklendi, RPC latency" üretimde çok istenen
-şeyler. `discord-webapi[metrics]` extra'sı olarak. **Diğer her şey gibi:
-default kapalı, çekirdeğe bağımlılık eklemez.**
+### P1.5 — Observability (opt-in, üretim için) ✅ **TAMAMLANDI.**
+`discord_webapi.observability` -- `MetricsSink` Protocol'ü (`increment`/
+`observe`, `NoOpMetricsSink` her yerde varsayılan) + `PrometheusMetricsSink`
+(`discord_webapi.observability.prometheus`, `discord-webapi[metrics]`
+extra'sı, `prometheus_client`'a sadece o modül bağımlı). Dört noktaya
+kancalandı: `InProcessTransport`/`RedisTransport.request()` (RPC latency +
+hata sayacı), `InProcessJobQueue`/`RedisJobQueue` (job başarı/başarısızlık
+sayacı), `EscalationEngine.record_violation` (rung tetiklenme sayacı,
+`key`/`action`/`applied` etiketleriyle), `CommandRegistry._count_invocation`
+(komut çağrı sayacı). `DiscordWebAPI`/`quickstart()`'a yeni `metrics=`
+parametresi -- tek bir sink geçirmek transport/registry/escalation'ın
+hepsine otomatik ulaşıyor (job_queue kendi kurduğunuz için ayrıca
+`metrics=` geçmeniz gerekiyor). Her zamanki gibi: varsayılan tamamen no-op,
+çekirdeğe yeni bağımlılık eklenmedi, davranış değişmedi (11 yeni test,
+tam suite 540 test yeşil). OpenTelemetry adaptörü henüz eklenmedi --
+gerçek talep gelirse aynı `MetricsSink` Protocol'üne karşı yazılabilir.
 
 ### P2 — Teknik borç
 **P2.1 — `DiscordWebAPI.__init__` ve `quickstart` refactor.** ✅ **TAMAMLANDI.**
@@ -254,12 +262,18 @@ maliyeti değeri aşıyor.
 
 ## 5. Önerilen yürütme sırası (bir sonraki turlar)
 
-1. **P1.1 + P1.2** (extras export'ları + hata rehberliği) — ucuz, yüksek DX getirisi, düşük risk.
-2. **P1.3** (iki örnek) — vizyonu somutlaştırır, öğreticidir.
-3. **P1.4** (audit genişletme) — "profesyonel bot" yönü.
-4. **P1.5 + P1.5-obs** (docs + opsiyonel metrics) — üretim olgunluğu.
-5. **P2** (refactor + versiyon disiplini) — teknik borç.
-6. **v0.7** (üçüncü-taraf konvansiyon + scaffold CLI) — ekosistem tohumu.
+1. **P1.1 + P1.2** (extras export'ları + hata rehberliği) — ucuz, yüksek DX getirisi, düşük risk. ✅
+2. **P1.3** (iki örnek) — vizyonu somutlaştırır, öğreticidir. ✅
+3. **P1.4** (audit genişletme) — "profesyonel bot" yönü. ✅
+4. **P1.5 + P1.5-obs** (docs + opsiyonel metrics) — üretim olgunluğu. ✅
+5. **P2** (refactor + versiyon disiplini) — teknik borç. ✅ (P2.1/P2.2 tamamlandı; P2.3 kullanıcının PyPI kararına bağlı, ayrı ele alınacak)
+6. **v0.7** (üçüncü-taraf konvansiyon + scaffold CLI) — ekosistem tohumu. ✅
 
 Her madde her zamanki gibi: tam test + ruff + mypy temiz, ayrı commit,
 CHANGELOG/NOTES güncel.
+
+**Bu listenin tamamı artık tamamlandı** (P2.3 hariç, bilinçli olarak
+ertelendi). Sıradaki gerçek talep: captcha ayrımı (`webapi-captcha`,
+ayrı bir plan dosyasında takip ediliyordu, tamamlandı) gibi kullanıcı
+talebiyle ortaya çıkacak yeni işler, ya da §3'ün "topluluk index'i"
+gibi opsiyonel uzun-vade maddeleri.

@@ -12,6 +12,7 @@ from discord_webapi.authz.app_roles import AppRoleCache
 from discord_webapi.commands.bridge import extract_command_specs
 from discord_webapi.commands.events import EVENT_TYPE_COMMAND_CONFIG_CHANGED, CommandConfigChanged
 from discord_webapi.commands.models import CommandOverride, CommandSpec, CommandStatus
+from discord_webapi.observability import NOOP_METRICS, MetricsSink
 from discord_webapi.storage.base import CommandConfigStore
 from discord_webapi.transport.base import Event, Transport
 
@@ -56,11 +57,13 @@ class CommandRegistry:
         transport: Transport,
         store: CommandConfigStore,
         app_role_cache: AppRoleCache | None = None,
+        metrics: MetricsSink = NOOP_METRICS,
     ) -> None:
         self.bot = bot
         self.transport = transport
         self.store = store
         self.app_role_cache = app_role_cache
+        self.metrics = metrics
         self._specs: dict[str, CommandSpec] = {}
         self._meta: dict[str, dict[str, Any]] = {}
         self._override_cache: dict[tuple[int, str], CommandOverride] = {}
@@ -232,6 +235,7 @@ class CommandRegistry:
     def _count_invocation(self, guild_id: int, command_name: str) -> None:
         key = (guild_id, command_name)
         self._invocation_counts[key] = self._invocation_counts.get(key, 0) + 1
+        self.metrics.increment("discord_webapi.commands.invoked", tags={"command": command_name})
 
     def _check_cooldown(self, guild_id: int, command_name: str, bucket_key: Any) -> float | None:
         """Enforces `CommandOverride.cooldown_seconds`/`cooldown_uses` (per

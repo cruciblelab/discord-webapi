@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from discord_webapi.jobs.base import JobHandler, JobState, JobStatus
+from discord_webapi.observability import NOOP_METRICS, MetricsSink
 
 logger = logging.getLogger("discord_webapi.jobs.memory")
 
@@ -20,12 +21,13 @@ class InProcessJobQueue:
     just bounded to this one process instead of scaled across machines.
     """
 
-    def __init__(self, *, concurrency: int = 4) -> None:
+    def __init__(self, *, concurrency: int = 4, metrics: MetricsSink = NOOP_METRICS) -> None:
         self._concurrency = concurrency
         self._handlers: dict[str, JobHandler] = {}
         self._statuses: dict[str, JobStatus] = {}
         self._queue: asyncio.Queue[str] = asyncio.Queue()
         self._workers: list[asyncio.Task[None]] = []
+        self._metrics = metrics
 
     async def start(self) -> None:
         self._workers = [
@@ -86,8 +88,16 @@ class InProcessJobQueue:
         except Exception as exc:
             logger.exception("Job %s (%s) failed", job_id, status.job_type)
             self._update(job_id, state="failed", error=str(exc))
+            self._metrics.increment(
+                "discord_webapi.jobs.executed",
+                tags={"job_type": status.job_type, "state": "failed"},
+            )
         else:
             self._update(job_id, state="succeeded", result=result)
+            self._metrics.increment(
+                "discord_webapi.jobs.executed",
+                tags={"job_type": status.job_type, "state": "succeeded"},
+            )
 
     def _update(
         self,
