@@ -12,9 +12,9 @@
 pip install discord-webapi[sql-sqlite]
 ```
 
-Başka bir veritabanı kullanacaksanız `sql-postgres` ya da `sql-mysql`
-extra'sını seçin. Çoklu sunucu deployment'ı ya da kuyruk sistemi
-kullanacaksanız `redis` extra'sı da gerekiyor.
+Başka bir veritabanı kullanacaksanız bizim `sql-postgres` ya da
+`sql-mysql` extra'mızı seçin. Çoklu sunucu deployment'ımızı ya da kuyruk
+sistemimizi kullanacaksanız `redis` extra'mız da gerekiyor.
 
 ## Discord tarafında yapılması gerekenler
 
@@ -26,12 +26,12 @@ kullanacaksanız `redis` extra'sı da gerekiyor.
 4. Aynı sekmede bir **Redirect URI** ekleyin: geliştirme için
    `http://localhost:8000/auth/discord/callback`.
 5. **Bot** sekmesinde "Server Members Intent" ve "Message Content Intent"i
-   açın (kütüphane bunları `default_intents()` ile zaten talep ediyor,
-   ama Discord tarafında da açık olmaları gerekiyor).
+   açın (biz bunları `default_intents()` fonksiyonumuzla zaten talep
+   ediyoruz, ama Discord tarafında da açık olmaları gerekiyor).
 6. **OAuth2 → URL Generator**'dan `bot` ve `applications.commands`
    scope'larıyla bir davet linki oluşturup botu test sunucunuza ekleyin.
 
-## En basit örnek
+## En basit örneğimiz
 
 ```python
 from discord.ext import commands
@@ -57,24 +57,24 @@ export DWA_FERNET_KEY=$(python -c "from cryptography.fernet import Fernet; print
 uvicorn main:app --reload
 ```
 
-`DWA_FERNET_KEY`, Discord'un access/refresh token'larını veritabanında
-şifrelemek için kullanılıyor — tek seferlik üretilip güvenli bir yerde
-saklanmalı (örn. bir secret manager), her deploy'da yeniden üretilmemeli
-(aksi halde önceki oturumlar çözülemez hale gelir).
+`DWA_FERNET_KEY`, Discord'un access/refresh token'larını veritabanımızda
+şifrelemek için kullandığımız anahtar — tek seferlik üretilip güvenli bir
+yerde saklanmalı (örn. bir secret manager), her deploy'da yeniden
+üretilmemeli (aksi halde önceki oturumlar çözülemez hale gelir).
 
-Bu tek `quickstart()` çağrısı şunları otomatik kurar:
+Bizim sunduğumuz bu tek `quickstart()` çağrısı şunları otomatik kurar:
 
 - `DISCORD_BOT_TOKEN`/`DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET`/
   `DWA_FERNET_KEY` ortam değişkenlerini okur.
 - Yerel bir SQLite dosyasında (`dashboard.sqlite3`) session ve
-  command-override storage'ı kurar (`database_url=` ile Postgres/MySQL'e
-  yönlendirilebilir).
-- `/auth/discord/{login,callback,logout,me,sessions}` route'larını bağlar.
-- `/` ve `/dashboard`'da gömülü, minimal bir demo dashboard sunar.
+  command-override storage'ımızı kurar (`database_url=` ile Postgres/MySQL'e
+  yönlendirebilirsiniz).
+- `/auth/discord/{login,callback,logout,me,sessions}` route'larımızı bağlar.
+- `/` ve `/dashboard`'da gömülü, minimal demo dashboard'umuzu sunar.
 - Bot hazır olduğunda (`on_ready`) slash komutlarını otomatik Discord'a
-  senkronize eder (`sync_commands=True` varsayılan — bkz. aşağıdaki not).
+  senkronize eder (`sync_commands=True` varsayılanımız — bkz. aşağıdaki not).
 
-## İlk test
+## İlk testiniz
 
 1. `http://localhost:8000/dashboard` adresine gidin, "Discord ile giriş
    yap" ile giriş yapın.
@@ -86,22 +86,23 @@ Bu tek `quickstart()` çağrısı şunları otomatik kurar:
    `{"enabled": false}` gönderin, sonra Discord'da tekrar `/ping` deneyin
    — bot yeniden başlatılmadan komut reddedilmeli.
 
-Daha kapsamlı, adım adım fiziksel test kontrol listesi için proje kökündeki
-`TESTING.md`'ye bakın.
+Daha kapsamlı, adım adım fiziksel test kontrol listemiz için proje
+kökümüzdeki `TESTING.md`'ye bakın.
 
 ## Slash komut senkronizasyonu hakkında önemli not
 
 discord.py, tanımladığınız slash komutları Discord'a **kendiliğinden asla
 göndermez** — `bot.tree.sync()` çağrılmadıkça `/ping` gibi komutlar
-Discord'un arayüzünde hiç görünmez, hiçbir hata da vermez. `DiscordWebAPI`
-bunu `sync_commands=True` (varsayılan) ile bot hazır olduğunda otomatik
-yapıyor. Global senkronizasyon Discord'un tüm sunuculara yayılması için
-~1 saate kadar sürebilir; geliştirme sırasında `sync_guild_id=<test_sunucu_id>`
-vererek tek bir sunucuya anında senkronize edebilirsiniz.
+Discord'un arayüzünde hiç görünmez, hiçbir hata da vermez. Biz
+`DiscordWebAPI`'de bunu `sync_commands=True` (varsayılanımız) ile bot
+hazır olduğunda otomatik yapıyoruz. Global senkronizasyon Discord'un tüm
+sunuculara yayılması için ~1 saate kadar sürebilir; geliştirme sırasında
+`sync_guild_id=<test_sunucu_id>` vererek tek bir sunucuya anında
+senkronize edebilirsiniz.
 
 ## Sırada ne var
 
-- Tüm özelliklerin listesi için [`OZELLIKLER.md`](OZELLIKLER.md).
-- Kütüphanenin iç mimarisini anlamak için [`MIMARI.md`](MIMARI.md).
-- Büyük botlar için çoklu sunucu/kuyruk kurulumu için [`DAGITIM.md`](DAGITIM.md).
-- Güvenlik modeli için [`GUVENLIK.md`](GUVENLIK.md).
+- Tüm özelliklerimizin listesi için [`OZELLIKLER.md`](OZELLIKLER.md).
+- Kütüphanemizin iç mimarisini anlamak için [`MIMARI.md`](MIMARI.md).
+- Büyük botlar için çoklu sunucu/kuyruk kurulumumuz için [`DAGITIM.md`](DAGITIM.md).
+- Güvenlik modelimiz için [`GUVENLIK.md`](GUVENLIK.md).

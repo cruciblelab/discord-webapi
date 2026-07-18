@@ -47,7 +47,7 @@ async def update_settings(
     ...
 ```
 
-Discord'un kendi `discord.Permissions` bitfield'ı kullanılıyor —
+Discord'un kendi `discord.Permissions` bitfield'ı kullanıyoruz —
 `administrator` her zaman geçer.
 
 ## Kanal bazlı izin override'ı
@@ -62,7 +62,7 @@ async def can_send(ctx=Depends(require_channel_permission("send_messages"))):
 
 `require_guild_permission`'dan farkı: guild-level izne sahip olsanız bile,
 o kanala özel bir override izni geri alabilir (`channel.permissions_for`
-kullanılıyor — Discord'un kendi UI'ının gösterdiğiyle aynı hesaplama).
+kullanıyoruz — Discord'un kendi UI'ının gösterdiğiyle aynı hesaplama).
 
 ## Bot-özel roller (AppRole)
 
@@ -86,7 +86,7 @@ registry.register_all()
 ```
 
 - `GET /api/guilds/{guild_id}/commands` — botun tüm komutlarını (spec +
-  override + invocation sayacı ile) listeler.
+  override + invocation sayacı ile) listeliyoruz.
 - `PATCH /api/guilds/{guild_id}/commands/{name}` — enable/disable,
   cooldown ayarı — **restart gerekmez**, aynı anda çalışan bot canlı
   olarak uygular.
@@ -132,8 +132,8 @@ api.install(app, enable_cookie_consent=True, cookie_consent_message="...")
 ```
 
 `GET/POST /api/consent` — "kim, hangi versiyonu, ne zaman onayladı"
-kaydı. Notice'ın metni/tasarımı tamamen tüketiciye ait; kütüphane sadece
-kaydı tutuyor, davranış dayatmıyor.
+kaydı. Notice'ın metni/tasarımı tamamen tüketiciye ait; biz sadece
+kaydı tutuyoruz, davranış dayatmıyoruz.
 
 ## Hazır komutlar (`discord_webapi.extras`)
 
@@ -389,9 +389,9 @@ Bu, `DiscordWebAPI.install()`'a otomatik bağlanan diğer opt-in
 özelliklerin (audit/consent/ratelimits) aksine hâlâ elle mount ediliyor
 -- ama önceki katmanların hepsi gibi **tamamen isteğe bağlı**: kendi
 frontend'inizi `build_captcha_router()`'ın ham endpoint'lerine karşı
-yazmak isterseniz widget'ı hiç kullanmayabilirsiniz, kütüphane hiçbir
-şekilde dayatmıyor -- "hem alt yapıyı verelim hem hazır kullanım isteyenlere
-de bir UI verelim" ilkesinin birebir uygulanışı.
+yazmak isterseniz widget'ı hiç kullanmayabilirsiniz, biz hiçbir
+şekilde dayatmıyoruz -- "hem alt yapıyı verelim hem hazır kullanım isteyenlere
+de bir UI verelim" ilkemizin birebir uygulanışı.
 
 Aynı örnekte, `/test-index`'ten ulaşılan beş bağımsız test sayfası da
 var: sadece widget/anında insan-mı-robot-mu testi (`/test-instant-widget`),
@@ -460,7 +460,7 @@ async def join(ctx):
 **Doğrulama katmanları -- kompoz edilebilir (kek katları gibi):** bir
 captcha "insan mı" der ama "hangi hesap" demez -- forwardlanmış bir link
 başkası tarafından da çözülebilir. Gerçek güvenilirlik için doğrulamayı
-gerçek Discord hesabına (kütüphanenin kendi OAuth girişi) bağlamak lazım.
+gerçek Discord hesabına (bizim kendi OAuth girişimiz) bağlamak lazım.
 `CaptchaGate` bunu birleştirilebilir "check" katmanlarıyla yapıyor -- her
 biri bağımsız bir `VerificationCheck`, gate hepsinin geçmesini şart
 koşuyor (mantıksal AND):
@@ -536,7 +536,7 @@ hook'unun bir adım ötesi -- "IP itibarı kötüyse otomatik olarak captcha
 tetiklensin, temizse hiç sorulmasın, geçince bir süre tekrar sorulmasın"
 isteği için hazır, dinamik bir gate. `CaptchaGate`'in aksine `require_captcha`
 inşa anında sabit değil -- karar, linkin ilk açıldığı anda (bağlanan IP
-belli olduğunda) veriliyor:
+belli olduğunda) veriyoruz:
 
 ```python
 from webapi_captcha.adaptive import (
@@ -602,7 +602,7 @@ async def protected(request: Request):
 
 Giriş yapılmamış (Discord OAuth'tan ÖNCE) ziyaretçiler için bile
 çalışır -- rastgele, httpOnly bir çerezle "bu ziyaretçi" kimliği
-tutuluyor (giriş yapılmışsa gerçek Discord `user_id`'si kullanılıyor).
+tutuluyor (giriş yapılmışsa gerçek Discord `user_id`'si kullanıyoruz).
 `AdaptiveCaptchaGate.bind_trust_to_ip=True` ile birlikte kullanılırsa,
 bir kez doğrulanan bir ziyaretçi/hesap FARKLI bir IP'den bağlanınca
 güven geçerli olmuyor, tekrar captcha isteniyor ("ip değişme sıklığı"

@@ -1,22 +1,24 @@
-# Dağıtım (Deployment)
+# Dağıtımımız (Deployment)
 
-## 1. Tek process (varsayılan, çoğu bot için yeterli)
+## 1. Tek process (varsayılanımız, çoğu bot için yeterli)
 
 ```python
 app = DiscordWebAPI.quickstart(bot=bot)
 ```
 
 Bot ve FastAPI aynı process'te, aynı asyncio event loop'unu paylaşır
-(`InProcessTransport`). Sıfır ek altyapı — Redis bile gerekmez. Küçük ve
-orta ölçekli botların büyük çoğunluğu için bu yeterli.
+(`InProcessTransport`'umuz). Sıfır ek altyapı — Redis bile gerekmez.
+Küçük ve orta ölçekli botların büyük çoğunluğu için bu bizim önerdiğimiz
+kurulum yeterli.
 
-Bkz. `examples/single_process_bot/`, `examples/full_featured_bot/`.
+Bkz. bizim `examples/single_process_bot/`, `examples/full_featured_bot/`
+örneklerimiz.
 
-## 2. Çoklu sunucu/makine (büyük botlar için)
+## 2. Çoklu sunucu/makine (büyük botlar için sunduğumuz seçenek)
 
 Botun Discord Gateway bağlantısı **tek bir process** olmak zorunda, ama
-dashboard'un HTTP trafiği bundan bağımsız olarak yatay ölçeklenebilir.
-Bunun için:
+dashboard'unuzun HTTP trafiği bundan bağımsız olarak yatay
+ölçeklenebilir. Bunun için bizim sunduğumuz iki yarı:
 
 ```python
 # bot_process.py — tek bir process, Discord'a bağlı
@@ -31,25 +33,28 @@ api = DiscordWebAPI.for_web_process(transport=RedisTransport(redis_url), auth=au
 api.install(app)
 ```
 
-Her iki yarı da **aynı `DiscordWebAPI` sınıfı ve aynı route'lar** — hiçbir
-route/dependency'nin ayrı yazılmasına gerek yok, çünkü hepsi zaten sadece
-`Transport` üzerinden konuşuyordu.
+Her iki yarı da **aynı `DiscordWebAPI` sınıfımız ve aynı route'larımız**
+— hiçbir route/dependency'nizin ayrı yazılmasına gerek yok, çünkü hepsi
+zaten sadece bizim `Transport`'umuz üzerinden konuşuyordu.
 
-**Dikkat**: `RedisTransport`'un "bir komuta tek handler" kuralı geçerli —
-tam olarak **bir** `bot_process.py` çalıştırın (bot/token başına). Bu
-kural web tarafını etkilemiyor — `web_process.py`'yi istediğiniz kadar
-çoğaltabilirsiniz, load balancer arkasında.
+**Dikkat**: bizim `RedisTransport`'umuzun "bir komuta tek handler"
+kuralımız geçerli — tam olarak **bir** `bot_process.py` çalıştırın
+(bot/token başına). Bu kural web tarafınızı etkilemiyor —
+`web_process.py`'nizi istediğiniz kadar çoğaltabilirsiniz, load balancer
+arkasında.
 
-**Şema oluşturma**: Sadece `bot_process.py` (ya da ayrı bir migration
-adımı) `create_all(engine)` çağırmalı — web replica'ları başlamadan önce
-şema hazır olmalı.
+**Şema oluşturma**: Sadece `bot_process.py`'niz (ya da ayrı bir migration
+adımı) `create_all(engine)` çağırmalı — web replica'larınız başlamadan
+önce şema hazır olmalı.
 
-Çalıştırılabilir tam örnek: `examples/split_deployment/` (README dahil).
+Çalıştırılabilir tam örneğimiz: `examples/split_deployment/` (README
+dahil).
 
-## 3. Kuyruk sistemi (opsiyonel üçüncü parça)
+## 3. Kuyruk sistemimiz (opsiyonel üçüncü parça)
 
-Dashboard'dan tetiklenen, request/response döngüsünde beklenemeyecek
-uzun işler için (toplu moderasyon, export):
+Dashboard'unuzdan tetiklenen, request/response döngüsünde
+beklenemeyecek uzun işler için (toplu moderasyon, export) sunduğumuz
+sistem:
 
 ```python
 # worker_process.py — istediğiniz kadar, herhangi bir makinede
@@ -69,48 +74,50 @@ api = DiscordWebAPI.for_web_process(..., job_queue=RedisJobQueue(redis_url))
 api.install(app, enable_jobs=True)
 ```
 
-`RedisJobQueue`, `RedisTransport`'un aksine **gerçek** competing-consumer
-semantiği veriyor (Redis list'ler, `RPUSH`/`BLPOP`) — kaç
-`worker_process.py` çalıştırırsanız çalıştırın, Redis aynı job'ı iki
+`RedisJobQueue`'muz, `RedisTransport`'umuzun aksine **gerçek**
+competing-consumer semantiği veriyor (Redis list'ler, `RPUSH`/`BLPOP`) —
+kaç `worker_process.py` çalıştırırsanız çalıştırın, Redis aynı job'ı iki
 worker'a birden vermemeyi garanti ediyor. Job throughput'unu artırmak,
 sadece daha fazla worker process çalıştırmak demek.
 
-Tek-process kurulumda da kullanılabilir (`InProcessJobQueue`,
+Tek-process kurulumumuzda da kullanılabilir (`InProcessJobQueue`,
 `DiscordWebAPI(job_queue=InProcessJobQueue())`) — `lifespan()`/
-`web_lifespan()` queue'yu otomatik start/stop ediyor, ekstra boilerplate
-gerekmiyor.
+`web_lifespan()`'ımız queue'yu otomatik start/stop ediyor, ekstra
+boilerplate gerekmiyor.
 
-**Önemli**: `register_worker()` her zaman `start()`'tan ÖNCE çağrılmalı
-— `RedisJobQueue` bu sırayı zorunlu kılıyor (`start()`'tan sonra
-`register_worker()` çağırmak `RuntimeError` fırlatır), çünkü worker'ların
-dinlediği kuyruk listesi `start()` anında sabitleniyor.
+**Önemli**: `register_worker()`'ınızı her zaman `start()`'tan ÖNCE
+çağırmalısınız — `RedisJobQueue`'muz bu sırayı zorunlu kılıyor
+(`start()`'tan sonra `register_worker()` çağırmak `RuntimeError`
+fırlatır), çünkü worker'ların dinlediği kuyruk listesi `start()` anında
+sabitleniyor.
 
-## 4. Veritabanı taşıma (ör. SQLite → MariaDB/Postgres)
+## 4. Veritabanı taşımamız (ör. SQLite → MariaDB/Postgres)
 
-**MySQL/MariaDB, Postgres ile birebir aynı garantilere sahip** —
-ikinci sınıf bir arka uç değil:
-- `_commit_upsert` (get-or-create yazma yolundaki concurrent-insert
-  korumasi, `discord_webapi/storage/sql.py` ve `escalation/sql.py`) her
+**MySQL/MariaDB'yi, Postgres ile birebir aynı garantilerle destekliyoruz**
+— bizde ikinci sınıf bir arka uç değil:
+- `_commit_upsert`'imiz (get-or-create yazma yolundaki concurrent-insert
+  korumamız, `discord_webapi/storage/sql.py` ve `escalation/sql.py`) her
   ikisinde de aynı şekilde çalışır — SQLAlchemy'nin driver-agnostik
   `IntegrityError`'ını yakalayıp kaybeden isteği "sanki diğerinin
   yazdığı satırı güncelliyormuş gibi" devam ettirir, hangi veritabanı
   olduğuna bakmaz.
 - MySQL/MariaDB'nin varsayılan `DATETIME` sütunu mikrosaniyeyi
-  **kesiyor** (Postgres'in `timestamptz`'ı kesmez) — bu, `_TIMESTAMP`
-  tipinin (`storage/sql.py`) `DateTime(timezone=True).with_variant(
-  mysql.DATETIME(fsp=6), "mysql")` ile MySQL'e özel olarak
-  mikrosaniye hassasiyetini (`fsp=6`) açıkça istemesiyle çözüldü —
-  aksi halde iki hızlı ardışık yazma aynı saniyeye denk gelip sıralama/
-  TTL karşılaştırmalarını bozabilirdi. Bu düzeltme zaten mevcut,
-  ekstra bir yapılandırma gerektirmiyor.
+  **kesiyor** (Postgres'in `timestamptz`'ı kesmez) — biz bunu
+  `_TIMESTAMP` tipimizle (`storage/sql.py`) `DateTime(timezone=True).
+  with_variant(mysql.DATETIME(fsp=6), "mysql")` ile MySQL'e özel olarak
+  mikrosaniye hassasiyetini (`fsp=6`) açıkça isteyerek çözdük — aksi
+  halde iki hızlı ardışık yazma aynı saniyeye denk gelip sıralama/TTL
+  karşılaştırmalarını bozabilirdi. Bu düzeltmemiz zaten mevcut, ekstra
+  bir yapılandırma gerektirmiyor.
 
-`discord-webapi-migrate` (`discord_webapi.tools.migrate`) — geliştirme
-sırasında kullandığın SQLite dosyasından üretim veritabanına (MariaDB,
-MySQL, Postgres) tek seferlik veri taşıması için. Şema/tablo bilgisini
-hardcode etmez — kaynak veritabanında ne varsa (çekirdek store'lar,
-`escalation`, `extras.warn`'ın `SQLWarnStore`'u, hatta üçüncü-taraf bir
+`discord-webapi-migrate` (`discord_webapi.tools.migrate`) — bizim
+sunduğumuz, geliştirme sırasında kullandığınız SQLite dosyasından
+üretim veritabanınıza (MariaDB, MySQL, Postgres) tek seferlik veri
+taşıma aracımız. Şema/tablo bilgisini hardcode etmiyoruz — kaynak
+veritabanında ne varsa (çekirdek store'larımız, `escalation`,
+`extras.warn`'ımızın `SQLWarnStore`'u, hatta üçüncü-taraf bir
 extension'ın kendi tablosu) SQLAlchemy'nin kendi introspection'ıyla
-bulur ve kopyalar.
+buluyor ve kopyalıyoruz.
 
 ```bash
 pip install "discord-webapi[sql-mysql]"   # hedefin sürücüsü
@@ -119,38 +126,40 @@ discord-webapi-migrate run \
   --to mysql+aiomysql://kullanici:sifre@host/veritabani
 ```
 
-Güvenlik tasarımı:
-- **Kaynağa asla yazmaz**, sadece okur.
-- `--yes` verilmedikçe **onay ister** (satır sayılarını gösterip sorar).
-- **Checkpoint varsayılan olarak açık**: yazmadan önce hedefte o an ne
-  varsa (yeniden çalıştırıyorsan boş olmayabilir) yerel bir JSON dosyasına
-  kaydeder. Bir şeyler ters giderse:
+Güvenlik tasarımımız:
+- **Kaynağa asla yazmıyoruz**, sadece okuyoruz.
+- `--yes` verilmedikçe **onay istiyoruz** (satır sayılarını gösterip
+  soruyoruz).
+- **Checkpoint'imiz varsayılan olarak açık**: yazmadan önce hedefte o an
+  ne varsa (yeniden çalıştırıyorsanız boş olmayabilir) yerel bir JSON
+  dosyasına kaydediyoruz. Bir şeyler ters giderse:
   ```bash
   discord-webapi-migrate restore dwa_migrate_checkpoint_....json --to <hedef-url>
   ```
-  ile hedefi tam o ana geri döndürürsün. Tekrarlanan/zararsız çalıştırmalar
-  için `--no-checkpoint` ile kapatılabilir.
-- **Checkpoint, genel bir veritabanı yedeği DEĞİL** — sadece
-  discord-webapi'nin kendi tablolarını kapsar. Kritik bir taşımadan önce
-  yine de veritabanının kendi yedekleme aracıyla (`mysqldump`/`pg_dump`/
-  dosya kopyası) tam bir yedek al.
+  ile hedefi tam o ana geri döndürebilirsiniz. Tekrarlanan/zararsız
+  çalıştırmalar için `--no-checkpoint` ile kapatılabilir.
+- **Checkpoint'imiz, genel bir veritabanı yedeği DEĞİL** — sadece
+  discord-webapi'nin kendi tablolarını kapsıyor. Kritik bir taşımadan
+  önce yine de veritabanınızın kendi yedekleme aracıyla
+  (`mysqldump`/`pg_dump`/dosya kopyası) tam bir yedek alın.
 
-Kendi veritabanı sistemini (MongoDB, kendi API'n, ne istersen) kullanmak
-istersen bu araca hiç ihtiyacın yok — her `Store` bir `Protocol`
-(`discord_webapi/storage/base.py`), miras almadan aynı metodları
-uygulayan bir sınıf yazıp constructor'a (`session_store=`, `rate_limit_store=`,
-...) geçmen yeterli; kütüphanenin geri kalanı hiç fark etmez.
+Kendi veritabanı sisteminizi (MongoDB, kendi API'niz, ne isterseniz)
+kullanmak isterseniz bizim bu aracımıza hiç ihtiyacınız yok — sunduğumuz
+her `Store` bir `Protocol`'ümüz (`discord_webapi/storage/base.py`),
+miras almadan aynı metodları uygulayan bir sınıf yazıp constructor'a
+(`session_store=`, `rate_limit_store=`, ...) geçmeniz yeterli;
+kütüphanemizin geri kalanı hiç fark etmez.
 
-## 5. Yedek alma
+## 5. Yedek alma aracımız
 
-`discord-webapi-backup` (`discord_webapi.tools.backup`) — bir migrasyona
-bağlı olmadan, elinde bağımsız tutabileceğin bir yedek dosyası. Aynı
-şema-agnostik yaklaşım: `migrate` gibi kaynak veritabanında ne tablo
-varsa SQLAlchemy introspection'ıyla bulur, hiçbir ORM sınıfını hardcode
-etmez.
+`discord-webapi-backup` (`discord_webapi.tools.backup`) — bir
+migrasyona bağlı olmadan, elinizde bağımsız tutabileceğiniz bir yedek
+dosyası oluşturan aracımız. Aynı şema-agnostik yaklaşımımız: `migrate`
+gibi kaynak veritabanında ne tablo varsa SQLAlchemy introspection'ıyla
+buluyoruz, hiçbir ORM sınıfını hardcode etmiyoruz.
 
-Üç kapsam, birleştirilebilir:
-- **Tam yedek** (varsayılan, filtre verilmezse).
+Sunduğumuz üç kapsam, birleştirilebilir:
+- **Tam yedek** (varsayılanımız, filtre verilmezse).
 - **Guild bazlı** (`--guild-id N`): sadece `guild_id` sütunu olan
   tablolardan o guild'e ait satırlar (`dwa_sessions` gibi guild
   sütunu olmayan tablolar tam alınır).
@@ -176,22 +185,23 @@ discord-webapi-backup restore yedekler/tam_yedek.json \
   --to mysql+aiomysql://kullanici:sifre@host/veritabani
 ```
 
-Güvenlik tasarımı `migrate` ile aynı: kaynağa asla yazmaz, `--yes`
-verilmedikçe onay ister, DB URL'lerindeki şifreler terminale
-basılmadan önce gizlenir. Tek fark: bir yedek dosyası sadece satır
-verisi tutar, şema/sütun tipi bilgisi tutmaz -- bu yüzden `restore`,
-hedefte olmayan bir tabloyu **oluşturamaz**, sadece atlayıp devam eder
-(hedefin botun en az bir kez çalışıp `create_all()`/`quickstart()` ile
-tabloları oluşturmuş olması gerekir).
+Güvenlik tasarımımız `migrate` ile aynı: kaynağa asla yazmıyoruz,
+`--yes` verilmedikçe onay istiyoruz, DB URL'lerindeki şifreler
+terminale basılmadan önce gizleniyor. Tek fark: bir yedek dosyamız
+sadece satır verisi tutuyor, şema/sütun tipi bilgisi tutmuyor -- bu
+yüzden `restore`'umuz, hedefte olmayan bir tabloyu **oluşturamaz**,
+sadece atlayıp devam eder (hedefin botun en az bir kez çalışıp
+`create_all()`/`quickstart()` ile tabloları oluşturmuş olması gerekir).
 
-## 6. Health check (deployment sonrası / cron)
+## 6. Health check aracımız (deployment sonrası / cron)
 
 `discord-webapi-healthcheck` (`discord_webapi.tools.healthcheck`) —
-veritabanının, (varsa) Redis'in ve (varsa) kendi HTTP endpoint'inin
-(dashboard'ın kendi health route'u, ya da bot sürecinin) gerçekten
-erişilebilir olduğunu kontrol eden bağımsız bir CLI. Cron/monitoring/
-container-orchestrator kullanımı için: tüm istenen kontroller geçerse
-`0`, herhangi biri başarısız olursa `1` ile çıkar.
+veritabanınızın, (varsa) Redis'inizin ve (varsa) kendi HTTP
+endpoint'inizin (dashboard'unuzun kendi health route'u, ya da bot
+sürecinizin) gerçekten erişilebilir olduğunu kontrol eden bağımsız
+CLI'ımız. Cron/monitoring/container-orchestrator kullanımınız için: tüm
+istenen kontroller geçerse `0`, herhangi biri başarısız olursa `1` ile
+çıkar.
 
 ```bash
 discord-webapi-healthcheck \
@@ -201,16 +211,17 @@ discord-webapi-healthcheck \
   --json
 ```
 
-- Her kontrol bağımsız ve opsiyonel — sadece elindeki URL'leri ver, hiç
-  bayrak verilmezse hiçbir şey kontrol edilmez (yapılacak bir şey yok).
-- `--timeout` (varsayılan 5sn) her kontrole ayrı ayrı uygulanır.
+- Her kontrolümüz bağımsız ve opsiyonel — sadece elinizdeki URL'leri
+  verin, hiç bayrak verilmezse hiçbir şey kontrol edilmez (yapılacak
+  bir şey yok).
+- `--timeout` (varsayılanımız 5sn) her kontrole ayrı ayrı uygulanır.
 - `--json` insan-okunur metin yerine satır başına bir JSON nesnesi basar
-  (log toplama/monitoring pipeline'ları için).
-- Redis kontrolü `discord-webapi[redis]` extra'sını gerektirir; onsuz
+  (log toplama/monitoring pipeline'larınız için).
+- Redis kontrolümüz `discord-webapi[redis]` extra'mızı gerektirir; onsuz
   sadece `--redis-url` verilmezse çalışır (import lazy, sadece o kontrol
   çağrıldığında yapılıyor).
 
-## Özet tablo
+## Özet tablomuz
 
 | Senaryo | Transport | Süreçler |
 |---|---|---|
@@ -218,6 +229,6 @@ discord-webapi-healthcheck \
 | Büyük bot, ölçeklenen dashboard | `RedisTransport` | 1 bot + N web replica |
 | + uzun süren işler | + `RedisJobQueue` | + N worker process |
 
-Üçü de aynı kod tabanı, aynı route'lar — hangisini seçtiğiniz sadece
-`Transport`/`JobQueue` implementasyonu ve kaç process çalıştırdığınızla
-ilgili, route/dependency kodu hiç değişmiyor.
+Üçü de bizim aynı kod tabanımız, aynı route'larımız — hangisini
+seçtiğiniz sadece `Transport`/`JobQueue` implementasyonu ve kaç process
+çalıştırdığınızla ilgili, route/dependency kodumuz hiç değişmiyor.
