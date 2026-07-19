@@ -12,12 +12,13 @@ memory.
 """
 
 import tempfile
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 
 import aiosqlite
 import discord
-import pytest
+import pytest_asyncio
 from discord.ext import commands as dpy_commands
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlalchemy.pool import StaticPool
@@ -365,13 +366,17 @@ async def test_several_commands_share_one_quota_key() -> None:
     assert ctx.replies == ["summarized", "translated", "Slow down! Try again in a moment."]
 
 
-@pytest.fixture
-def sql_engine() -> AsyncEngine:
-    return create_async_engine(
+@pytest_asyncio.fixture
+async def sql_engine() -> AsyncIterator[AsyncEngine]:
+    eng = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
+    try:
+        yield eng
+    finally:
+        await eng.dispose()
 
 
 async def test_same_code_works_identically_against_a_sql_backed_store(

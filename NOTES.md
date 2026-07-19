@@ -3488,6 +3488,43 @@ Bir sonraki oturumda kullanıcıya hangisini istediğini sor (daha önce
 `AskUserQuestion` ile sorulmuştu, disnake/py-cord seçilmiş ve şimdi
 kapandı — geri kalan üç madde hâlâ açık).
 
+## Test hijyeni: SQL engine fixture'larında dispose() eksikliği (fiziksel test gerektirmeyen bir hardening turu)
+
+web-api-captcha reposunda (ayrı repo, `cruciblelab/web-api-captcha`) aynı
+sorun bulunup düzeltildikten sonra, discord-webapi'de de aynı sınıf bug
+arandı ve bulundu: `create_async_engine(...)` ile açılan bazı test
+fixture'ları hiçbir zaman `.dispose()` çağırmıyordu. Sonuç: aiosqlite'ın
+arka plan worker thread'i, pytest bir sonraki test için event loop'u
+kapattıktan SONRA o (artık kapalı) loop'a geri sinyal göndermeye
+çalışıyor → `PytestUnhandledThreadExceptionWarning` / `RuntimeError: Event
+loop is closed` gürültüsü (test'leri fail etmiyordu ama gerçek bir
+kaynak sızıntısıydı).
+
+Düzeltilen dosyalar (`@pytest_asyncio.fixture` + `try: yield eng finally:
+await eng.dispose()` + `AsyncIterator[AsyncEngine]` dönüş tipi deseni,
+`test_sql_storage_multidb.py`'deki zaten-doğru referans desenle
+birebir aynı):
+- `tests/unit/extras/test_warn_sql.py`
+- `tests/unit/test_escalation_store.py`
+- `tests/unit/test_ratelimit_store.py`
+- `tests/unit/test_sql_storage.py`
+- `tests/integration/extras/test_skeletons_deep_dive.py` — bu dosyada
+  ayrıca yanlış fixture decorator'ı da düzeltildi: `sql_engine` düz
+  `@pytest.fixture` (senkron) kullanıyordu, `@pytest_asyncio.fixture`
+  (async, dispose için) yapıldı; artık kullanılmayan `pytest` import'u
+  da kaldırıldı (ruff F401).
+
+Zaten doğru olan (dokunulmadı): `test_quickstart.py`,
+`test_tools_migrate.py`, `test_tools_healthcheck.py`,
+`test_tools_backup.py`, `test_sql_storage_multidb.py`.
+
+Doğrulama: `pytest -q` art arda 3 kez + `-W
+error::pytest.PytestUnhandledThreadExceptionWarning` ile bir kez daha
+(hiçbir test bu uyarı yüzünden patlamadı) — 582 passed, 3 skipped, sadece
+2 önceden var olan/ilgisiz deprecation uyarısı (`audioop`, httpx+
+starlette testclient) kaldı. `ruff check .` ve `mypy discord_webapi`
+temiz.
+
 ## Genel süreç hatırlatmaları (tekrar unutulmasın diye)
 
 - **Asla force-push yapma.** Push reddedilirse önce `git fetch` +

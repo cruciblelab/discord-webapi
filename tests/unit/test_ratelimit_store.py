@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 import pytest_asyncio
@@ -10,12 +11,16 @@ from discord_webapi.storage.sql import SQLRateLimitStore
 
 
 @pytest_asyncio.fixture
-async def engine() -> AsyncEngine:
-    return create_async_engine(
+async def engine() -> AsyncIterator[AsyncEngine]:
+    eng = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
+    try:
+        yield eng
+    finally:
+        await eng.dispose()
 
 
 def _make_rule(guild_id: int = 1, key: str = "automod.spam") -> RateLimitRule:

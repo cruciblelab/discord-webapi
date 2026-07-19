@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -13,16 +14,20 @@ from discord_webapi.storage.sql import SQLAuthzStore, SQLCommandConfigStore, SQL
 
 
 @pytest_asyncio.fixture
-async def engine() -> AsyncEngine:
+async def engine() -> AsyncIterator[AsyncEngine]:
     # StaticPool: a single shared connection, so the in-memory SQLite
     # database survives across the multiple short-lived sessions each
     # store method opens (a fresh `:memory:` connection per session would
     # otherwise mean a fresh, empty database every time).
-    return create_async_engine(
+    eng = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
+    try:
+        yield eng
+    finally:
+        await eng.dispose()
 
 
 def _make_session(session_id: str = "sess-1") -> Session:

@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 import pytest_asyncio
@@ -8,12 +9,16 @@ from discord_webapi.extras.warn import SQLWarnStore, WarnRecord
 
 
 @pytest_asyncio.fixture
-async def engine() -> AsyncEngine:
-    return create_async_engine(
+async def engine() -> AsyncIterator[AsyncEngine]:
+    eng = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,
         connect_args={"check_same_thread": False},
     )
+    try:
+        yield eng
+    finally:
+        await eng.dispose()
 
 
 async def test_sql_warn_store_add_and_list(engine: AsyncEngine) -> None:
